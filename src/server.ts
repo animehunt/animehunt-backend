@@ -5,28 +5,54 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import mongoSanitize from "mongo-sanitize";
 import mongoose from "mongoose";
+import adRoutes from "./routes/ad.routes";
 
 dotenv.config();
 
 const app = express();
 
-// Security Middlewares
-app.use(helmet());
-app.use(cors({
-  origin: ["https://your-frontend.pages.dev"], 
-  credentials: true
-}));
+/* ===============================
+   SECURITY MIDDLEWARES
+================================ */
 
+// Secure headers
+app.use(helmet());
+
+// ✅ Smart CORS (No future code changes needed)
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow mobile apps, Postman etc.
+      if (!origin) return callback(null, true);
+
+      const allowedEnvOrigins =
+        process.env.ALLOWED_ORIGINS?.split(",") || [];
+
+      const isCloudflarePreview = origin.endsWith(".pages.dev");
+      const isAllowedEnv = allowedEnvOrigins.includes(origin);
+
+      if (isCloudflarePreview || isAllowedEnv) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PATCH", "DELETE"],
+    credentials: true,
+  })
+);
+
+// Body size protection
 app.use(express.json({ limit: "10kb" }));
 
-// Rate Limiting (Anti DDoS basic protection)
+// Anti DDoS Rate Limit
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300
+  max: 300,
 });
 app.use(limiter);
 
-// Mongo sanitize
+// Mongo injection protection
 app.use((req, res, next) => {
   if (req.body) {
     req.body = mongoSanitize(req.body);
@@ -34,22 +60,48 @@ app.use((req, res, next) => {
   next();
 });
 
-// MongoDB Connect
-mongoose.connect(process.env.MONGO_URI as string)
-.then(() => console.log("MongoDB Connected"))
-.catch(err => {
-  console.error("DB Error:", err);
-  process.exit(1);
-});
+/* ===============================
+   DATABASE CONNECTION
+================================ */
+
+mongoose
+  .connect(process.env.MONGO_URI as string)
+  .then(() => console.log("✅ MongoDB Connected"))
+  .catch((err) => {
+    console.error("❌ Database Error:", err);
+    process.exit(1);
+  });
+
+/* ===============================
+   ROUTES
+================================ */
 
 // Health Check
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.json({ status: "AnimeHunt Backend Running 🚀" });
 });
 
-// Start Server
+// Ads API
+app.use("/api/ads", adRoutes);
+
+/* ===============================
+   GLOBAL ERROR HANDLER
+================================ */
+
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error("🔥 Error:", err.message);
+  res.status(500).json({
+    success: false,
+    message: "Internal Server Error",
+  });
+});
+
+/* ===============================
+   START SERVER
+================================ */
+
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
