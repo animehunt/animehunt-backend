@@ -23,6 +23,7 @@ import performanceRoutes from "./routes/performance.routes";
 import playerRoutes from "./routes/player.routes";
 import searchRoutes from "./routes/search.routes";
 import securityRoutes from "./routes/security.routes";
+import seoRoutes from "./routes/seo.routes";
 
 dotenv.config();
 
@@ -112,6 +113,7 @@ app.use("/api", performanceRoutes);
 app.use("/api", playerRoutes);
 app.use("/api", searchRoutes);
 app.use("/api", securityRoutes);
+app.use("/api", seoRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER
