@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
 import Admin from "../models/admin.model";
+
 dotenv.config();
 
 async function createAdmin() {
@@ -14,10 +15,7 @@ async function createAdmin() {
       process.exit();
     }
 
-    const hashedPassword = await bcrypt.hash(
-      "@N!m3★Ch@nch@l#2024$Secure!",
-      10
-    );
+    const hashedPassword = await bcrypt.hash("StrongPassword@123", 10);
 
     await Admin.create({
       username: "anime_moderator_007",
