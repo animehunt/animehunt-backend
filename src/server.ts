@@ -17,6 +17,8 @@ import downloadRoutes from "./routes/download.routes";
 import episodeRoutes from "./routes/episode.routes";
 import footerRoutes from "./routes/footer.routes";
 import homepageRoutes from "./routes/homepage.routes";
+import authRoutes from "./routes/auth.routes";
+import { verifyAdmin } from "./middleware/auth.middleware";
 
 dotenv.config();
 
@@ -98,6 +100,10 @@ app.use("/api", downloadRoutes);
 app.use("/api", episodeRoutes);
 app.use("/api", footerRoutes);
 app.use("/api", homepageRoutes);
+app.use("/api", authRoutes);
+
+// 🔒 Protect all admin routes
+app.use("/api/admin", verifyAdmin);
 
 /* ===============================
    GLOBAL ERROR HANDLER
