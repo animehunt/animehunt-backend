@@ -34,3 +34,19 @@ export const deleteSidebar = async (req: Request, res: Response) => {
 
   res.json({ message: "Sidebar deleted" });
 };
+/* =========================
+   PUBLIC SIDEBAR (FILTERED)
+========================= */
+export const getPublicSidebar = async (req: Request, res: Response) => {
+  const { device, userType } = req.query;
+
+  const items = await Sidebar.find({
+    active: true,
+    $and: [
+      { $or: [{ device: "All" }, { device }] },
+      { $or: [{ visibility: "All" }, { visibility: userType }] }
+    ]
+  }).sort({ priority: 1 });
+
+  res.json(items);
+};
