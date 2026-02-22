@@ -1,1 +1,0 @@
-# animehunt-backend
