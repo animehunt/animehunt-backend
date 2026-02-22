@@ -25,6 +25,7 @@ import searchRoutes from "./routes/search.routes";
 import securityRoutes from "./routes/security.routes";
 import seoRoutes from "./routes/seo.routes";
 import serverRoutes from "./routes/server.routes";
+import sidebarRoutes from "./routes/sidebar.routes";
 
 dotenv.config();
 
@@ -116,6 +117,7 @@ app.use("/api", searchRoutes);
 app.use("/api", securityRoutes);
 app.use("/api", seoRoutes);
 app.use("/api", serverRoutes);
+app.use("/api", sidebarRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER
