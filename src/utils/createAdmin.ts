@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
-import Admin from "../models/Adminmodal"; // ⚠ filename match karein
+import Admin from "../models/Adminmodal";
 
 dotenv.config();
 
@@ -9,18 +9,21 @@ async function createAdmin() {
   try {
     await mongoose.connect(process.env.MONGO_URI as string);
 
-    const existing = await Admin.findOne({ username: "admin" });
+    const existing = await Admin.findOne({ username: "anime_moderator_007" });
     if (existing) {
       console.log("⚠ Admin already exists");
       process.exit();
     }
 
-    const hashedPassword = await bcrypt.hash("12345678", 10);
+    const hashedPassword = await bcrypt.hash(
+      "@N!m3★Ch@nch@l#2024$Secure!",
+      10
+    );
 
     await Admin.create({
-      username: "anime_moderator_007 username"
+      username: "anime_moderator_007",
       email: "nakulmalviya256@gmail.com",
-      password: "@N!m3★Ch@nch@l#2024$Secure!",
+      password: hashedPassword,
     });
 
     console.log("✅ Admin Created Successfully");
