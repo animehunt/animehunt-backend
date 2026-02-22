@@ -9,6 +9,7 @@ import mongoose from "mongoose";
 import adRoutes from "./routes/ad.routes";
 import aiRoutes from "./routes/ai.routes";
 import analyticsRoutes from "./routes/analytics.routes";
+import animeRoutes from "./routes/anime.routes";
 
 dotenv.config();
 
@@ -82,6 +83,7 @@ app.get("/", (_req, res) => {
 app.use("/api/ads", adRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api", analyticsRoutes);
+app.use("/api/anime", animeRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER
