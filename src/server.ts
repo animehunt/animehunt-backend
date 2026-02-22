@@ -2,7 +2,6 @@ import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 import mongoSanitize from "mongo-sanitize";
 import mongoose from "mongoose";
 
@@ -38,16 +37,29 @@ import systemRoutes from "./routes/system.routes";
 
 import { verifyAdmin } from "./middleware/auth.middleware";
 import { systemGuard } from "./middleware/system.guard";
+import { apiLimiter } from "./middleware/rateLimit.middleware";
+import { errorHandler } from "./middleware/error.middleware";
 
 dotenv.config();
 
 const app = express();
 
 /* ======================================================
+   TRUST PROXY (Cloudflare + Render Required)
+====================================================== */
+app.set("trust proxy", 1);
+
+/* ======================================================
    GLOBAL SECURITY MIDDLEWARES
 ====================================================== */
 
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+/* ================= CORS ================= */
 
 app.use(
   cors({
@@ -58,7 +70,7 @@ app.use(
         process.env.ALLOWED_ORIGINS?.split(",") || [];
 
       const isCloudflarePreview =
-        origin?.endsWith(".pages.dev");
+        origin.endsWith(".pages.dev");
 
       const isAllowedEnv =
         allowedEnvOrigins.includes(origin);
@@ -74,16 +86,15 @@ app.use(
   })
 );
 
+/* ================= BODY PARSER ================= */
+
 app.use(express.json({ limit: "10kb" }));
 
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+/* ================= RATE LIMIT ================= */
 
-app.use(limiter);
+app.use("/api", apiLimiter);
+
+/* ================= MONGO SANITIZE ================= */
 
 app.use((req, _res, next) => {
   if (req.body) {
@@ -96,6 +107,8 @@ app.use((req, _res, next) => {
    DATABASE CONNECTION
 ====================================================== */
 
+mongoose.set("strictQuery", true);
+
 mongoose
   .connect(process.env.MONGO_URI as string)
   .then(() => console.log("✅ MongoDB Connected"))
@@ -105,12 +118,15 @@ mongoose
   });
 
 /* ======================================================
-   ROUTES STRUCTURE (PRODUCTION SAFE)
+   ROUTES STRUCTURE
 ====================================================== */
 
-// Health Check
+/* Health Check */
 app.get("/", (_req, res) => {
-  res.json({ status: "AnimeHunt Backend Running 🚀" });
+  res.json({
+    status: "AnimeHunt Backend Running 🚀",
+    environment: process.env.NODE_ENV,
+  });
 });
 
 /* =======================
@@ -133,7 +149,6 @@ app.use("/api", homepageRoutes);
 
 /* =======================
    SYSTEM GUARD
-   (Blocks public during kill/maintenance)
 ======================= */
 app.use(systemGuard);
 
@@ -156,20 +171,20 @@ app.use("/api/admin", systemRoutes);
    GLOBAL ERROR HANDLER
 ====================================================== */
 
-app.use((err: any, _req: any, res: any, _next: any) => {
-  console.error("🔥 Error:", err.message);
+app.use(errorHandler);
 
-  if (err.message === "Not allowed by CORS") {
-    return res.status(403).json({
-      success: false,
-      message: "CORS Blocked",
-    });
-  }
+/* ======================================================
+   GRACEFUL SHUTDOWN (Production Safe)
+====================================================== */
 
-  res.status(500).json({
-    success: false,
-    message: "Internal Server Error",
-  });
+process.on("unhandledRejection", (err: any) => {
+  console.error("🔥 Unhandled Rejection:", err);
+  process.exit(1);
+});
+
+process.on("uncaughtException", (err: any) => {
+  console.error("🔥 Uncaught Exception:", err);
+  process.exit(1);
 });
 
 /* ======================================================
