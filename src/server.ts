@@ -26,6 +26,8 @@ import securityRoutes from "./routes/security.routes";
 import seoRoutes from "./routes/seo.routes";
 import serverRoutes from "./routes/server.routes";
 import sidebarRoutes from "./routes/sidebar.routes";
+import systemRoutes from "./routes/system.routes";
+import { systemGuard } from "./middleware/system.guard";
 
 dotenv.config();
 
@@ -118,6 +120,10 @@ app.use("/api", securityRoutes);
 app.use("/api", seoRoutes);
 app.use("/api", serverRoutes);
 app.use("/api", sidebarRoutes);
+app.use("/api", systemRoutes);
+
+/* 🔥 Apply Guard AFTER admin routes */
+app.use(systemGuard);
 
 /* ===============================
    GLOBAL ERROR HANDLER
