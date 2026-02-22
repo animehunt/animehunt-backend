@@ -5,8 +5,11 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import mongoSanitize from "mongo-sanitize";
 import mongoose from "mongoose";
+
 import adRoutes from "./routes/ad.routes";
 import aiRoutes from "./routes/ai.routes";
+import analyticsRoutes from "./routes/analytics.routes";
+
 dotenv.config();
 
 const app = express();
@@ -15,14 +18,11 @@ const app = express();
    SECURITY MIDDLEWARES
 ================================ */
 
-// Secure headers
 app.use(helmet());
 
-// ✅ Smart CORS (No future code changes needed)
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow mobile apps, Postman etc.
       if (!origin) return callback(null, true);
 
       const allowedEnvOrigins =
@@ -42,17 +42,14 @@ app.use(
   })
 );
 
-// Body size protection
 app.use(express.json({ limit: "10kb" }));
 
-// Anti DDoS Rate Limit
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
 });
 app.use(limiter);
 
-// Mongo injection protection
 app.use((req, res, next) => {
   if (req.body) {
     req.body = mongoSanitize(req.body);
@@ -81,8 +78,10 @@ app.get("/", (_req, res) => {
   res.json({ status: "AnimeHunt Backend Running 🚀" });
 });
 
-// Ads API
+// All APIs
 app.use("/api/ads", adRoutes);
+app.use("/api/ai", aiRoutes);
+app.use("/api", analyticsRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER
@@ -105,4 +104,3 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
-app.use("/api/ai", aiRoutes);
