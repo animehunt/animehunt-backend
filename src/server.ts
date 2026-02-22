@@ -22,6 +22,7 @@ import { verifyAdmin } from "./middleware/auth.middleware";
 import performanceRoutes from "./routes/performance.routes";
 import playerRoutes from "./routes/player.routes";
 import searchRoutes from "./routes/search.routes";
+import securityRoutes from "./routes/security.routes";
 
 dotenv.config();
 
@@ -110,6 +111,7 @@ app.use("/api/admin", verifyAdmin);
 app.use("/api", performanceRoutes);
 app.use("/api", playerRoutes);
 app.use("/api", searchRoutes);
+app.use("/api", securityRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER
