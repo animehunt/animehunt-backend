@@ -14,6 +14,7 @@ import bannerRoutes from "./routes/banner.routes";
 import categoryRoutes from "./routes/category.routes";
 import systemRoutes from "./routes/system.routes";
 import downloadRoutes from "./routes/download.routes";
+import episodeRoutes from "./routes/episode.routes";
 
 dotenv.config();
 
@@ -92,6 +93,7 @@ app.use("/api", bannerRoutes);
 app.use("/api", categoryRoutes);
 app.use("/api", systemRoutes);
 app.use("/api", downloadRoutes);
+app.use("/api", episodeRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER
