@@ -19,6 +19,7 @@ import footerRoutes from "./routes/footer.routes";
 import homepageRoutes from "./routes/homepage.routes";
 import authRoutes from "./routes/auth.routes";
 import { verifyAdmin } from "./middleware/auth.middleware";
+import performanceRoutes from "./routes/performance.routes";
 
 dotenv.config();
 
@@ -104,6 +105,7 @@ app.use("/api", authRoutes);
 
 // 🔒 Protect all admin routes
 app.use("/api/admin", verifyAdmin);
+app.use("/api", performanceRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER
