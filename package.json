@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
     "create-admin": "ts-node src/utils/createAdmin.ts"
   },
   "dependencies": {
@@ -29,5 +29,3 @@
     "typescript": "^5.4.5"
   }
 }
-"bcryptjs": "^2.4.3",
-"jsonwebtoken": "^9.0.0"
