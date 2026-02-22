@@ -12,6 +12,7 @@ import analyticsRoutes from "./routes/analytics.routes";
 import animeRoutes from "./routes/anime.routes";
 import bannerRoutes from "./routes/banner.routes";
 import categoryRoutes from "./routes/category.routes";
+import systemRoutes from "./routes/system.routes";
 
 dotenv.config();
 
@@ -88,6 +89,7 @@ app.use("/api", analyticsRoutes);
 app.use("/api/anime", animeRoutes);
 app.use("/api", bannerRoutes);
 app.use("/api", categoryRoutes);
+app.use("/api", systemRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER
