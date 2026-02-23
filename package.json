@@ -21,7 +21,9 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.3.1",
     "mongo-sanitize": "^1.1.0",
-    "resend": "^2.0.0"
+    "resend": "^2.0.0",
+
+    "@types/node": "^20.11.30"   ← ✅ YE ADD KARO
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
