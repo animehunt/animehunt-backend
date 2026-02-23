@@ -1,14 +1,37 @@
-import express from "express";
-import {
-  getSystem,
-  saveSystem,
-  killSystem
-} from "../controllers/system.controller";
+import { Request, Response } from "express";
 
-const router = express.Router();
+let systemState = {
+  killed: false,
+  config: {}
+};
 
-router.get("/admin/system", getSystem);
-router.post("/admin/system", saveSystem);
-router.post("/admin/system/kill", killSystem);
+/* ===========================
+   GET SYSTEM
+=========================== */
+export const getSystem = async (_req: Request, res: Response) => {
+  res.json(systemState);
+};
 
-export default router;
+/* ===========================
+   SAVE SYSTEM CONFIG
+=========================== */
+export const saveSystem = async (req: Request, res: Response) => {
+  systemState.config = req.body;
+  res.json({
+    success: true,
+    message: "System config saved",
+    data: systemState
+  });
+};
+
+/* ===========================
+   KILL SYSTEM
+=========================== */
+export const killSystem = async (_req: Request, res: Response) => {
+  systemState.killed = true;
+
+  res.json({
+    success: true,
+    message: "System halted"
+  });
+};
