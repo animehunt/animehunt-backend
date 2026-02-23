@@ -1,26 +1,14 @@
 import express from "express";
 import {
   getSystem,
-  deploySite,
-  freezeSite,
-  unfreezeSite,
-  createVersion,
-  createBackup,
-  restoreBackup,
-  emergencyShutdown,
-  emergencyRecover
+  saveSystem,
+  killSystem
 } from "../controllers/system.controller";
 
 const router = express.Router();
 
 router.get("/admin/system", getSystem);
-router.post("/admin/deploy", deploySite);
-router.post("/admin/freeze", freezeSite);
-router.post("/admin/unfreeze", unfreezeSite);
-router.post("/admin/version", createVersion);
-router.post("/admin/backup", createBackup);
-router.post("/admin/restore/:id", restoreBackup);
-router.post("/admin/emergency/shutdown", emergencyShutdown);
-router.post("/admin/emergency/recover", emergencyRecover);
+router.post("/admin/system", saveSystem);
+router.post("/admin/system/kill", killSystem);
 
 export default router;
