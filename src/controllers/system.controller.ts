@@ -1,51 +1,55 @@
-import mongoose, { Schema, Document } from "mongoose";
+import { Request, Response } from "express";
+import System from "../models/system.model";
 
-export interface ISystem extends Document {
-  status: string;
-  killed: boolean;
-  config: any;
-  versions: {
-    name: string;
-    createdAt: Date;
-  }[];
-  backups: {
-    name: string;
-    createdAt: Date;
-  }[];
-}
+/* ===========================
+   GET SYSTEM
+=========================== */
+export const getSystem = async (_req: Request, res: Response) => {
+  const system = await System.findOne();
 
-const SystemSchema = new Schema(
-  {
-    status: {
-      type: String,
-      default: "live"
-    },
+  if (!system) {
+    const newSystem = await System.create({});
+    return res.json(newSystem);
+  }
 
-    killed: {
-      type: Boolean,
-      default: false
-    },
+  res.json(system);
+};
 
-    config: {
-      type: Schema.Types.Mixed,
-      default: {}
-    },
+/* ===========================
+   SAVE SYSTEM CONFIG
+=========================== */
+export const saveSystem = async (req: Request, res: Response) => {
+  let system = await System.findOne();
 
-    versions: [
-      {
-        name: String,
-        createdAt: Date
-      }
-    ],
+  if (!system) {
+    system = await System.create({});
+  }
 
-    backups: [
-      {
-        name: String,
-        createdAt: Date
-      }
-    ]
-  },
-  { timestamps: true }
-);
+  system.config = req.body;
+  await system.save();
 
-export default mongoose.model<ISystem>("System", SystemSchema);
+  res.json({
+    success: true,
+    message: "System config saved",
+    data: system
+  });
+};
+
+/* ===========================
+   KILL SYSTEM
+=========================== */
+export const killSystem = async (_req: Request, res: Response) => {
+  let system = await System.findOne();
+
+  if (!system) {
+    system = await System.create({});
+  }
+
+  system.killed = true;
+  await system.save();
+
+  res.json({
+    success: true,
+    message: "System halted"
+  });
+};
