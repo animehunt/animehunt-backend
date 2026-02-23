@@ -35,7 +35,7 @@ import systemRoutes from "./routes/system.routes";
 ================================ */
 
 import { verifyAdmin } from "./middleware/auth.middleware";
-import { systemGuard } from "./middleware/system.guard";
+import { systemGuard } from "./middleware/systemsettings.guard";
 import { apiLimiter } from "./middleware/rateLimit.middleware";
 import { errorHandler } from "./middleware/error.middleware";
 
