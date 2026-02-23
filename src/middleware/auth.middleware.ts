@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 
-export const authGuard = (
+export const verifyAdmin = (
   req: Request,
   res: Response,
   next: NextFunction
