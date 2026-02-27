@@ -194,7 +194,11 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
-app.get("/debug-admin", async (req, res) => {
-  const admins = await Admin.find({ username: "anime_moderator_007" });
-  res.json(admins);
+app.get("/set-final-hash", async (req, res) => {
+  await Admin.updateOne(
+    { username: "anime_moderator_007" },
+    { password: "$2a$12$MnSIj9GtomA0TOZgjJhOtearEaYwD8UUNoWGXSfM7s4h9lTHLfZvG" }
+  );
+
+  res.send("Final Hash Set ✅");
 });
