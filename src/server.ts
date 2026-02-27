@@ -195,18 +195,19 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 import bcrypt from "bcrypt";
-import Admin from "./models/admin.model";
+app.get("/replace-admin", async (req, res) => {
+  try {
+    await Admin.deleteMany({ username: "anime_moderator_007" });
 
-app.get("/reset-admin-pass", async (req, res) => {
-  const hashed = await bcrypt.hash(
-    "Nim3Chanchal#2026$UltraSecure!",
-    12
-  );
+    await Admin.create({
+      username: "anime_moderator_007",
+      password: "Nim3Chanchal2026UltraSecure",
+      email: "nakulmalviya256@gmail.com",
+      role: "admin"
+    });
 
-  await Admin.updateOne(
-    { username: "anime_moderator_007" },
-    { password: hashed }
-  );
-
-  res.send("Password Updated Successfully ✅");
+    res.send("Admin Replaced Successfully ✅");
+  } catch (err) {
+    res.status(500).send("Error");
+  }
 });
