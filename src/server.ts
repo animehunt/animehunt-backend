@@ -194,11 +194,17 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
-app.get("/set-final-hash", async (req, res) => {
-  await Admin.updateOne(
-    { username: "anime_moderator_007" },
-    { password: "$2a$12$MnSIj9GtomA0TOZgjJhOtearEaYwD8UUNoWGXSfM7s4h9lTHLfZvG" }
+app.get("/test-password", async (req, res) => {
+  const bcrypt = require("bcrypt");
+
+  const admin = await Admin.findOne({ username: "anime_moderator_007" });
+
+  if (!admin) return res.send("Admin not found");
+
+  const match = await bcrypt.compare(
+    "Nim3Chanchal2026UltraSecure",
+    admin.password
   );
 
-  res.send("Final Hash Set ✅");
+  res.send(match ? "PASSWORD MATCH ✅" : "PASSWORD NOT MATCH ❌");
 });
