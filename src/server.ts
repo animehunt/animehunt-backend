@@ -198,7 +198,7 @@ app.get("/create-admin-now", async (req, res) => {
   try {
     await Admin.create({
       username: "anime_moderator_007",
-      password: "$2a$12$1RdWqkMMG4j/haO5CROyqeh37cXvV6cYGXqY0YcoKFDpccBQFJHle",
+      password: "$2a$12$nBnUbK5MKK7ca10EJgHQqeNLaUBWPFGphsiTYuENXXTxjyT3dt4LK",
       email: "nakulmalviya256@gmail.com",   // required field
       role: "admin"
     });
