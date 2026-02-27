@@ -194,7 +194,6 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
-import bcrypt from "bcrypt";
 app.get("/replace-admin", async (req, res) => {
   try {
     await Admin.deleteMany({ username: "anime_moderator_007" });
