@@ -194,19 +194,7 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
-app.get("/replace-admin", async (req, res) => {
-  try {
-    await Admin.deleteMany({ username: "anime_moderator_007" });
-
-    await Admin.create({
-      username: "anime_moderator_007",
-      password: "Nim3Chanchal2026UltraSecure",
-      email: "nakulmalviya256@gmail.com",
-      role: "admin"
-    });
-
-    res.send("Admin Replaced Successfully ✅");
-  } catch (err) {
-    res.status(500).send("Error");
-  }
+app.get("/debug-admin", async (req, res) => {
+  const admins = await Admin.find({ username: "anime_moderator_007" });
+  res.json(admins);
 });
