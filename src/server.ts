@@ -194,18 +194,19 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
-app.get("/create-admin-now", async (req, res) => {
-  try {
-    await Admin.create({
-      username: "anime_moderator_007",
-      password: "$2a$12$nBnUbK5MKK7ca10EJgHQqeNLaUBWPFGphsiTYuENXXTxjyT3dt4LK",
-      email: "nakulmalviya256@gmail.com",   // required field
-      role: "admin"
-    });
+import bcrypt from "bcrypt";
+import Admin from "./models/admin.model";
 
-    res.send("Admin Created Successfully ✅");
-  } catch (error) {
-    console.error(error);
-    res.status(500).send("Error creating admin");
-  }
+app.get("/reset-admin-pass", async (req, res) => {
+  const hashed = await bcrypt.hash(
+    "Nim3Chanchal#2026$UltraSecure!",
+    12
+  );
+
+  await Admin.updateOne(
+    { username: "anime_moderator_007" },
+    { password: hashed }
+  );
+
+  res.send("Password Updated Successfully ✅");
 });
