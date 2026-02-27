@@ -8,7 +8,7 @@ import mongoose from "mongoose";
 /* ===============================
    ROUTES IMPORT
 ================================ */
-
+import Admin from "./models/Admin";
 import adRoutes from "./routes/ad.routes";
 import aiRoutes from "./routes/ai.routes";
 import analyticsRoutes from "./routes/analytics.routes";
@@ -193,13 +193,4 @@ const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-});
-app.get("/create-admin-now", async (req, res) => {
-
-  await Admin.create({
-    username: "anime_moderator_007",
-    password: "$2a$12$1RdWqkMMG4j/haO5CROyqeh37cXvV6cYGXqY0YcoKFDpccBQFJHle"
-  });
-
-  res.send("Admin Created Successfully ✅");
 });
