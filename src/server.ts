@@ -21,6 +21,7 @@ import playerRoutes from "./routes/player.routes";
 import searchRoutes from "./routes/search.routes";
 import securityRoutes from "./routes/security.routes";
 import securityStatsRoutes from "./routes/securityStats.routes";
+import serverRoutes from "./routes/server.routes";
 
 dotenv.config();
 connectDB();
@@ -50,6 +51,7 @@ app.use("/api/admin/player", playerRoutes);
 app.use("/api/admin/search", searchRoutes);
 app.use("/api/admin/security", securityRoutes);
 app.use("/api/security", securityStatsRoutes);
+app.use("/api/admin/servers", serverRoutes);
 
 app.get("/", (_req, res) => {
   res.send("AnimeHunt Ads API Running 🚀");
