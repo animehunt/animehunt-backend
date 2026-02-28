@@ -6,6 +6,7 @@ import compression from "compression";
 import { connectDB } from "./config/db";
 import adsRoutes from "./routes/ads.routes";
 import aiRoutes from "./routes/ai.routes";
+import analyticsRoutes from "./routes/analytics.routes";
 
 dotenv.config();
 connectDB();
@@ -19,6 +20,7 @@ app.use(express.json({ limit: "10mb" }));
 
 app.use("/api/admin/ads", adsRoutes);
 app.use("/api/admin/ai", aiRoutes);
+app.use("/api/admin/analytics", analyticsRoutes
 
 app.get("/", (_req, res) => {
   res.send("AnimeHunt Ads API Running 🚀");
