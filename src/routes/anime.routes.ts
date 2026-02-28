@@ -1,16 +1,16 @@
-import { Router } from "express";
+import express from "express";
 import {
   createAnime,
-  getAnime,
-  getSingleAnime,
+  getAllAnime,
+  getAnimeById,
   updateAnime,
   deleteAnime
 } from "../controllers/anime.controller";
 
-const router = Router();
+const router = express.Router();
 
-router.get("/", getAnime);
-router.get("/:id", getSingleAnime);
+router.get("/", getAllAnime);
+router.get("/:id", getAnimeById);
 router.post("/", createAnime);
 router.patch("/:id", updateAnime);
 router.delete("/:id", deleteAnime);
