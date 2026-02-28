@@ -8,7 +8,7 @@ import mongoose from "mongoose";
 /* ===============================
    ROUTES IMPORT
 ================================ */
-import Admin from "./models/admin.model";
+
 import adRoutes from "./routes/ad.routes";
 import aiRoutes from "./routes/ai.routes";
 import analyticsRoutes from "./routes/analytics.routes";
@@ -17,9 +17,6 @@ import bannerRoutes from "./routes/banner.routes";
 import downloadRoutes from "./routes/download.routes";
 import episodeRoutes from "./routes/episode.routes";
 import homepageRoutes from "./routes/homepage.routes";
-
-import authRoutes from "./routes/auth.routes";
-
 import performanceRoutes from "./routes/performance.routes";
 import playerRoutes from "./routes/player.routes";
 import searchRoutes from "./routes/search.routes";
@@ -30,27 +27,19 @@ import sidebarRoutes from "./routes/sidebar.routes";
 import footerRoutes from "./routes/footer.routes";
 import systemRoutes from "./routes/system.routes";
 
+import authRoutes from "./routes/auth.routes";
+
 /* ===============================
-   MIDDLEWARE IMPORT
+   BASIC SETUP
 ================================ */
 
-import { verifyAdmin } from "./middleware/auth.middleware";
-import { systemGuard } from "./middleware/systemsettings.guard";
-import { apiLimiter } from "./middleware/rateLimit.middleware";
-import { errorHandler } from "./middleware/error.middleware";
-
 dotenv.config();
-
 const app = express();
-
-/* ======================================================
-   TRUST PROXY (Cloudflare + Render Required)
-====================================================== */
 app.set("trust proxy", 1);
 
-/* ======================================================
-   GLOBAL SECURITY MIDDLEWARES
-====================================================== */
+/* ===============================
+   SECURITY
+================================ */
 
 app.use(
   helmet({
@@ -58,42 +47,26 @@ app.use(
   })
 );
 
-/* ================= CORS ================= */
+/* ===============================
+   CORS (Simple Version)
+================================ */
 
 app.use(
   cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
-
-      const allowedEnvOrigins =
-        process.env.ALLOWED_ORIGINS?.split(",") || [];
-
-      const isCloudflarePreview =
-        origin.endsWith(".pages.dev");
-
-      const isAllowedEnv =
-        allowedEnvOrigins.includes(origin);
-
-      if (isCloudflarePreview || isAllowedEnv) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PATCH", "DELETE"],
+    origin: true,
     credentials: true,
   })
 );
 
-/* ================= BODY PARSER ================= */
+/* ===============================
+   BODY PARSER
+================================ */
 
 app.use(express.json({ limit: "10kb" }));
 
-/* ================= RATE LIMIT ================= */
-
-app.use("/api", apiLimiter);
-
-/* ================= MONGO SANITIZE ================= */
+/* ===============================
+   MONGO SANITIZE
+================================ */
 
 app.use((req, _res, next) => {
   if (req.body) {
@@ -102,9 +75,9 @@ app.use((req, _res, next) => {
   next();
 });
 
-/* ======================================================
-   DATABASE CONNECTION
-====================================================== */
+/* ===============================
+   DATABASE
+================================ */
 
 mongoose.set("strictQuery", true);
 
@@ -116,26 +89,26 @@ mongoose
     process.exit(1);
   });
 
-/* ======================================================
-   ROUTES STRUCTURE
-====================================================== */
+/* ===============================
+   HEALTH CHECK
+================================ */
 
-/* Health Check */
 app.get("/", (_req, res) => {
   res.json({
     status: "AnimeHunt Backend Running 🚀",
-    environment: process.env.NODE_ENV,
   });
 });
 
-/* =======================
-   AUTH (UNPROTECTED)
-======================= */
+/* ===============================
+   AUTH ROUTE (UNPROTECTED)
+================================ */
+
 app.use("/api/auth", authRoutes);
 
-/* =======================
-   PUBLIC ROUTES
-======================= */
+/* ===============================
+   ALL ROUTES (NO PROTECTION)
+================================ */
+
 app.use("/api/ads", adRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/anime", animeRoutes);
@@ -144,16 +117,6 @@ app.use("/api", analyticsRoutes);
 app.use("/api", downloadRoutes);
 app.use("/api", episodeRoutes);
 app.use("/api", homepageRoutes);
-
-/* =======================
-   SYSTEM GUARD
-======================= */
-app.use(systemGuard);
-
-/* =======================
-   ADMIN ROUTES (PROTECTED)
-======================= */
-app.use("/api/admin", verifyAdmin);
 
 app.use("/api/admin", performanceRoutes);
 app.use("/api/admin", playerRoutes);
@@ -165,46 +128,21 @@ app.use("/api/admin", sidebarRoutes);
 app.use("/api/admin", footerRoutes);
 app.use("/api/admin", systemRoutes);
 
-/* ======================================================
+/* ===============================
    GLOBAL ERROR HANDLER
-====================================================== */
+================================ */
 
-app.use(errorHandler);
-
-/* ======================================================
-   GRACEFUL SHUTDOWN (Production Safe)
-====================================================== */
-
-process.on("unhandledRejection", (err: any) => {
-  console.error("🔥 Unhandled Rejection:", err);
-  process.exit(1);
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error("🔥 Error:", err.message);
+  res.status(500).json({ message: "Server Error" });
 });
 
-process.on("uncaughtException", (err: any) => {
-  console.error("🔥 Uncaught Exception:", err);
-  process.exit(1);
-});
-
-/* ======================================================
+/* ===============================
    START SERVER
-====================================================== */
+================================ */
 
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-});
-app.get("/test-password", async (req, res) => {
-  const bcrypt = require("bcrypt");
-
-  const admin = await Admin.findOne({ username: "anime_moderator_007" });
-
-  if (!admin) return res.send("Admin not found");
-
-  const match = await bcrypt.compare(
-    "Nim3Chanchal2026UltraSecure",
-    admin.password
-  );
-
-  res.send(match ? "PASSWORD MATCH ✅" : "PASSWORD NOT MATCH ❌");
 });
