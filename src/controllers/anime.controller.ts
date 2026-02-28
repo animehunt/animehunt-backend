@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import Anime from "../models/anime.model";
+import Anime from "../models/Anime.model";
 
 /* ===============================
    CREATE ANIME
