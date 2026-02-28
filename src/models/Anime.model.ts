@@ -28,27 +28,19 @@ export interface IAnime extends Document {
 
 const AnimeSchema = new Schema<IAnime>(
   {
-    title: { type: String, required: true, trim: true },
-    slug: { type: String, required: true, unique: true, trim: true },
-
-    type: {
-      type: String,
-      enum: ["anime", "movie", "series", "cartoon"],
-      required: true
-    },
-
-    status: {
-      type: String,
-      enum: ["ongoing", "completed"],
-      required: true
-    },
+    title: { type: String, required: true },
+    slug: { type: String, required: true, unique: true }, // unique already creates index
+    type: { type: String, required: true },
+    status: { type: String, required: true },
 
     poster: String,
     banner: String,
+
     year: String,
     rating: String,
     language: String,
     duration: String,
+
     categories: String,
     tags: String,
     description: String,
@@ -61,7 +53,7 @@ const AnimeSchema = new Schema<IAnime>(
   { timestamps: true }
 );
 
-// ❗ slug index already unique है इसलिए दुबारा index नहीं लगाना
+// keep these if needed
 AnimeSchema.index({ type: 1 });
 AnimeSchema.index({ status: 1 });
 
