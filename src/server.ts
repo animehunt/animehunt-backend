@@ -19,6 +19,8 @@ import dashboardRoutes from "./routes/dashboard.routes";
 import performanceRoutes from "./routes/performance.routes";
 import playerRoutes from "./routes/player.routes";
 import searchRoutes from "./routes/search.routes";
+import securityRoutes from "./routes/security.routes";
+import securityStatsRoutes from "./routes/securityStats.routes";
 
 dotenv.config();
 connectDB();
@@ -46,6 +48,8 @@ app.use("/api/admin/dashboard", dashboardRoutes);
 app.use("/api/admin/performance", performanceRoutes);
 app.use("/api/admin/player", playerRoutes);
 app.use("/api/admin/search", searchRoutes);
+app.use("/api/admin/security", securityRoutes);
+app.use("/api/security", securityStatsRoutes);
 
 app.get("/", (_req, res) => {
   res.send("AnimeHunt Ads API Running 🚀");
