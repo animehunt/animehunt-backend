@@ -29,6 +29,7 @@ app.use("/api/admin/anime", animeRoutes);
 app.use("/api/admin/banners", bannerRoutes);
 app.use("/api/admin/categories", categoryRoutes);
 app.use("/api/admin/deploy", deployRoutes);
+app.use("/api", maintenanceCheck);
 
 app.get("/", (_req, res) => {
   res.send("AnimeHunt Ads API Running 🚀");
