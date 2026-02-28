@@ -14,6 +14,7 @@ import deployRoutes from "./routes/deploy.routes";
 import downloadRoutes from "./routes/download.routes";
 import episodeRoutes from "./routes/episode.routes";
 import footerRoutes from "./routes/footer.routes";
+import homepageRoutes from "./routes/homepage.routes";
 
 dotenv.config();
 connectDB();
@@ -36,6 +37,7 @@ app.use("/api", maintenanceCheck);
 app.use("/api/admin/download", downloadRoutes);
 app.use("/api/admin/episodes", episodeRoutes);
 app.use("/api/admin/footer", footerRoutes);
+app.use("/api/admin/homepage", homepageRoutes);
 
 app.get("/", (_req, res) => {
   res.send("AnimeHunt Ads API Running 🚀");
