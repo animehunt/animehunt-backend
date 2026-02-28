@@ -23,6 +23,7 @@ import securityRoutes from "./routes/security.routes";
 import securityStatsRoutes from "./routes/securityStats.routes";
 import serverRoutes from "./routes/server.routes";
 import sidebarRoutes from "./routes/sidebar.routes";
+import systemRoutes from "./routes/system.routes";
 
 dotenv.config();
 connectDB();
@@ -54,6 +55,7 @@ app.use("/api/admin/security", securityRoutes);
 app.use("/api/security", securityStatsRoutes);
 app.use("/api/admin/servers", serverRoutes);
 app.use("/api/admin/sidebar", sidebarRoutes);
+app.use("/api/admin/system", systemRoutes);
 
 app.get("/", (_req, res) => {
   res.send("AnimeHunt Ads API Running 🚀");
