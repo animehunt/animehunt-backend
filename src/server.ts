@@ -8,6 +8,7 @@ import adsRoutes from "./routes/ads.routes";
 import aiRoutes from "./routes/ai.routes";
 import analyticsRoutes from "./routes/analytics.routes";
 import animeRoutes from "./routes/anime.routes";
+import bannerRoutes from "./routes/banner.routes";
 
 dotenv.config();
 connectDB();
@@ -23,6 +24,7 @@ app.use("/api/admin/ads", adsRoutes);
 app.use("/api/admin/ai", aiRoutes);
 app.use("/api/admin/analytics", analyticsRoutes
 app.use("/api/admin/anime", animeRoutes);
+app.use("/api/admin/banners", bannerRoutes);
 
 app.get("/", (_req, res) => {
   res.send("AnimeHunt Ads API Running 🚀");
