@@ -4,6 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import compression from "compression";
 import { connectDB } from "./config/db";
+
 import adsRoutes from "./routes/ads.routes";
 import aiRoutes from "./routes/ai.routes";
 import analyticsRoutes from "./routes/analytics.routes";
@@ -25,6 +26,9 @@ import serverRoutes from "./routes/server.routes";
 import sidebarRoutes from "./routes/sidebar.routes";
 import systemRoutes from "./routes/system.routes";
 
+// ❗ अगर maintenanceCheck middleware है तो इसे import करना ज़रूरी है
+// import maintenanceCheck from "./middlewares/maintenance.middleware";
+
 dotenv.config();
 connectDB();
 
@@ -35,14 +39,18 @@ app.use(cors());
 app.use(compression());
 app.use(express.json({ limit: "10mb" }));
 
+// ROUTES
 app.use("/api/admin/ads", adsRoutes);
 app.use("/api/admin/ai", aiRoutes);
-app.use("/api/admin/analytics", analyticsRoutes
+app.use("/api/admin/analytics", analyticsRoutes); // ✅ FIXED LINE
 app.use("/api/admin/anime", animeRoutes);
 app.use("/api/admin/banners", bannerRoutes);
 app.use("/api/admin/categories", categoryRoutes);
 app.use("/api/admin/deploy", deployRoutes);
-app.use("/api", maintenanceCheck);
+
+// अगर maintenanceCheck use कर रहे हो तो पहले import करो
+// app.use("/api", maintenanceCheck);
+
 app.use("/api/admin/download", downloadRoutes);
 app.use("/api/admin/episodes", episodeRoutes);
 app.use("/api/admin/footer", footerRoutes);
@@ -57,8 +65,9 @@ app.use("/api/admin/servers", serverRoutes);
 app.use("/api/admin/sidebar", sidebarRoutes);
 app.use("/api/admin/system", systemRoutes);
 
+// ROOT
 app.get("/", (_req, res) => {
-  res.send("AnimeHunt Ads API Running 🚀");
+  res.send("AnimeHunt Backend Running 🚀");
 });
 
 const PORT = process.env.PORT || 5000;
