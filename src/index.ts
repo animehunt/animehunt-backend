@@ -4,6 +4,7 @@ import adsRoutes from './ads'
 import aiRoutes from "./ai"
 import analyticsRoutes from "./analytics"
 import animeRoutes from "./anime"
+import bannerRoutes from "./banners"
 
 const app = new Hono()
 
@@ -64,6 +65,7 @@ app.route('/api/admin/ads', adsRoutes)
   app.route("/api/admin/ai", aiRoutes)
   app.route("/api/admin/analytics", analyticsRoutes)
   app.route("/api/admin/anime", animeRoutes)
+  app.route("/api/admin/banners", bannerRoutes)
   
   const id = crypto.randomUUID()
 
