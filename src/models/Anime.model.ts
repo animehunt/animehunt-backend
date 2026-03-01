@@ -24,17 +24,46 @@ const AnimeSchema = new Schema<IAnime>(
   {
     title: { type: String, required: true },
 
-    // ❗ REMOVE unique:true from here
     slug: { type: String, required: true },
 
-    type: { type: String, required: true },
-    status: { type: String, required: true },
+    type: {
+      type: String,
+      enum: ["anime", "movie", "series", "cartoon"],
+      required: true
+    },
+
+    // ✅ FIXED STATUS
+    status: {
+      type: String,
+      enum: ["ongoing", "completed"],
+      required: true,
+      default: "ongoing"   // 🔥 THIS FIXES YOUR ERROR
+    },
 
     poster: String,
     banner: String,
     year: String,
     rating: String,
     language: String,
+    duration: String,
+    categories: String,
+    tags: String,
+    description: String,
+
+    isHome: { type: Boolean, default: false },
+    isTrending: { type: Boolean, default: false },
+    isMostViewed: { type: Boolean, default: false },
+    isBanner: { type: Boolean, default: false }
+  },
+  { timestamps: true }
+);
+
+// Indexes
+AnimeSchema.index({ slug: 1 }, { unique: true });
+AnimeSchema.index({ type: 1 });
+AnimeSchema.index({ status: 1 });
+
+export default mongoose.model<IAnime>("Anime", AnimeSchema);    language: String,
     duration: String,
     categories: String,
     tags: String,
