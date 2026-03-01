@@ -6,22 +6,19 @@ export interface ICategory extends Document {
   type: "row" | "page" | "both";
   order: number;
   priority: number;
-
   showHome: boolean;
   active: boolean;
   featured: boolean;
-
   aiTrending: boolean;
   aiPopular: boolean;
   aiAssign: boolean;
-
   createdAt: Date;
 }
 
 const CategorySchema = new Schema<ICategory>(
   {
     name: { type: String, required: true },
-    slug: { type: String, required: true, unique: true },
+    slug: { type: String, required: true }, // ❌ removed unique here
     type: { type: String, default: "row" },
 
     order: { type: Number, default: 0 },
@@ -38,7 +35,9 @@ const CategorySchema = new Schema<ICategory>(
   { timestamps: true }
 );
 
-CategorySchema.index({ slug: 1 });
+// ✅ Only one unique index for slug
+CategorySchema.index({ slug: 1 }, { unique: true });
+
 CategorySchema.index({ order: 1 });
 CategorySchema.index({ active: 1 });
 
