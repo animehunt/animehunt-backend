@@ -1,12 +1,11 @@
 name = "animehunt-backend"
 main = "src/index.ts"
-compatibility_date = "2024-12-01"
+compatibility_date = "2024-01-01"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "animehunt-db"
-database_id = "PUT_LATER"
 
 [[r2_buckets]]
-binding = "R2"
-bucket_name = "animehunt-media"
+binding = "ANIME_BUCKET"
+bucket_name = "anime-images"
