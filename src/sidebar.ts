@@ -1,5 +1,4 @@
 import { Hono } from "hono"
-import { nanoid } from "nanoid"
 
 type Bindings = {
   DB: D1Database
@@ -39,7 +38,9 @@ sidebar.get("/", async (c) => {
 sidebar.post("/", async (c) => {
 
   const body = await c.req.json()
-  const id = body._id || nanoid()
+
+  // ✅ nanoid removed — Cloudflare native UUID
+  const id = body._id || crypto.randomUUID()
 
   if (!body.title || !body.url) {
     return c.json({ error: "Missing required fields" }, 400)
