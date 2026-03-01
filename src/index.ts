@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie'
+import adsRoutes from './ads'
 
 const app = new Hono()
 
@@ -56,7 +57,8 @@ app.use('/admin/*', async (c, next) => {
 // =====================
 app.post('/admin/anime', async (c) => {
   const body = await c.req.json()
-
+app.route('/api/admin/ads', adsRoutes)
+  
   const id = crypto.randomUUID()
 
   await c.env.DB.prepare(
