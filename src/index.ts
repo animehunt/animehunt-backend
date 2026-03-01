@@ -17,6 +17,7 @@ import playerRoutes from "./player"
 import searchRoutes from "./search"
 import securityRoutes from "./security"
 import securityStats from "./securityStats"
+import seoRoutes from "./seo"
 
 const app = new Hono()
 
@@ -90,6 +91,7 @@ app.route('/api/admin/ads', adsRoutes)
   app.route("/api/admin/search", searchRoutes)
   app.route("/api/admin/security", securityRoutes)
 app.route("/api/security/stats", securityStats)
+  app.route("/api/admin/seo", seoRoutes)
   
   const id = crypto.randomUUID()
 
