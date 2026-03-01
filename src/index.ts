@@ -11,6 +11,7 @@ import downloadRoutes from "./download"
 import episodeRoutes from "./episodes"
 import footerRoutes from "./footer"
 import homepageRoutes from "./homepage"
+import dashboardRoutes from "./dashboard"
 
 const app = new Hono()
 
@@ -78,6 +79,7 @@ app.route('/api/admin/ads', adsRoutes)
   app.route("/api/admin/episodes", episodeRoutes)
   app.route("/api/admin/footer", footerRoutes)
   app.route("/api/admin/homepage", homepageRoutes)
+  app.route("/api/admin/dashboard", dashboardRoutes)
   
   const id = crypto.randomUUID()
 
