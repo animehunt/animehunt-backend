@@ -20,6 +20,7 @@ import securityStats from "./securityStats"
 import seoRoutes from "./seo"
 import serverRoutes from "./servers"
 import sidebarRoutes from "./sidebar"
+import systemRoutes from "./system"
 
 const app = new Hono()
 
@@ -96,7 +97,8 @@ app.route("/api/security/stats", securityStats)
   app.route("/api/admin/seo", seoRoutes)
   app.route("/api/admin/servers", serverRoutes)
   app.route("/api/admin/sidebar", sidebarRoutes)
-  
+  app.route("/api/admin/system", systemRoutes)
+ 
   const id = crypto.randomUUID()
 
   await c.env.DB.prepare(
