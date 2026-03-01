@@ -6,7 +6,8 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "hono": "^4.4.0"
+    "hono": "^4.4.0",
+    "nanoid": "^4.0.2"
   },
   "devDependencies": {
     "wrangler": "^3.60.0",
