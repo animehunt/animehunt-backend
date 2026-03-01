@@ -24,12 +24,20 @@ export interface IAnime extends Document {
   isBanner: boolean;
 
   createdAt: Date;
+  updatedAt: Date;
 }
 
 const AnimeSchema = new Schema<IAnime>(
   {
     title: { type: String, required: true },
-    slug: { type: String, required: true, unique: true }, // unique already creates index
+
+    // 👇 ONLY this creates index
+    slug: {
+      type: String,
+      required: true,
+      unique: true
+    },
+
     type: { type: String, required: true },
     status: { type: String, required: true },
 
@@ -53,7 +61,7 @@ const AnimeSchema = new Schema<IAnime>(
   { timestamps: true }
 );
 
-// keep these if needed
+// keep only these (NOT slug)
 AnimeSchema.index({ type: 1 });
 AnimeSchema.index({ status: 1 });
 
