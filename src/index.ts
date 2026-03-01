@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie'
 import adsRoutes from './ads'
 import aiRoutes from "./ai"
+import analyticsRoutes from "./analytics"
 
 const app = new Hono()
 
@@ -60,6 +61,7 @@ app.post('/admin/anime', async (c) => {
   const body = await c.req.json()
 app.route('/api/admin/ads', adsRoutes)
   app.route("/api/admin/ai", aiRoutes)
+  app.route("/api/admin/analytics", analyticsRoutes)
   
   const id = crypto.randomUUID()
 
