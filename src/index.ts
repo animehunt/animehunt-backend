@@ -9,6 +9,7 @@ import categoryRoutes from "./categories"
 import deployRoutes from "./deploy"
 import downloadRoutes from "./download"
 import episodeRoutes from "./episodes"
+import footerRoutes from "./footer"
 
 const app = new Hono()
 
@@ -74,6 +75,7 @@ app.route('/api/admin/ads', adsRoutes)
   app.route("/api/admin/deploy", deployRoutes)
   app.route("/api/admin/download", downloadRoutes)
   app.route("/api/admin/episodes", episodeRoutes)
+  app.route("/api/admin/footer", footerRoutes)
   
   const id = crypto.randomUUID()
 
