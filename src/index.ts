@@ -14,6 +14,7 @@ import homepageRoutes from "./homepage"
 import dashboardRoutes from "./dashboard"
 import performanceRoutes from "./performance"
 import playerRoutes from "./player"
+import searchRoutes from "./search"
 
 const app = new Hono()
 
@@ -84,6 +85,7 @@ app.route('/api/admin/ads', adsRoutes)
   app.route("/api/admin/dashboard", dashboardRoutes)
   app.route("/api/admin/performance", performanceRoutes)
   app.route("/api/admin/player", playerRoutes)
+  app.route("/api/admin/search", searchRoutes)
   
   const id = crypto.randomUUID()
 
