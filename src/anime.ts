@@ -6,9 +6,9 @@ type Bindings = {
 
 const anime = new Hono<{ Bindings: Bindings }>()
 
-/* ===============================
-   GET ALL
-================================ */
+/* =====================================================
+   GET ALL (FILTER SUPPORT)
+===================================================== */
 anime.get("/", async (c) => {
 
   try {
@@ -41,22 +41,50 @@ anime.get("/", async (c) => {
       params.push(`%${search}%`)
     }
 
-    query += " ORDER BY createdAt DESC"
+    // 🔥 FIXED (NO createdAt error)
+    query += " ORDER BY rowid DESC"
 
     const result = await c.env.DB.prepare(query).bind(...params).all()
 
     return c.json(result.results)
 
   } catch (err) {
-    console.error(err)
+    console.error("GET ALL ERROR:", err)
     return c.json({ message: "Server error" }, 500)
   }
 
 })
 
-/* ===============================
+/* =====================================================
+   GET ONE
+===================================================== */
+anime.get("/:id", async (c) => {
+
+  try {
+
+    const { id } = c.req.param()
+
+    const data = await c.env.DB
+      .prepare("SELECT * FROM anime WHERE id = ?")
+      .bind(id)
+      .first()
+
+    if (!data) {
+      return c.json({ message: "Not found" }, 404)
+    }
+
+    return c.json(data)
+
+  } catch (err) {
+    console.error("GET ONE ERROR:", err)
+    return c.json({ message: "Server error" }, 500)
+  }
+
+})
+
+/* =====================================================
    CREATE
-================================ */
+===================================================== */
 anime.post("/", async (c) => {
 
   try {
@@ -111,15 +139,75 @@ anime.post("/", async (c) => {
     return c.json({ success: true })
 
   } catch (err) {
-    console.error(err)
+    console.error("CREATE ERROR:", err)
     return c.json({ message: "Insert failed" }, 500)
   }
 
 })
 
-/* ===============================
+/* =====================================================
+   UPDATE
+===================================================== */
+anime.patch("/:id", async (c) => {
+
+  try {
+
+    const { id } = c.req.param()
+    const body = await c.req.json()
+
+    await c.env.DB.prepare(`
+      UPDATE anime SET
+        title=?,
+        slug=?,
+        type=?,
+        status=?,
+        poster=?,
+        banner=?,
+        year=?,
+        rating=?,
+        language=?,
+        duration=?,
+        categories=?,
+        tags=?,
+        description=?,
+        isHome=?,
+        isTrending=?,
+        isMostViewed=?,
+        isBanner=?
+      WHERE id=?
+    `).bind(
+      body.title,
+      body.slug,
+      body.type || null,
+      body.status || null,
+      body.poster || null,
+      body.banner || null,
+      body.year || null,
+      body.rating || null,
+      body.language || null,
+      body.duration || null,
+      body.categories || null,
+      body.tags || null,
+      body.description || null,
+      body.isHome ? 1 : 0,
+      body.isTrending ? 1 : 0,
+      body.isMostViewed ? 1 : 0,
+      body.isBanner ? 1 : 0,
+      id
+    ).run()
+
+    return c.json({ success: true })
+
+  } catch (err) {
+    console.error("UPDATE ERROR:", err)
+    return c.json({ message: "Update failed" }, 500)
+  }
+
+})
+
+/* =====================================================
    DELETE
-================================ */
+===================================================== */
 anime.delete("/:id", async (c) => {
 
   try {
@@ -134,7 +222,7 @@ anime.delete("/:id", async (c) => {
     return c.json({ success: true })
 
   } catch (err) {
-    console.error(err)
+    console.error("DELETE ERROR:", err)
     return c.json({ message: "Delete failed" }, 500)
   }
 
