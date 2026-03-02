@@ -10,9 +10,3 @@ binding = "DB"
 database_name = "animehunt-db"
 database_id = "deab11f0-e12e-4b8e-a742-66b330f547d7"
 
-# =========================
-# R2 STORAGE BINDING
-# =========================
-[[r2_buckets]]
-binding = "ANIME_BUCKET"
-bucket_name = "anime-images"
