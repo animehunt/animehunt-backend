@@ -1,5 +1,4 @@
 import { Hono } from 'hono'
-import { setCookie, getCookie, deleteCookie } from 'hono/cookie'
 
 import adsRoutes from './ads'
 import aiRoutes from "./ai"
@@ -26,17 +25,17 @@ import cloudinary from './cloudinary'
 
 const app = new Hono()
 
-// =====================================================
-// ROOT CHECK
-// =====================================================
+// =====================
+// ROOT
+// =====================
 app.get('/', (c) => {
   return c.text('🔥 AnimeHunt Backend Running')
 })
 
 
-// =====================================================
-// LOGIN (MUST BE BEFORE AUTH MIDDLEWARE)
-// =====================================================
+// =====================
+// LOGIN (TOKEN BASED)
+// =====================
 app.post('/api/admin/login', async (c) => {
 
   const { username, password } = await c.req.json()
@@ -46,84 +45,46 @@ app.post('/api/admin/login', async (c) => {
     password === 'Nim3Chanchal2026UltraSecure'
   ) {
 
-    setCookie(c, 'session', 'admin_logged_in', {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'None',
-      path: '/',
-      maxAge: 60 * 60 * 24
-    })
+    // simple token
+    const token = crypto.randomUUID()
 
-    return c.json({ success: true })
+    return c.json({
+      token
+    })
   }
 
   return c.json({ error: 'Invalid credentials' }, 401)
 })
 
 
-// =====================================================
-// LOGOUT
-// =====================================================
-app.post('/api/admin/logout', (c) => {
-  deleteCookie(c, 'session', { path: '/' })
-  return c.json({ success: true })
-})
-
-
-// =====================================================
-// AUTH MIDDLEWARE (ADMIN ONLY)
-// =====================================================
+// =====================
+// AUTH MIDDLEWARE
+// =====================
 app.use('/api/admin/*', async (c, next) => {
 
-  // Allow login route without auth
   if (c.req.path === '/api/admin/login') {
     return next()
   }
 
-  const session = getCookie(c, 'session')
+  const authHeader = c.req.header('Authorization')
 
-  if (session !== 'admin_logged_in') {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return c.json({ error: 'Unauthorized' }, 401)
   }
 
-  await next()
-})
+  const token = authHeader.split(' ')[1]
 
-
-// =====================================================
-// GLOBAL SYSTEM CHECK (KILL SWITCH)
-// =====================================================
-app.use('*', async (c, next) => {
-
-  // Skip admin APIs
-  if (c.req.path.startsWith('/api/admin')) {
-    return next()
-  }
-
-  try {
-    const row = await c.env.DB
-      .prepare("SELECT config FROM system_config WHERE id='master'")
-      .first()
-
-    if (!row) return next()
-
-    const config = JSON.parse(row.config)
-
-    if (!config.systemOn || config.maintenanceHard) {
-      return c.text("Platform Under Maintenance", 503)
-    }
-
-  } catch {
-    // If DB not ready, ignore
+  if (!token || token.length < 10) {
+    return c.json({ error: 'Invalid token' }, 401)
   }
 
   await next()
 })
 
 
-// =====================================================
+// =====================
 // ADMIN ROUTES
-// =====================================================
+// =====================
 app.route('/api/admin/ads', adsRoutes)
 app.route("/api/admin/ai", aiRoutes)
 app.route("/api/admin/analytics", analyticsRoutes)
@@ -146,9 +107,9 @@ app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
 
 
-// =====================================================
-// PUBLIC ROUTES
-// =====================================================
+// =====================
+// PUBLIC
+// =====================
 app.route("/api/security/stats", securityStats)
 app.route("/", cloudinary)
 
