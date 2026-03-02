@@ -1,5 +1,4 @@
 import { Hono } from "hono"
-import { nanoid } from "nanoid"
 
 type Bindings = {
   DB: D1Database
