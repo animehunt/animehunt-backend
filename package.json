@@ -6,11 +6,10 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "hono": "^4.4.0",
-    "nanoid": "^4.0.2"
+    "hono": "^4.12.3"
   },
   "devDependencies": {
-    "wrangler": "^3.114.17",
+    "wrangler": "^4.69.0",
     "typescript": "^5.9.3"
   }
 }
