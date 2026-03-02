@@ -2,11 +2,7 @@ name = "animehunt-backend"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
-# =========================
-# D1 DATABASE BINDING
-# =========================
 [[d1_databases]]
 binding = "DB"
 database_name = "animehunt-db"
 database_id = "deab11f0-e12e-4b8e-a742-66b330f547d7"
-
