@@ -1,6 +1,5 @@
 import { Hono } from 'hono'
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie'
-import { cors } from 'hono/cors'
 
 import adsRoutes from './ads'
 import aiRoutes from "./ai"
@@ -27,79 +26,56 @@ import cloudinary from './cloudinary'
 
 const app = new Hono()
 
-// =============================
-// CORS (IMPORTANT FOR PAGES)
-// =============================
-app.use('*', cors({
-  origin: [
-    "https://animehunt-admin.pages.dev",
-    "https://animehunt-admin.pages.dev",
-    "https://animehunt.netlify.app"
-  ],
-  credentials: true
-}))
-
-// =============================
+// =====================================================
 // ROOT CHECK
-// =============================
+// =====================================================
 app.get('/', (c) => {
   return c.text('🔥 AnimeHunt Backend Running')
 })
 
-// =============================
-// ADMIN LOGIN (D1 BASED)
-// =============================
+
+// =====================================================
+// LOGIN (MUST BE BEFORE AUTH MIDDLEWARE)
+// =====================================================
 app.post('/api/admin/login', async (c) => {
 
-  try {
+  const { username, password } = await c.req.json()
 
-    const { username, password } = await c.req.json()
-
-    if (!username || !password) {
-      return c.json({ error: "Missing fields" }, 400)
-    }
-
-    const admin = await c.env.DB
-      .prepare("SELECT * FROM admins WHERE username=?")
-      .bind(username)
-      .first()
-
-    if (!admin) {
-      return c.json({ error: "Invalid credentials" }, 401)
-    }
-
-    if (admin.password !== password) {
-      return c.json({ error: "Invalid credentials" }, 401)
-    }
+  if (
+    username === 'anime_moderator_007' &&
+    password === 'Nim3Chanchal2026UltraSecure'
+  ) {
 
     setCookie(c, 'session', 'admin_logged_in', {
       httpOnly: true,
       secure: true,
-      sameSite: "None",
+      sameSite: 'None',
       path: '/',
       maxAge: 60 * 60 * 24
     })
 
     return c.json({ success: true })
-
-  } catch (err) {
-    return c.json({ error: "Server error" }, 500)
   }
+
+  return c.json({ error: 'Invalid credentials' }, 401)
 })
 
-// =============================
+
+// =====================================================
 // LOGOUT
-// =============================
+// =====================================================
 app.post('/api/admin/logout', (c) => {
   deleteCookie(c, 'session', { path: '/' })
   return c.json({ success: true })
 })
 
-// =============================
-// AUTH MIDDLEWARE
-// =============================
+
+// =====================================================
+// AUTH MIDDLEWARE (ADMIN ONLY)
+// =====================================================
 app.use('/api/admin/*', async (c, next) => {
 
+  // Allow login route without auth
   if (c.req.path === '/api/admin/login') {
     return next()
   }
@@ -113,17 +89,18 @@ app.use('/api/admin/*', async (c, next) => {
   await next()
 })
 
-// =============================
-// SYSTEM GLOBAL CHECK
-// =============================
+
+// =====================================================
+// GLOBAL SYSTEM CHECK (KILL SWITCH)
+// =====================================================
 app.use('*', async (c, next) => {
 
+  // Skip admin APIs
   if (c.req.path.startsWith('/api/admin')) {
     return next()
   }
 
   try {
-
     const row = await c.env.DB
       .prepare("SELECT config FROM system_config WHERE id='master'")
       .first()
@@ -136,16 +113,17 @@ app.use('*', async (c, next) => {
       return c.text("Platform Under Maintenance", 503)
     }
 
-  } catch (e) {
-    // ignore if table not ready
+  } catch {
+    // If DB not ready, ignore
   }
 
   await next()
 })
 
-// =============================
-// ROUTE REGISTRATION
-// =============================
+
+// =====================================================
+// ADMIN ROUTES
+// =====================================================
 app.route('/api/admin/ads', adsRoutes)
 app.route("/api/admin/ai", aiRoutes)
 app.route("/api/admin/analytics", analyticsRoutes)
@@ -162,13 +140,16 @@ app.route("/api/admin/performance", performanceRoutes)
 app.route("/api/admin/player", playerRoutes)
 app.route("/api/admin/search", searchRoutes)
 app.route("/api/admin/security", securityRoutes)
-app.route("/api/security/stats", securityStats)
 app.route("/api/admin/seo", seoRoutes)
 app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
 
-// Cloudinary Upload
-app.route('/api/cloudinary', cloudinary)
+
+// =====================================================
+// PUBLIC ROUTES
+// =====================================================
+app.route("/api/security/stats", securityStats)
+app.route("/", cloudinary)
 
 export default app
