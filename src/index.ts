@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 
 import adsRoutes from './ads'
 import aiRoutes from "./ai"
@@ -26,12 +27,20 @@ import cloudinary from './cloudinary'
 const app = new Hono()
 
 // =====================
-// ROOT
+// CORS (VERY IMPORTANT)
+// =====================
+app.use('*', cors({
+  origin: '*',
+  allowHeaders: ['Authorization', 'Content-Type'],
+  allowMethods: ['GET','POST','PUT','DELETE','OPTIONS']
+}))
+
+// =====================
+// ROOT CHECK
 // =====================
 app.get('/', (c) => {
   return c.text('🔥 AnimeHunt Backend Running')
 })
-
 
 // =====================
 // LOGIN (TOKEN BASED)
@@ -45,7 +54,6 @@ app.post('/api/admin/login', async (c) => {
     password === 'Nim3Chanchal2026UltraSecure'
   ) {
 
-    // simple token
     const token = crypto.randomUUID()
 
     return c.json({
@@ -55,7 +63,6 @@ app.post('/api/admin/login', async (c) => {
 
   return c.json({ error: 'Invalid credentials' }, 401)
 })
-
 
 // =====================
 // AUTH MIDDLEWARE
@@ -81,7 +88,6 @@ app.use('/api/admin/*', async (c, next) => {
   await next()
 })
 
-
 // =====================
 // ADMIN ROUTES
 // =====================
@@ -106,9 +112,8 @@ app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
 
-
 // =====================
-// PUBLIC
+// PUBLIC ROUTES
 // =====================
 app.route("/api/security/stats", securityStats)
 app.route("/", cloudinary)
