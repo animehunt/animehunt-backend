@@ -1,3 +1,20 @@
+<script>
+async function checkAuth(){
+
+  const res = await fetch(
+    "https://animehunt-backend.animehunt715.workers.dev/api/admin/dashboard",
+    {
+      credentials:"include"
+    }
+  )
+
+  if(!res.ok){
+    location.href="index.html"
+  }
+}
+
+checkAuth()
+</script>
 import { Hono } from "hono"
 
 type Bindings = {
