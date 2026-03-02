@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { setCookie, getCookie, deleteCookie } from 'hono/cookie'
+import { cors } from 'hono/cors'
 
 import adsRoutes from './ads'
 import aiRoutes from "./ai"
@@ -26,44 +27,82 @@ import cloudinary from './cloudinary'
 
 const app = new Hono()
 
-// =====================
+// =============================
+// CORS (IMPORTANT FOR PAGES)
+// =============================
+app.use('*', cors({
+  origin: [
+    "https://animehunt-admin.pages.dev",
+    "https://animehunt-admin.pages.dev",
+    "https://animehunt.netlify.app"
+  ],
+  credentials: true
+}))
+
+// =============================
 // ROOT CHECK
-// =====================
+// =============================
 app.get('/', (c) => {
   return c.text('🔥 AnimeHunt Backend Running')
 })
 
-// =====================
-// SIMPLE LOGIN
-// =====================
-app.post('/login', async (c) => {
+// =============================
+// ADMIN LOGIN (D1 BASED)
+// =============================
+app.post('/api/admin/login', async (c) => {
 
-  const { username, password } = await c.req.json()
+  try {
 
-  if (username === 'admin' && password === 'admin123') {
+    const { username, password } = await c.req.json()
+
+    if (!username || !password) {
+      return c.json({ error: "Missing fields" }, 400)
+    }
+
+    const admin = await c.env.DB
+      .prepare("SELECT * FROM admins WHERE username=?")
+      .bind(username)
+      .first()
+
+    if (!admin) {
+      return c.json({ error: "Invalid credentials" }, 401)
+    }
+
+    if (admin.password !== password) {
+      return c.json({ error: "Invalid credentials" }, 401)
+    }
 
     setCookie(c, 'session', 'admin_logged_in', {
       httpOnly: true,
       secure: true,
+      sameSite: "None",
       path: '/',
       maxAge: 60 * 60 * 24
     })
 
     return c.json({ success: true })
-  }
 
-  return c.json({ success: false }, 401)
+  } catch (err) {
+    return c.json({ error: "Server error" }, 500)
+  }
 })
 
-app.post('/logout', (c) => {
-  deleteCookie(c, 'session')
+// =============================
+// LOGOUT
+// =============================
+app.post('/api/admin/logout', (c) => {
+  deleteCookie(c, 'session', { path: '/' })
   return c.json({ success: true })
 })
 
-// =====================
+// =============================
 // AUTH MIDDLEWARE
-// =====================
+// =============================
 app.use('/api/admin/*', async (c, next) => {
+
+  if (c.req.path === '/api/admin/login') {
+    return next()
+  }
 
   const session = getCookie(c, 'session')
 
@@ -74,34 +113,39 @@ app.use('/api/admin/*', async (c, next) => {
   await next()
 })
 
-// =====================
-// SYSTEM GLOBAL CHECK (KILL SWITCH)
-// =====================
+// =============================
+// SYSTEM GLOBAL CHECK
+// =============================
 app.use('*', async (c, next) => {
 
-  // allow admin routes
   if (c.req.path.startsWith('/api/admin')) {
     return next()
   }
 
-  const row = await c.env.DB
-    .prepare("SELECT config FROM system_config WHERE id='master'")
-    .first()
+  try {
 
-  if (!row) return next()
+    const row = await c.env.DB
+      .prepare("SELECT config FROM system_config WHERE id='master'")
+      .first()
 
-  const config = JSON.parse(row.config)
+    if (!row) return next()
 
-  if (!config.systemOn || config.maintenanceHard) {
-    return c.text("Platform Under Maintenance", 503)
+    const config = JSON.parse(row.config)
+
+    if (!config.systemOn || config.maintenanceHard) {
+      return c.text("Platform Under Maintenance", 503)
+    }
+
+  } catch (e) {
+    // ignore if table not ready
   }
 
   await next()
 })
 
-// =====================
+// =============================
 // ROUTE REGISTRATION
-// =====================
+// =============================
 app.route('/api/admin/ads', adsRoutes)
 app.route("/api/admin/ai", aiRoutes)
 app.route("/api/admin/analytics", analyticsRoutes)
@@ -123,6 +167,8 @@ app.route("/api/admin/seo", seoRoutes)
 app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
-app.route('/', cloudinary)
+
+// Cloudinary Upload
+app.route('/api/cloudinary', cloudinary)
 
 export default app
