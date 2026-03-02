@@ -22,6 +22,7 @@ import seoRoutes from "./seo"
 import serverRoutes from "./servers"
 import sidebarRoutes from "./sidebar"
 import systemRoutes from "./system"
+import cloudinary from './cloudinary'
 
 const app = new Hono()
 
@@ -122,5 +123,6 @@ app.route("/api/admin/seo", seoRoutes)
 app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
+app.route('/', cloudinary)
 
 export default app
