@@ -24,27 +24,31 @@ import sidebarRoutes from "./sidebar"
 import systemRoutes from "./system"
 import cloudinary from './cloudinary'
 
-const app = new Hono()
+type Bindings = {
+  DB: D1Database
+}
 
-// =====================
-// CORS (VERY IMPORTANT)
-// =====================
+const app = new Hono<{ Bindings: Bindings }>()
+
+/* =====================
+   CORS
+===================== */
 app.use('*', cors({
   origin: '*',
   allowHeaders: ['Authorization', 'Content-Type'],
-  allowMethods: ['GET','POST','PUT','DELETE','OPTIONS']
+  allowMethods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS']
 }))
 
-// =====================
-// ROOT CHECK
-// =====================
+/* =====================
+   ROOT CHECK
+===================== */
 app.get('/', (c) => {
   return c.text('🔥 AnimeHunt Backend Running')
 })
 
-// =====================
-// LOGIN (TOKEN BASED)
-// =====================
+/* =====================
+   LOGIN
+===================== */
 app.post('/api/admin/login', async (c) => {
 
   const { username, password } = await c.req.json()
@@ -53,20 +57,16 @@ app.post('/api/admin/login', async (c) => {
     username === 'anime_moderator_007' &&
     password === 'Nim3Chanchal2026UltraSecure'
   ) {
-
     const token = crypto.randomUUID()
-
-    return c.json({
-      token
-    })
+    return c.json({ token })
   }
 
   return c.json({ error: 'Invalid credentials' }, 401)
 })
 
-// =====================
-// AUTH MIDDLEWARE
-// =====================
+/* =====================
+   AUTH MIDDLEWARE
+===================== */
 app.use('/api/admin/*', async (c, next) => {
 
   if (c.req.path === '/api/admin/login') {
@@ -88,9 +88,9 @@ app.use('/api/admin/*', async (c, next) => {
   await next()
 })
 
-// =====================
-// ADMIN ROUTES
-// =====================
+/* =====================
+   ADMIN ROUTES
+===================== */
 app.route('/api/admin/ads', adsRoutes)
 app.route("/api/admin/ai", aiRoutes)
 app.route("/api/admin/analytics", analyticsRoutes)
@@ -112,9 +112,32 @@ app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
 
-// =====================
-// PUBLIC ROUTES
-// =====================
+/* =====================
+   PUBLIC ANIME ROUTE
+===================== */
+app.get("/api/anime", async (c) => {
+
+  try {
+
+    const result = await c.env.DB
+      .prepare("SELECT * FROM anime")
+      .all()
+
+    return c.json({
+      success: true,
+      data: result.results
+    })
+
+  } catch (err) {
+    console.error(err)
+    return c.json({ success: false, error: "Failed to fetch anime" }, 500)
+  }
+
+})
+
+/* =====================
+   PUBLIC ROUTES
+===================== */
 app.route("/api/security/stats", securityStats)
 app.route("/", cloudinary)
 
