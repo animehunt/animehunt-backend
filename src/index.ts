@@ -134,6 +134,34 @@ app.get("/api/anime", async (c) => {
   }
 
 })
+/* =====================
+   SYSTEM HEALTH CHECK
+===================== */
+app.get("/api/health", async (c) => {
+
+  try {
+
+    // DB check
+    const dbTest = await c.env.DB
+      .prepare("SELECT COUNT(*) as total FROM anime")
+      .first()
+
+    return c.json({
+      status: "OK",
+      database: "Connected",
+      totalAnime: dbTest?.total || 0,
+      timestamp: new Date().toISOString()
+    })
+
+  } catch (err) {
+    return c.json({
+      status: "ERROR",
+      database: "Disconnected",
+      error: String(err)
+    }, 500)
+  }
+
+})
 
 /* =====================
    PUBLIC ROUTES
