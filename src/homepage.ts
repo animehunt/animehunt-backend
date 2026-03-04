@@ -11,13 +11,26 @@ const homepage = new Hono<{ Bindings: Bindings }>()
 ================================ */
 homepage.get("/", async (c) => {
 
-  const { results } = await c.env.DB.prepare(`
-    SELECT *
-    FROM homepage_rows
-    ORDER BY row_order ASC, id DESC
-  `).all()
+  try{
 
-  return c.json(results.map(formatRow))
+    const data = await c.env.DB.prepare(`
+      SELECT *
+      FROM homepage_rows
+      ORDER BY row_order ASC, id DESC
+    `).all()
+
+    const rows = data?.results || []
+
+    return c.json(rows.map(formatRow))
+
+  }catch(err){
+
+    console.error("Homepage rows load error:",err)
+
+    return c.json([])
+
+  }
+
 })
 
 /* ===============================
@@ -25,16 +38,29 @@ homepage.get("/", async (c) => {
 ================================ */
 homepage.get("/:id", async (c) => {
 
-  const id = c.req.param("id")
+  try{
 
-  const row = await c.env.DB
-    .prepare("SELECT * FROM homepage_rows WHERE id = ?")
-    .bind(id)
-    .first()
+    const id = c.req.param("id")
 
-  if (!row) return c.json({ error: "Not found" }, 404)
+    const row = await c.env.DB
+      .prepare("SELECT * FROM homepage_rows WHERE id=?")
+      .bind(id)
+      .first()
 
-  return c.json(formatRow(row))
+    if(!row){
+      return c.json({error:"Not found"},404)
+    }
+
+    return c.json(formatRow(row))
+
+  }catch(err){
+
+    console.error("Homepage row fetch error:",err)
+
+    return c.json({error:"Server error"},500)
+
+  }
+
 })
 
 /* ===============================
@@ -42,26 +68,41 @@ homepage.get("/:id", async (c) => {
 ================================ */
 homepage.post("/", async (c) => {
 
-  const body = await c.req.json()
+  try{
 
-  await c.env.DB.prepare(`
-    INSERT INTO homepage_rows
-    (title, type, source, layout, row_limit, row_order, active, auto_update)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-  .bind(
-    body.title,
-    body.type,
-    body.source || "",
-    body.layout,
-    body.limit || 10,
-    body.order || 0,
-    body.active ? 1 : 0,
-    body.autoUpdate ? 1 : 0
-  )
-  .run()
+    const body = await c.req.json()
 
-  return c.json({ success: true })
+    if(!body?.title){
+      return c.json({error:"Title required"},400)
+    }
+
+    await c.env.DB.prepare(`
+      INSERT INTO homepage_rows
+      (title,type,source,layout,row_limit,row_order,active,auto_update)
+      VALUES (?,?,?,?,?,?,?,?)
+    `)
+    .bind(
+      body.title,
+      body.type || "auto",
+      body.source || "",
+      body.layout || "scroll",
+      Number(body.limit || 10),
+      Number(body.order || 0),
+      body.active ? 1 : 0,
+      body.autoUpdate ? 1 : 0
+    )
+    .run()
+
+    return c.json({success:true})
+
+  }catch(err){
+
+    console.error("Homepage create error:",err)
+
+    return c.json({error:"Insert failed"},500)
+
+  }
+
 })
 
 /* ===============================
@@ -69,35 +110,47 @@ homepage.post("/", async (c) => {
 ================================ */
 homepage.patch("/:id", async (c) => {
 
-  const id = c.req.param("id")
-  const body = await c.req.json()
+  try{
 
-  await c.env.DB.prepare(`
-    UPDATE homepage_rows
-    SET title = ?,
-        type = ?,
-        source = ?,
-        layout = ?,
-        row_limit = ?,
-        row_order = ?,
-        active = ?,
-        auto_update = ?
-    WHERE id = ?
-  `)
-  .bind(
-    body.title,
-    body.type,
-    body.source || "",
-    body.layout,
-    body.limit || 10,
-    body.order || 0,
-    body.active ? 1 : 0,
-    body.autoUpdate ? 1 : 0,
-    id
-  )
-  .run()
+    const id = c.req.param("id")
+    const body = await c.req.json()
 
-  return c.json({ success: true })
+    await c.env.DB.prepare(`
+      UPDATE homepage_rows
+      SET
+        title=?,
+        type=?,
+        source=?,
+        layout=?,
+        row_limit=?,
+        row_order=?,
+        active=?,
+        auto_update=?
+      WHERE id=?
+    `)
+    .bind(
+      body.title || "",
+      body.type || "auto",
+      body.source || "",
+      body.layout || "scroll",
+      Number(body.limit || 10),
+      Number(body.order || 0),
+      body.active ? 1 : 0,
+      body.autoUpdate ? 1 : 0,
+      id
+    )
+    .run()
+
+    return c.json({success:true})
+
+  }catch(err){
+
+    console.error("Homepage update error:",err)
+
+    return c.json({error:"Update failed"},500)
+
+  }
+
 })
 
 /* ===============================
@@ -105,31 +158,46 @@ homepage.patch("/:id", async (c) => {
 ================================ */
 homepage.delete("/:id", async (c) => {
 
-  const id = c.req.param("id")
+  try{
 
-  await c.env.DB
-    .prepare("DELETE FROM homepage_rows WHERE id = ?")
+    const id = c.req.param("id")
+
+    await c.env.DB.prepare(`
+      DELETE FROM homepage_rows
+      WHERE id=?
+    `)
     .bind(id)
     .run()
 
-  return c.json({ success: true })
+    return c.json({success:true})
+
+  }catch(err){
+
+    console.error("Homepage delete error:",err)
+
+    return c.json({error:"Delete failed"},500)
+
+  }
+
 })
 
 /* ===============================
    FORMAT OUTPUT
 ================================ */
-function formatRow(row: any) {
+function formatRow(row:any){
+
   return {
     _id: row.id,
-    title: row.title,
-    type: row.type,
-    source: row.source,
-    layout: row.layout,
-    limit: row.row_limit,
-    order: row.row_order,
+    title: row.title || "",
+    type: row.type || "auto",
+    source: row.source || "",
+    layout: row.layout || "scroll",
+    limit: row.row_limit || 10,
+    order: row.row_order || 0,
     active: !!row.active,
     autoUpdate: !!row.auto_update
   }
+
 }
 
 export default homepage
