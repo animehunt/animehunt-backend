@@ -6,31 +6,52 @@ type Bindings = {
 
 const stats = new Hono<{ Bindings: Bindings }>()
 
-stats.get("/", async (c) => {
+stats.get("/", async (c)=>{
 
-  const row = await c.env.DB
-    .prepare(`
-      SELECT * FROM security_stats
-      ORDER BY id DESC
-      LIMIT 1
-    `)
-    .first()
+try{
 
-  if (!row) {
-    return c.json({
-      blockedIPs: 0,
-      liveUsers: 0,
-      reqPerSec: 0,
-      blockedReq: 0
-    })
-  }
+const row:any = await c.env.DB
+.prepare(`
+SELECT *
+FROM security_stats
+ORDER BY id DESC
+LIMIT 1
+`)
+.first()
 
-  return c.json({
-    blockedIPs: row.blockedIPs,
-    liveUsers: row.liveUsers,
-    reqPerSec: row.reqPerSec,
-    blockedReq: row.blockedReq
-  })
+if(!row){
+
+return c.json({
+blockedIPs:0,
+liveUsers:0,
+reqPerSec:0,
+blockedReq:0
+})
+
+}
+
+return c.json({
+
+blockedIPs: row.blockedIPs ?? 0,
+liveUsers: row.liveUsers ?? 0,
+reqPerSec: row.reqPerSec ?? 0,
+blockedReq: row.blockedReq ?? 0
+
+})
+
+}catch(e){
+
+console.error(e)
+
+return c.json({
+blockedIPs:0,
+liveUsers:0,
+reqPerSec:0,
+blockedReq:0
+})
+
+}
+
 })
 
 export default stats
