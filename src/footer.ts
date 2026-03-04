@@ -7,17 +7,56 @@ type Bindings = {
 const footer = new Hono<{ Bindings: Bindings }>()
 
 /* ===============================
+   ENSURE CONFIG ROW EXISTS
+================================ */
+async function ensureRow(db: D1Database){
+
+  const row = await db
+    .prepare("SELECT id FROM footer_config WHERE id=1")
+    .first()
+
+  if(!row){
+
+    await db.prepare(`
+      INSERT INTO footer_config (id,config)
+      VALUES (1,'{}')
+    `).run()
+
+  }
+
+}
+
+/* ===============================
    GET FOOTER CONFIG
 ================================ */
 footer.get("/", async (c) => {
 
-  const row = await c.env.DB
-    .prepare("SELECT config FROM footer_config WHERE id = 1")
-    .first()
+  try{
 
-  if (!row) return c.json({})
+    await ensureRow(c.env.DB)
 
-  return c.json(JSON.parse(row.config || "{}"))
+    const row:any = await c.env.DB
+      .prepare("SELECT config FROM footer_config WHERE id=1")
+      .first()
+
+    if(!row?.config){
+      return c.json({})
+    }
+
+    try{
+      return c.json(JSON.parse(row.config))
+    }catch{
+      return c.json({})
+    }
+
+  }catch(err){
+
+    console.error("Footer load error:",err)
+
+    return c.json({})
+
+  }
+
 })
 
 /* ===============================
@@ -25,41 +64,73 @@ footer.get("/", async (c) => {
 ================================ */
 footer.post("/", async (c) => {
 
-  const body = await c.req.json()
+  try{
 
-  await c.env.DB.prepare(`
-    UPDATE footer_config
-    SET config = ?
-    WHERE id = 1
-  `)
-  .bind(JSON.stringify(body))
-  .run()
+    const body = await c.req.json()
 
-  return c.json({ success: true })
+    await ensureRow(c.env.DB)
+
+    await c.env.DB.prepare(`
+      UPDATE footer_config
+      SET config=?
+      WHERE id=1
+    `)
+    .bind(JSON.stringify(body || {}))
+    .run()
+
+    return c.json({success:true})
+
+  }catch(err){
+
+    console.error("Footer save error:",err)
+
+    return c.json({error:"Save failed"},500)
+
+  }
+
 })
 
 /* ===============================
-   KILL FOOTER (GLOBAL OFF)
+   KILL FOOTER
 ================================ */
 footer.post("/kill", async (c) => {
 
-  const row = await c.env.DB
-    .prepare("SELECT config FROM footer_config WHERE id = 1")
-    .first()
+  try{
 
-  const current = JSON.parse(row?.config || "{}")
+    await ensureRow(c.env.DB)
 
-  current.footerOn = false
+    const row:any = await c.env.DB
+      .prepare("SELECT config FROM footer_config WHERE id=1")
+      .first()
 
-  await c.env.DB.prepare(`
-    UPDATE footer_config
-    SET config = ?
-    WHERE id = 1
-  `)
-  .bind(JSON.stringify(current))
-  .run()
+    let current:any = {}
 
-  return c.json({ success: true })
+    try{
+      current = JSON.parse(row?.config || "{}")
+    }catch{
+      current = {}
+    }
+
+    current.footerOn = false
+
+    await c.env.DB.prepare(`
+      UPDATE footer_config
+      SET config=?
+      WHERE id=1
+    `)
+    .bind(JSON.stringify(current))
+    .run()
+
+    return c.json({success:true})
+
+  }catch(err){
+
+    console.error("Footer kill error:",err)
+
+    return c.json({error:"Kill failed"},500)
+
+  }
+
 })
 
 export default footer
