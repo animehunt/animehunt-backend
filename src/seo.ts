@@ -7,49 +7,131 @@ type Bindings = {
 const seo = new Hono<{ Bindings: Bindings }>()
 
 /* ===============================
+   ENSURE DEFAULT ROW
+================================ */
+async function ensureRow(db: D1Database){
+
+  const row = await db
+    .prepare("SELECT id FROM seo_settings WHERE id = 1")
+    .first()
+
+  if(!row){
+
+    await db.prepare(`
+      INSERT INTO seo_settings (
+
+        id,
+
+        global_title,
+        global_desc,
+        global_keywords,
+        global_canonical,
+        global_indexing,
+
+        home_title,
+        home_desc,
+        home_keywords,
+        home_og,
+
+        tpl_anime,
+        tpl_category,
+        tpl_episode,
+        tpl_search,
+
+        social_ogTitle,
+        social_ogDesc,
+        social_twTitle,
+        social_twDesc,
+        social_twCard
+
+      )
+      VALUES (
+
+        1,
+
+        '',
+        '',
+        '',
+        '',
+        'index',
+
+        '',
+        '',
+        '',
+        '',
+
+        '',
+        '',
+        '',
+        '',
+
+        '',
+        '',
+        '',
+        '',
+        'summary_large_image'
+
+      )
+    `).run()
+
+  }
+
+}
+
+/* ===============================
    GET SEO CONFIG
 ================================ */
 seo.get("/", async (c) => {
 
-  const row = await c.env.DB
-    .prepare("SELECT * FROM seo_settings WHERE id = 1")
-    .first()
+  try{
 
-  if (!row) return c.json({})
+    await ensureRow(c.env.DB)
 
-  return c.json({
+    const row:any = await c.env.DB
+      .prepare("SELECT * FROM seo_settings WHERE id = 1")
+      .first()
 
-    global: {
-      title: row.global_title,
-      desc: row.global_desc,
-      keywords: row.global_keywords,
-      canonical: row.global_canonical,
-      indexing: row.global_indexing
-    },
+    return c.json({
 
-    home: {
-      title: row.home_title,
-      desc: row.home_desc,
-      keywords: row.home_keywords,
-      og: row.home_og
-    },
+      global:{
+        title:row.global_title,
+        desc:row.global_desc,
+        keywords:row.global_keywords,
+        canonical:row.global_canonical,
+        indexing:row.global_indexing
+      },
 
-    templates: {
-      anime: row.tpl_anime,
-      category: row.tpl_category,
-      episode: row.tpl_episode,
-      search: row.tpl_search
-    },
+      home:{
+        title:row.home_title,
+        desc:row.home_desc,
+        keywords:row.home_keywords,
+        og:row.home_og
+      },
 
-    social: {
-      ogTitle: row.social_ogTitle,
-      ogDesc: row.social_ogDesc,
-      twTitle: row.social_twTitle,
-      twDesc: row.social_twDesc,
-      twCard: row.social_twCard
-    }
+      templates:{
+        anime:row.tpl_anime,
+        category:row.tpl_category,
+        episode:row.tpl_episode,
+        search:row.tpl_search
+      },
 
-  })
+      social:{
+        ogTitle:row.social_ogTitle,
+        ogDesc:row.social_ogDesc,
+        twTitle:row.social_twTitle,
+        twDesc:row.social_twDesc,
+        twCard:row.social_twCard
+      }
+
+    })
+
+  }catch(err){
+
+    console.error("SEO GET error:",err)
+    return c.json({})
+
+  }
+
 })
 
 /* ===============================
@@ -57,61 +139,73 @@ seo.get("/", async (c) => {
 ================================ */
 seo.post("/", async (c) => {
 
-  const body = await c.req.json()
+  try{
 
-  await c.env.DB.prepare(`
-    UPDATE seo_settings SET
+    const body = await c.req.json()
 
-      global_title = ?,
-      global_desc = ?,
-      global_keywords = ?,
-      global_canonical = ?,
-      global_indexing = ?,
+    await ensureRow(c.env.DB)
 
-      home_title = ?,
-      home_desc = ?,
-      home_keywords = ?,
-      home_og = ?,
+    await c.env.DB.prepare(`
+      UPDATE seo_settings SET
 
-      tpl_anime = ?,
-      tpl_category = ?,
-      tpl_episode = ?,
-      tpl_search = ?,
+      global_title=?,
+      global_desc=?,
+      global_keywords=?,
+      global_canonical=?,
+      global_indexing=?,
 
-      social_ogTitle = ?,
-      social_ogDesc = ?,
-      social_twTitle = ?,
-      social_twDesc = ?,
-      social_twCard = ?
+      home_title=?,
+      home_desc=?,
+      home_keywords=?,
+      home_og=?,
 
-    WHERE id = 1
-  `).bind(
+      tpl_anime=?,
+      tpl_category=?,
+      tpl_episode=?,
+      tpl_search=?,
 
-    body.global?.title ?? "",
-    body.global?.desc ?? "",
-    body.global?.keywords ?? "",
-    body.global?.canonical ?? "",
-    body.global?.indexing ?? "index",
+      social_ogTitle=?,
+      social_ogDesc=?,
+      social_twTitle=?,
+      social_twDesc=?,
+      social_twCard=?
 
-    body.home?.title ?? "",
-    body.home?.desc ?? "",
-    body.home?.keywords ?? "",
-    body.home?.og ?? "",
+      WHERE id=1
+    `).bind(
 
-    body.templates?.anime ?? "",
-    body.templates?.category ?? "",
-    body.templates?.episode ?? "",
-    body.templates?.search ?? "",
+      body.global?.title ?? "",
+      body.global?.desc ?? "",
+      body.global?.keywords ?? "",
+      body.global?.canonical ?? "",
+      body.global?.indexing ?? "index",
 
-    body.social?.ogTitle ?? "",
-    body.social?.ogDesc ?? "",
-    body.social?.twTitle ?? "",
-    body.social?.twDesc ?? "",
-    body.social?.twCard ?? "summary_large_image"
+      body.home?.title ?? "",
+      body.home?.desc ?? "",
+      body.home?.keywords ?? "",
+      body.home?.og ?? "",
 
-  ).run()
+      body.templates?.anime ?? "",
+      body.templates?.category ?? "",
+      body.templates?.episode ?? "",
+      body.templates?.search ?? "",
 
-  return c.json({ success: true })
+      body.social?.ogTitle ?? "",
+      body.social?.ogDesc ?? "",
+      body.social?.twTitle ?? "",
+      body.social?.twDesc ?? "",
+      body.social?.twCard ?? "summary_large_image"
+
+    ).run()
+
+    return c.json({success:true})
+
+  }catch(err){
+
+    console.error("SEO SAVE error:",err)
+    return c.json({error:"Save failed"},500)
+
+  }
+
 })
 
 export default seo
