@@ -7,71 +7,118 @@ type Bindings = {
 const download = new Hono<{ Bindings: Bindings }>()
 
 /* ===============================
-   GET ALL DOWNLOADS
+GET ALL DOWNLOADS
 ================================ */
 download.get("/", async (c) => {
 
-  const data = await c.env.DB
-    .prepare(`
-      SELECT * FROM downloads
-      ORDER BY createdAt DESC
-    `)
-    .all()
+  try{
 
-  return c.json(data.results)
+    const data = await c.env.DB
+      .prepare(`
+        SELECT *
+        FROM downloads
+        ORDER BY createdAt DESC
+      `)
+      .all()
+
+    return c.json(data?.results || [])
+
+  }catch(err){
+
+    console.error("Download fetch error:",err)
+
+    return c.json([])
+
+  }
+
 })
 
 /* ===============================
-   BULK INSERT
+BULK INSERT
 ================================ */
 download.post("/bulk", async (c) => {
 
-  const body = await c.req.json()
+  try{
 
-  if (!Array.isArray(body)) {
-    return c.json({ error: "Invalid payload" }, 400)
+    const body = await c.req.json()
+
+    if(!Array.isArray(body)){
+      return c.json({error:"Invalid payload"},400)
+    }
+
+    if(body.length === 0){
+      return c.json({error:"Empty payload"},400)
+    }
+
+    const now = new Date().toISOString()
+
+    const stmt = c.env.DB.prepare(`
+      INSERT INTO downloads (
+        id,anime,season,episode,
+        host,quality,link,createdAt
+      )
+      VALUES (?,?,?,?,?,?,?,?)
+    `)
+
+    const batch = body.map((d:any)=>{
+
+      return stmt.bind(
+        crypto.randomUUID(),
+        String(d.anime || ""),
+        String(d.season || ""),
+        String(d.episode || ""),
+        String(d.host || ""),
+        String(d.quality || ""),
+        String(d.link || ""),
+        now
+      )
+
+    })
+
+    await c.env.DB.batch(batch)
+
+    return c.json({success:true})
+
+  }catch(err){
+
+    console.error("Download bulk error:",err)
+
+    return c.json({error:"Insert failed"},500)
+
   }
 
-  const now = new Date().toISOString()
-
-  const stmt = c.env.DB.prepare(`
-    INSERT INTO downloads (
-      id, anime, season, episode,
-      host, quality, link, createdAt
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-
-  const batch = body.map((d: any) =>
-    stmt.bind(
-      crypto.randomUUID(),
-      d.anime || "",
-      d.season || "",
-      d.episode || "",
-      d.host || "",
-      d.quality || "",
-      d.link || "",
-      now
-    )
-  )
-
-  await c.env.DB.batch(batch)
-
-  return c.json({ success: true })
 })
 
 /* ===============================
-   DELETE
+DELETE
 ================================ */
 download.delete("/:id", async (c) => {
 
-  const { id } = c.req.param()
+  try{
 
-  await c.env.DB.prepare(`
-    DELETE FROM downloads WHERE id = ?
-  `).bind(id).run()
+    const id = c.req.param("id")
 
-  return c.json({ success: true })
+    if(!id){
+      return c.json({error:"Invalid id"},400)
+    }
+
+    await c.env.DB.prepare(`
+      DELETE FROM downloads
+      WHERE id=?
+    `)
+    .bind(id)
+    .run()
+
+    return c.json({success:true})
+
+  }catch(err){
+
+    console.error("Delete error:",err)
+
+    return c.json({error:"Delete failed"},500)
+
+  }
+
 })
 
 export default download
