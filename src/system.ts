@@ -55,24 +55,54 @@ const DEFAULT_CONFIG = {
 }
 
 /* ===============================
+   SAFE PARSE
+=============================== */
+function safeParse(json: any) {
+  try {
+    return JSON.parse(json)
+  } catch {
+    return {}
+  }
+}
+
+/* ===============================
    LOAD CONFIG
 =============================== */
 system.get("/", async (c) => {
 
-  const row = await c.env.DB
-    .prepare("SELECT config FROM system_config WHERE id = 'master'")
-    .first()
+  try {
 
-  if (!row) {
-    await c.env.DB.prepare(`
-      INSERT INTO system_config (id, config)
-      VALUES ('master', ?)
-    `).bind(JSON.stringify(DEFAULT_CONFIG)).run()
+    const row: any = await c.env.DB
+      .prepare("SELECT config FROM system_config WHERE id = 'master'")
+      .first()
 
+    if (!row) {
+
+      await c.env.DB.prepare(`
+        INSERT INTO system_config (id, config)
+        VALUES ('master', ?)
+      `)
+      .bind(JSON.stringify(DEFAULT_CONFIG))
+      .run()
+
+      return c.json(DEFAULT_CONFIG)
+
+    }
+
+    const parsed = safeParse(row.config)
+
+    return c.json({
+      ...DEFAULT_CONFIG,
+      ...parsed
+    })
+
+  } catch (err) {
+
+    console.error("System GET error:", err)
     return c.json(DEFAULT_CONFIG)
+
   }
 
-  return c.json(JSON.parse(row.config))
 })
 
 /* ===============================
@@ -80,27 +110,41 @@ system.get("/", async (c) => {
 =============================== */
 system.post("/", async (c) => {
 
-  const body = await c.req.json()
+  try {
 
-  const existing = await c.env.DB
-    .prepare("SELECT config FROM system_config WHERE id = 'master'")
-    .first()
+    const body = await c.req.json()
 
-  const merged = {
-    ...DEFAULT_CONFIG,
-    ...(existing ? JSON.parse(existing.config) : {}),
-    ...body
+    const row: any = await c.env.DB
+      .prepare("SELECT config FROM system_config WHERE id = 'master'")
+      .first()
+
+    const existing = row ? safeParse(row.config) : {}
+
+    const merged = {
+      ...DEFAULT_CONFIG,
+      ...existing,
+      ...body
+    }
+
+    await c.env.DB.prepare(`
+      INSERT INTO system_config (id, config)
+      VALUES ('master', ?)
+      ON CONFLICT(id) DO UPDATE SET
+        config = excluded.config,
+        updated_at = CURRENT_TIMESTAMP
+    `)
+    .bind(JSON.stringify(merged))
+    .run()
+
+    return c.json({ success: true })
+
+  } catch (err) {
+
+    console.error("System SAVE error:", err)
+    return c.json({ error: "Save failed" }, 500)
+
   }
 
-  await c.env.DB.prepare(`
-    INSERT INTO system_config (id, config)
-    VALUES ('master', ?)
-    ON CONFLICT(id) DO UPDATE SET
-      config = excluded.config,
-      updated_at = CURRENT_TIMESTAMP
-  `).bind(JSON.stringify(merged)).run()
-
-  return c.json({ success: true })
 })
 
 /* ===============================
@@ -108,24 +152,36 @@ system.post("/", async (c) => {
 =============================== */
 system.post("/kill", async (c) => {
 
-  const row = await c.env.DB
-    .prepare("SELECT config FROM system_config WHERE id = 'master'")
-    .first()
+  try {
 
-  const config = row
-    ? JSON.parse(row.config)
-    : DEFAULT_CONFIG
+    const row: any = await c.env.DB
+      .prepare("SELECT config FROM system_config WHERE id = 'master'")
+      .first()
 
-  config.systemOn = false
-  config.maintenanceHard = true
+    const config = row
+      ? safeParse(row.config)
+      : { ...DEFAULT_CONFIG }
 
-  await c.env.DB.prepare(`
-    UPDATE system_config
-    SET config = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = 'master'
-  `).bind(JSON.stringify(config)).run()
+    config.systemOn = false
+    config.maintenanceHard = true
 
-  return c.json({ halted: true })
+    await c.env.DB.prepare(`
+      UPDATE system_config
+      SET config = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = 'master'
+    `)
+    .bind(JSON.stringify(config))
+    .run()
+
+    return c.json({ halted: true })
+
+  } catch (err) {
+
+    console.error("Kill switch error:", err)
+    return c.json({ error: "Kill failed" }, 500)
+
+  }
+
 })
 
 export default system
