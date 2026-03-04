@@ -10,39 +10,51 @@ const episodes = new Hono<{ Bindings: Bindings }>()
    GET ALL
 ================================ */
 episodes.get("/", async (c) => {
+  try {
 
-  const data = await c.env.DB
-    .prepare(`SELECT * FROM episodes ORDER BY createdAt DESC`)
-    .all()
+    const data = await c.env.DB
+      .prepare(`SELECT * FROM episodes ORDER BY createdAt DESC`)
+      .all()
 
-  const result = data.results.map((e: any) => ({
-    ...e,
-    servers: safeJSON(e.servers),
-    downloads: safeJSON(e.downloads)
-  }))
+    const result = data.results.map((e: any) => ({
+      ...e,
+      servers: JSON.parse(e.servers || "[]"),
+      downloads: JSON.parse(e.downloads || "[]")
+    }))
 
-  return c.json(result)
+    return c.json(result)
+
+  } catch (err) {
+    console.error(err)
+    return c.json({ error: "Failed to fetch episodes" }, 500)
+  }
 })
 
 /* ===============================
    GET SINGLE
 ================================ */
 episodes.get("/:id", async (c) => {
+  try {
 
-  const { id } = c.req.param()
+    const { id } = c.req.param()
 
-  const row: any = await c.env.DB
-    .prepare(`SELECT * FROM episodes WHERE id = ?`)
-    .bind(id)
-    .first()
+    const row: any = await c.env.DB
+      .prepare(`SELECT * FROM episodes WHERE id=?`)
+      .bind(id)
+      .first()
 
-  if (!row) return c.json({ error: "Not found" }, 404)
+    if (!row) return c.json({ error: "Episode not found" }, 404)
 
-  return c.json({
-    ...row,
-    servers: safeJSON(row.servers),
-    downloads: safeJSON(row.downloads)
-  })
+    return c.json({
+      ...row,
+      servers: JSON.parse(row.servers || "[]"),
+      downloads: JSON.parse(row.downloads || "[]")
+    })
+
+  } catch (err) {
+    console.error(err)
+    return c.json({ error: "Failed to load episode" }, 500)
+  }
 })
 
 /* ===============================
@@ -52,10 +64,9 @@ episodes.post("/", async (c) => {
 
   try {
 
-    const body: any = await c.req.json()
+    const body = await c.req.json()
 
-    const servers = Array.isArray(body.servers) ? body.servers : []
-    const downloads = Array.isArray(body.downloads) ? body.downloads : []
+    const id = crypto.randomUUID()
 
     await c.env.DB.prepare(`
       INSERT INTO episodes (
@@ -66,14 +77,14 @@ episodes.post("/", async (c) => {
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      crypto.randomUUID(),
+      id,
       body.anime || "",
       body.season || "",
       body.episode || "",
       body.title || "",
       body.description || "",
-      JSON.stringify(servers),
-      JSON.stringify(downloads),
+      JSON.stringify(body.servers || []),
+      JSON.stringify(body.downloads || []),
       body.ongoing ? 1 : 0,
       body.featured ? 1 : 0,
       new Date().toISOString()
@@ -82,10 +93,8 @@ episodes.post("/", async (c) => {
     return c.json({ success: true })
 
   } catch (err) {
-
-    console.error("Episode insert error:", err)
-    return c.json({ error: "Insert failed" }, 500)
-
+    console.error(err)
+    return c.json({ error: "Episode creation failed" }, 500)
   }
 
 })
@@ -98,31 +107,28 @@ episodes.patch("/:id", async (c) => {
   try {
 
     const { id } = c.req.param()
-    const body: any = await c.req.json()
-
-    const servers = Array.isArray(body.servers) ? body.servers : []
-    const downloads = Array.isArray(body.downloads) ? body.downloads : []
+    const body = await c.req.json()
 
     await c.env.DB.prepare(`
       UPDATE episodes SET
-        anime = ?,
-        season = ?,
-        episode = ?,
-        title = ?,
-        description = ?,
-        servers = ?,
-        downloads = ?,
-        ongoing = ?,
-        featured = ?
-      WHERE id = ?
+        anime=?,
+        season=?,
+        episode=?,
+        title=?,
+        description=?,
+        servers=?,
+        downloads=?,
+        ongoing=?,
+        featured=?
+      WHERE id=?
     `).bind(
       body.anime || "",
       body.season || "",
       body.episode || "",
       body.title || "",
       body.description || "",
-      JSON.stringify(servers),
-      JSON.stringify(downloads),
+      JSON.stringify(body.servers || []),
+      JSON.stringify(body.downloads || []),
       body.ongoing ? 1 : 0,
       body.featured ? 1 : 0,
       id
@@ -131,10 +137,8 @@ episodes.patch("/:id", async (c) => {
     return c.json({ success: true })
 
   } catch (err) {
-
-    console.error("Episode update error:", err)
-    return c.json({ error: "Update failed" }, 500)
-
+    console.error(err)
+    return c.json({ error: "Episode update failed" }, 500)
   }
 
 })
@@ -149,32 +153,17 @@ episodes.delete("/:id", async (c) => {
     const { id } = c.req.param()
 
     await c.env.DB
-      .prepare(`DELETE FROM episodes WHERE id = ?`)
+      .prepare(`DELETE FROM episodes WHERE id=?`)
       .bind(id)
       .run()
 
     return c.json({ success: true })
 
   } catch (err) {
-
-    console.error("Episode delete error:", err)
-    return c.json({ error: "Delete failed" }, 500)
-
+    console.error(err)
+    return c.json({ error: "Episode delete failed" }, 500)
   }
 
 })
-
-/* ===============================
-   SAFE JSON PARSER
-================================ */
-function safeJSON(value: any) {
-
-  try {
-    return JSON.parse(value || "[]")
-  } catch {
-    return []
-  }
-
-}
 
 export default episodes
