@@ -12,16 +12,13 @@ const episodes = new Hono<{ Bindings: Bindings }>()
 episodes.get("/", async (c) => {
 
   const data = await c.env.DB
-    .prepare(`
-      SELECT * FROM episodes
-      ORDER BY createdAt DESC
-    `)
+    .prepare(`SELECT * FROM episodes ORDER BY createdAt DESC`)
     .all()
 
   const result = data.results.map((e: any) => ({
     ...e,
-    servers: JSON.parse(e.servers || "[]"),
-    downloads: JSON.parse(e.downloads || "[]")
+    servers: safeJSON(e.servers),
+    downloads: safeJSON(e.downloads)
   }))
 
   return c.json(result)
@@ -34,7 +31,7 @@ episodes.get("/:id", async (c) => {
 
   const { id } = c.req.param()
 
-  const row = await c.env.DB
+  const row: any = await c.env.DB
     .prepare(`SELECT * FROM episodes WHERE id = ?`)
     .bind(id)
     .first()
@@ -43,8 +40,8 @@ episodes.get("/:id", async (c) => {
 
   return c.json({
     ...row,
-    servers: JSON.parse(row.servers || "[]"),
-    downloads: JSON.parse(row.downloads || "[]")
+    servers: safeJSON(row.servers),
+    downloads: safeJSON(row.downloads)
   })
 })
 
@@ -53,31 +50,44 @@ episodes.get("/:id", async (c) => {
 ================================ */
 episodes.post("/", async (c) => {
 
-  const body = await c.req.json()
+  try {
 
-  await c.env.DB.prepare(`
-    INSERT INTO episodes (
-      id, anime, season, episode,
-      title, description,
-      servers, downloads,
-      ongoing, featured, createdAt
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    crypto.randomUUID(),
-    body.anime || "",
-    body.season || "",
-    body.episode || "",
-    body.title || "",
-    body.description || "",
-    JSON.stringify(body.servers || []),
-    JSON.stringify(body.downloads || []),
-    body.ongoing ? 1 : 0,
-    body.featured ? 1 : 0,
-    new Date().toISOString()
-  ).run()
+    const body: any = await c.req.json()
 
-  return c.json({ success: true })
+    const servers = Array.isArray(body.servers) ? body.servers : []
+    const downloads = Array.isArray(body.downloads) ? body.downloads : []
+
+    await c.env.DB.prepare(`
+      INSERT INTO episodes (
+        id, anime, season, episode,
+        title, description,
+        servers, downloads,
+        ongoing, featured, createdAt
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      body.anime || "",
+      body.season || "",
+      body.episode || "",
+      body.title || "",
+      body.description || "",
+      JSON.stringify(servers),
+      JSON.stringify(downloads),
+      body.ongoing ? 1 : 0,
+      body.featured ? 1 : 0,
+      new Date().toISOString()
+    ).run()
+
+    return c.json({ success: true })
+
+  } catch (err) {
+
+    console.error("Episode insert error:", err)
+    return c.json({ error: "Insert failed" }, 500)
+
+  }
+
 })
 
 /* ===============================
@@ -85,35 +95,48 @@ episodes.post("/", async (c) => {
 ================================ */
 episodes.patch("/:id", async (c) => {
 
-  const { id } = c.req.param()
-  const body = await c.req.json()
+  try {
 
-  await c.env.DB.prepare(`
-    UPDATE episodes SET
-      anime = ?,
-      season = ?,
-      episode = ?,
-      title = ?,
-      description = ?,
-      servers = ?,
-      downloads = ?,
-      ongoing = ?,
-      featured = ?
-    WHERE id = ?
-  `).bind(
-    body.anime || "",
-    body.season || "",
-    body.episode || "",
-    body.title || "",
-    body.description || "",
-    JSON.stringify(body.servers || []),
-    JSON.stringify(body.downloads || []),
-    body.ongoing ? 1 : 0,
-    body.featured ? 1 : 0,
-    id
-  ).run()
+    const { id } = c.req.param()
+    const body: any = await c.req.json()
 
-  return c.json({ success: true })
+    const servers = Array.isArray(body.servers) ? body.servers : []
+    const downloads = Array.isArray(body.downloads) ? body.downloads : []
+
+    await c.env.DB.prepare(`
+      UPDATE episodes SET
+        anime = ?,
+        season = ?,
+        episode = ?,
+        title = ?,
+        description = ?,
+        servers = ?,
+        downloads = ?,
+        ongoing = ?,
+        featured = ?
+      WHERE id = ?
+    `).bind(
+      body.anime || "",
+      body.season || "",
+      body.episode || "",
+      body.title || "",
+      body.description || "",
+      JSON.stringify(servers),
+      JSON.stringify(downloads),
+      body.ongoing ? 1 : 0,
+      body.featured ? 1 : 0,
+      id
+    ).run()
+
+    return c.json({ success: true })
+
+  } catch (err) {
+
+    console.error("Episode update error:", err)
+    return c.json({ error: "Update failed" }, 500)
+
+  }
+
 })
 
 /* ===============================
@@ -121,13 +144,37 @@ episodes.patch("/:id", async (c) => {
 ================================ */
 episodes.delete("/:id", async (c) => {
 
-  const { id } = c.req.param()
+  try {
 
-  await c.env.DB.prepare(`
-    DELETE FROM episodes WHERE id = ?
-  `).bind(id).run()
+    const { id } = c.req.param()
 
-  return c.json({ success: true })
+    await c.env.DB
+      .prepare(`DELETE FROM episodes WHERE id = ?`)
+      .bind(id)
+      .run()
+
+    return c.json({ success: true })
+
+  } catch (err) {
+
+    console.error("Episode delete error:", err)
+    return c.json({ error: "Delete failed" }, 500)
+
+  }
+
 })
+
+/* ===============================
+   SAFE JSON PARSER
+================================ */
+function safeJSON(value: any) {
+
+  try {
+    return JSON.parse(value || "[]")
+  } catch {
+    return []
+  }
+
+}
 
 export default episodes
