@@ -27,6 +27,8 @@ import publicAnime from "./publicAnime"
 import homeRoutes from "./routes/home"
 import animeRoutes from "./routes/anime"
 import episodeRoutes from "./routes/episodes"
+import sitemap from "./routes/sitemap"
+import robots from "./routes/robots"
 
 type Bindings = {
   DB: D1Database
@@ -119,6 +121,8 @@ app.route("/api/anime", publicAnime)
 app.route("/api",homeRoutes)
 app.route("/api/anime",animeRoutes)
 app.route("/api/episodes",episodeRoutes)
+app.route("/",sitemap)
+app.route("/",robots)
 
 /* =====================
    PUBLIC ANIME ROUTE
