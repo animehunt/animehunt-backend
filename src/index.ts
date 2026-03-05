@@ -23,7 +23,6 @@ import serverRoutes from "./servers"
 import sidebarRoutes from "./sidebar"
 import systemRoutes from "./system"
 import cloudinary from './cloudinary'
-import publicAnime from "./publicAnime"
 import homeRoutes from "./routes/home"
 import animeRoutes from "./routes/anime"
 import episodeRoutes from "./routes/episodes"
@@ -117,7 +116,6 @@ app.route("/api/admin/seo", seoRoutes)
 app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
-app.route("/api/anime", publicAnime)
 app.route("/api",homeRoutes)
 app.route("/api/anime",animeRoutes)
 app.route("/api/episodes",episodeRoutes)
