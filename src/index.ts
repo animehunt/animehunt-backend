@@ -23,6 +23,7 @@ import serverRoutes from "./servers"
 import sidebarRoutes from "./sidebar"
 import systemRoutes from "./system"
 import cloudinary from './cloudinary'
+import publicAnime from "./publicAnime"
 
 type Bindings = {
   DB: D1Database
@@ -111,6 +112,7 @@ app.route("/api/admin/seo", seoRoutes)
 app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
+app.route("/api/anime", publicAnime)
 
 /* =====================
    PUBLIC ANIME ROUTE
