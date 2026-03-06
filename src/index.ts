@@ -23,9 +23,6 @@ import serverRoutes from "./servers"
 import sidebarRoutes from "./sidebar"
 import systemRoutes from "./system"
 import cloudinary from './cloudinary'
-import homeRoutes from "./routes/home"
-import animeRoutes from "./routes/anime"
-import episodeRoutes from "./routes/episodes"
 import sitemap from "./routes/sitemap"
 import robots from "./routes/robots"
 
@@ -116,9 +113,6 @@ app.route("/api/admin/seo", seoRoutes)
 app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
-app.route("/api",homeRoutes)
-app.route("/api/anime",animeRoutes)
-app.route("/api/episodes",episodeRoutes)
 app.route("/",sitemap)
 app.route("/",robots)
 
