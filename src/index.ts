@@ -22,7 +22,7 @@ import seoRoutes from "./seo"
 import serverRoutes from "./servers"
 import sidebarRoutes from "./sidebar"
 import systemRoutes from "./system"
-import cloudinary from './cloudinary'
+
 import sitemap from "./routes/sitemap"
 import robots from "./routes/robots"
 
@@ -33,7 +33,7 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 
 /* =====================
-   CORS
+   GLOBAL CORS
 ===================== */
 app.use('*', cors({
   origin: '*',
@@ -49,7 +49,7 @@ app.get('/', (c) => {
 })
 
 /* =====================
-   LOGIN
+   ADMIN LOGIN
 ===================== */
 app.post('/api/admin/login', async (c) => {
 
@@ -59,11 +59,18 @@ app.post('/api/admin/login', async (c) => {
     username === 'anime_moderator_007' &&
     password === 'Nim3Chanchal2026UltraSecure'
   ) {
+
     const token = crypto.randomUUID()
-    return c.json({ token })
+
+    return c.json({
+      success: true,
+      token
+    })
+
   }
 
   return c.json({ error: 'Invalid credentials' }, 401)
+
 })
 
 /* =====================
@@ -88,11 +95,13 @@ app.use('/api/admin/*', async (c, next) => {
   }
 
   await next()
+
 })
 
 /* =====================
    ADMIN ROUTES
 ===================== */
+
 app.route('/api/admin/ads', adsRoutes)
 app.route("/api/admin/ai", aiRoutes)
 app.route("/api/admin/analytics", analyticsRoutes)
@@ -113,11 +122,9 @@ app.route("/api/admin/seo", seoRoutes)
 app.route("/api/admin/servers", serverRoutes)
 app.route("/api/admin/sidebar", sidebarRoutes)
 app.route("/api/admin/system", systemRoutes)
-app.route("/",sitemap)
-app.route("/",robots)
 
 /* =====================
-   PUBLIC ANIME ROUTE
+   PUBLIC ANIME API
 ===================== */
 app.get("/api/anime", async (c) => {
 
@@ -133,19 +140,25 @@ app.get("/api/anime", async (c) => {
     })
 
   } catch (err) {
+
     console.error(err)
-    return c.json({ success: false, error: "Failed to fetch anime" }, 500)
+
+    return c.json({
+      success: false,
+      error: "Failed to fetch anime"
+    }, 500)
+
   }
 
 })
+
 /* =====================
-   SYSTEM HEALTH CHECK
+   HEALTH CHECK
 ===================== */
 app.get("/api/health", async (c) => {
 
   try {
 
-    // DB check
     const dbTest = await c.env.DB
       .prepare("SELECT COUNT(*) as total FROM anime")
       .first()
@@ -158,11 +171,13 @@ app.get("/api/health", async (c) => {
     })
 
   } catch (err) {
+
     return c.json({
       status: "ERROR",
       database: "Disconnected",
       error: String(err)
     }, 500)
+
   }
 
 })
@@ -170,7 +185,9 @@ app.get("/api/health", async (c) => {
 /* =====================
    PUBLIC ROUTES
 ===================== */
+
 app.route("/api/security/stats", securityStats)
-app.route("/", cloudinary)
+app.route("/", sitemap)
+app.route("/", robots)
 
 export default app
