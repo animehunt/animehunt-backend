@@ -2,10 +2,12 @@ import { Hono } from "hono"
 
 type Bindings = {
   DB: D1Database
-  BANNER_BUCKET: R2Bucket
 }
 
 const banners = new Hono<{ Bindings: Bindings }>()
+
+const CLOUD_NAME = "djzdjooly"
+const UPLOAD_PRESET = "animehunt"
 
 /* ===============================
 GET ALL
@@ -45,16 +47,32 @@ banners.post("/", async (c) => {
       return c.json({ error: "Title & image required" }, 400)
     }
 
+    /* ===============================
+    CLOUDINARY UPLOAD
+    =============================== */
+
+    const cloudForm = new FormData()
+
+    cloudForm.append("file", file)
+    cloudForm.append("upload_preset", UPLOAD_PRESET)
+
+    const upload = await fetch(
+      `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`,
+      {
+        method: "POST",
+        body: cloudForm
+      }
+    )
+
+    const cloudData:any = await upload.json()
+
+    if (!cloudData.secure_url) {
+      return c.json({ error: "Cloudinary upload failed", details: cloudData }, 500)
+    }
+
+    const imageUrl = cloudData.secure_url
+
     const id = crypto.randomUUID()
-
-    const ext = file.name.split(".").pop()
-    const key = `banners/${id}.${ext}`
-
-    const buffer = await file.arrayBuffer()
-
-    await c.env.BANNER_BUCKET.put(key, buffer, {
-      httpMetadata: { contentType: file.type }
-    })
 
     await c.env.DB.prepare(`
       INSERT INTO banners
@@ -64,7 +82,7 @@ banners.post("/", async (c) => {
     .bind(
       id,
       title,
-      key,
+      imageUrl,
       "page",
       "",
       position,
@@ -79,11 +97,14 @@ banners.post("/", async (c) => {
 
     return c.json({ success: true })
 
-  } catch (err) {
+  } catch (err:any) {
 
-    console.error("Banner create error", err)
+    console.error(err)
 
-    return c.json({ error: "Upload failed" }, 500)
+    return c.json({
+      error: "Upload failed",
+      details: err.message
+    }, 500)
 
   }
 
@@ -117,16 +138,6 @@ DELETE
 banners.delete("/:id", async (c) => {
 
   const id = c.req.param("id")
-
-  const banner:any = await c.env.DB.prepare(`
-    SELECT image FROM banners WHERE id=?
-  `)
-  .bind(id)
-  .first()
-
-  if (banner?.image) {
-    await c.env.BANNER_BUCKET.delete(banner.image)
-  }
 
   await c.env.DB.prepare(`
     DELETE FROM banners WHERE id=?
