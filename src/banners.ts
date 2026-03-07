@@ -61,21 +61,21 @@ banners.post("/", async (c) => {
       (id,title,image,type,target,position,banner_order,device,active,autoRotate,page,category)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     `)
-      .bind(
-        id,
-        title,
-        key,
-        "page",
-        "",
-        position,
-        order,
-        "all",
-        active,
-        autoRotate,
-        page,
-        category
-      )
-      .run()
+    .bind(
+      id,
+      title,
+      key,
+      "page",
+      "",
+      position,
+      order,
+      "all",
+      active,
+      autoRotate,
+      page,
+      category
+    )
+    .run()
 
     return c.json({ success: true })
 
@@ -103,8 +103,8 @@ banners.put("/:id/status", async (c) => {
     SET active=?
     WHERE id=?
   `)
-    .bind(body.active ? 1 : 0, id)
-    .run()
+  .bind(body.active ? 1 : 0, id)
+  .run()
 
   return c.json({ success: true })
 
@@ -118,23 +118,21 @@ banners.delete("/:id", async (c) => {
 
   const id = c.req.param("id")
 
-  const banner: any = await c.env.DB.prepare(`
+  const banner:any = await c.env.DB.prepare(`
     SELECT image FROM banners WHERE id=?
   `)
-    .bind(id)
-    .first()
+  .bind(id)
+  .first()
 
   if (banner?.image) {
-
     await c.env.BANNER_BUCKET.delete(banner.image)
-
   }
 
   await c.env.DB.prepare(`
     DELETE FROM banners WHERE id=?
   `)
-    .bind(id)
-    .run()
+  .bind(id)
+  .run()
 
   return c.json({ success: true })
 
