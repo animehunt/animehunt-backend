@@ -1,47 +1,30 @@
 import { Hono } from "hono"
-import ImageKit from "imagekit"
 
 type Bindings = {
   DB: D1Database
-  IMAGEKIT_PUBLIC_KEY: string
   IMAGEKIT_PRIVATE_KEY: string
   IMAGEKIT_URL_ENDPOINT: string
 }
 
 const banners = new Hono<{ Bindings: Bindings }>()
 
-/* =====================================================
-   GET ALL BANNERS
-===================================================== */
+/* ===============================
+GET ALL
+================================ */
 banners.get("/", async (c) => {
 
-  try {
+  const result = await c.env.DB
+    .prepare("SELECT * FROM banners ORDER BY banner_order ASC")
+    .all()
 
-    const result = await c.env.DB
-      .prepare("SELECT * FROM banners ORDER BY banner_order ASC")
-      .all()
-
-    return c.json({
-      success: true,
-      data: result.results
-    })
-
-  } catch (err) {
-
-    console.error("GET BANNERS ERROR", err)
-
-    return c.json({
-      success: false,
-      message: "Failed to fetch banners"
-    }, 500)
-
-  }
+  return c.json(result.results)
 
 })
 
-/* =====================================================
-   CREATE BANNER
-===================================================== */
+
+/* ===============================
+CREATE
+================================ */
 banners.post("/", async (c) => {
 
   try {
@@ -63,29 +46,53 @@ banners.post("/", async (c) => {
     if (!title || !file) {
 
       return c.json({
-        success: false,
         message: "Title & image required"
       }, 400)
 
     }
 
-    const imagekit = new ImageKit({
-
-      publicKey: c.env.IMAGEKIT_PUBLIC_KEY,
-      privateKey: c.env.IMAGEKIT_PRIVATE_KEY,
-      urlEndpoint: c.env.IMAGEKIT_URL_ENDPOINT
-
-    })
+    /* IMAGEKIT UPLOAD */
 
     const buffer = await file.arrayBuffer()
 
-    const upload = await imagekit.upload({
+    const base64 = btoa(
+      String.fromCharCode(...new Uint8Array(buffer))
+    )
 
-      file: Buffer.from(buffer),
-      fileName: file.name,
-      folder: "/animehunt/banners"
+    const body = new URLSearchParams()
+
+    body.append("file", `data:${file.type};base64,${base64}`)
+    body.append("fileName", file.name)
+    body.append("folder", "/animehunt/banners")
+
+    const upload = await fetch("https://upload.imagekit.io/api/v1/files/upload", {
+
+      method: "POST",
+
+      headers: {
+
+        Authorization:
+          "Basic " + btoa(c.env.IMAGEKIT_PRIVATE_KEY + ":"),
+
+        "Content-Type":
+          "application/x-www-form-urlencoded"
+
+      },
+
+      body
 
     })
+
+    const data:any = await upload.json()
+
+    if (!data.url) {
+
+      return c.json({
+        message: "Image upload failed",
+        error: data
+      }, 500)
+
+    }
 
     const id = crypto.randomUUID()
 
@@ -97,7 +104,7 @@ banners.post("/", async (c) => {
 
       id,
       title,
-      upload.url,
+      data.url,
       "page",
       "",
       position,
@@ -110,132 +117,57 @@ banners.post("/", async (c) => {
 
     ).run()
 
-    return c.json({
-      success: true,
-      message: "Banner created"
-    })
+    return c.json({ success:true })
 
   } catch (err:any) {
 
-    console.error("CREATE BANNER ERROR", err)
-
     return c.json({
-      success: false,
-      message: "Banner upload failed",
-      error: err.message
-    }, 500)
+
+      message:"Upload failed",
+      error:err.message
+
+    },500)
 
   }
 
 })
 
-/* =====================================================
-   UPDATE STATUS
-===================================================== */
+
+/* ===============================
+STATUS
+================================ */
 banners.put("/:id/status", async (c) => {
 
-  try {
+  const id = c.req.param("id")
+  const body = await c.req.json()
 
-    const id = c.req.param("id")
-    const body = await c.req.json()
+  await c.env.DB.prepare(`
+    UPDATE banners
+    SET active=?
+    WHERE id=?
+  `)
+  .bind(body.active ? 1 : 0,id)
+  .run()
 
-    await c.env.DB.prepare(`
-      UPDATE banners
-      SET active=?
-      WHERE id=?
-    `)
-    .bind(body.active ? 1 : 0, id)
-    .run()
-
-    return c.json({
-      success: true
-    })
-
-  } catch (err) {
-
-    return c.json({
-      success: false,
-      message: "Status update failed"
-    }, 500)
-
-  }
+  return c.json({ success:true })
 
 })
 
-/* =====================================================
-   UPDATE BANNER
-===================================================== */
-banners.patch("/:id", async (c) => {
 
-  try {
-
-    const id = c.req.param("id")
-    const body = await c.req.json()
-
-    await c.env.DB.prepare(`
-      UPDATE banners SET
-        title=?,
-        position=?,
-        banner_order=?,
-        page=?,
-        category=?,
-        active=?,
-        autoRotate=?
-      WHERE id=?
-    `).bind(
-
-      body.title,
-      body.position,
-      body.banner_order,
-      body.page,
-      body.category,
-      body.active ? 1 : 0,
-      body.autoRotate ? 1 : 0,
-      id
-
-    ).run()
-
-    return c.json({
-      success: true
-    })
-
-  } catch {
-
-    return c.json({
-      success: false,
-      message: "Update failed"
-    }, 500)
-
-  }
-
-})
-
-/* =====================================================
-   DELETE BANNER
-===================================================== */
+/* ===============================
+DELETE
+================================ */
 banners.delete("/:id", async (c) => {
 
-  try {
+  const id = c.req.param("id")
 
-    const id = c.req.param("id")
+  await c.env.DB.prepare(`
+    DELETE FROM banners WHERE id=?
+  `)
+  .bind(id)
+  .run()
 
-    await c.env.DB
-      .prepare("DELETE FROM banners WHERE id=?")
-      .bind(id)
-      .run()
-
-    return c.json({
-      success: true
-    })
-
-  } catch {
-
-    return c.json({
-      success: false,
-      message: "Delete failed"
-    }, 500)
-
-  }
+  return c.json({ success:true })
 
 })
 
