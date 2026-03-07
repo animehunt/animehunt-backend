@@ -10,7 +10,7 @@ const CLOUD_NAME = "djzdjooly"
 const UPLOAD_PRESET = "animehunt"
 
 /* ===============================
-GET ALL
+GET ALL BANNERS
 ================================ */
 banners.get("/", async (c) => {
 
@@ -22,9 +22,8 @@ banners.get("/", async (c) => {
 
 })
 
-
 /* ===============================
-CREATE
+CREATE BANNER
 ================================ */
 banners.post("/", async (c) => {
 
@@ -48,15 +47,14 @@ banners.post("/", async (c) => {
     }
 
     /* ===============================
-    CLOUDINARY UPLOAD
+       UPLOAD TO CLOUDINARY
     =============================== */
 
     const cloudForm = new FormData()
-
     cloudForm.append("file", file)
     cloudForm.append("upload_preset", UPLOAD_PRESET)
 
-    const upload = await fetch(
+    const uploadRes = await fetch(
       `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`,
       {
         method: "POST",
@@ -64,15 +62,23 @@ banners.post("/", async (c) => {
       }
     )
 
-    const cloudData:any = await upload.json()
+    const cloudData: any = await uploadRes.json()
 
     if (!cloudData.secure_url) {
-      return c.json({ error: "Cloudinary upload failed", details: cloudData }, 500)
+
+      return c.json({
+        error: "Cloudinary upload failed",
+        details: cloudData
+      }, 500)
+
     }
 
     const imageUrl = cloudData.secure_url
-
     const id = crypto.randomUUID()
+
+    /* ===============================
+       SAVE IN DATABASE
+    =============================== */
 
     await c.env.DB.prepare(`
       INSERT INTO banners
@@ -97,9 +103,7 @@ banners.post("/", async (c) => {
 
     return c.json({ success: true })
 
-  } catch (err:any) {
-
-    console.error(err)
+  } catch (err: any) {
 
     return c.json({
       error: "Upload failed",
@@ -110,9 +114,8 @@ banners.post("/", async (c) => {
 
 })
 
-
 /* ===============================
-STATUS
+UPDATE STATUS
 ================================ */
 banners.put("/:id/status", async (c) => {
 
@@ -131,9 +134,8 @@ banners.put("/:id/status", async (c) => {
 
 })
 
-
 /* ===============================
-DELETE
+DELETE BANNER
 ================================ */
 banners.delete("/:id", async (c) => {
 
