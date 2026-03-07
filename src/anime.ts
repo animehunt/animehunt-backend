@@ -1,296 +1,191 @@
 import { Hono } from "hono"
-import ImageKit from "imagekit"
 
 type Bindings = {
   DB: D1Database
-  IMAGEKIT_PUBLIC_KEY: string
-  IMAGEKIT_PRIVATE_KEY: string
-  IMAGEKIT_URL_ENDPOINT: string
 }
 
 const anime = new Hono<{ Bindings: Bindings }>()
 
 /* =====================================================
-   GET ALL (FILTER SUPPORT)
+GET ALL
 ===================================================== */
+
 anime.get("/", async (c) => {
 
-  try {
+  const { type, status, home, search } = c.req.query()
 
-    const { type, status, home, search } = c.req.query()
+  let query = "SELECT * FROM anime WHERE 1=1"
+  const params:any[] = []
 
-    let query = "SELECT * FROM anime WHERE 1=1"
-    const params: any[] = []
-
-    if (type) {
-      query += " AND type=?"
-      params.push(type)
-    }
-
-    if (status) {
-      query += " AND status=?"
-      params.push(status)
-    }
-
-    if (home === "yes") {
-      query += " AND isHome=1"
-    }
-
-    if (home === "no") {
-      query += " AND isHome=0"
-    }
-
-    if (search) {
-      query += " AND title LIKE ?"
-      params.push(`%${search}%`)
-    }
-
-    query += " ORDER BY rowid DESC"
-
-    const result = await c.env.DB.prepare(query).bind(...params).all()
-
-    return c.json(result.results)
-
-  } catch (err) {
-
-    console.error(err)
-
-    return c.json({
-      message: "Server error"
-    }, 500)
-
+  if(type){
+    query += " AND type=?"
+    params.push(type)
   }
+
+  if(status){
+    query += " AND status=?"
+    params.push(status)
+  }
+
+  if(home === "yes"){
+    query += " AND isHome=1"
+  }
+
+  if(home === "no"){
+    query += " AND isHome=0"
+  }
+
+  if(search){
+    query += " AND title LIKE ?"
+    params.push(`%${search}%`)
+  }
+
+  query += " ORDER BY rowid DESC"
+
+  const result = await c.env.DB.prepare(query).bind(...params).all()
+
+  return c.json(result.results)
 
 })
 
-
 /* =====================================================
-   GET ONE
+GET ONE
 ===================================================== */
-anime.get("/:id", async (c) => {
+
+anime.get("/:id", async (c)=>{
 
   const id = c.req.param("id")
 
   const data = await c.env.DB
-    .prepare("SELECT * FROM anime WHERE id=?")
-    .bind(id)
-    .first()
+  .prepare("SELECT * FROM anime WHERE id=?")
+  .bind(id)
+  .first()
 
-  if (!data) {
-    return c.json({ message: "Not found" }, 404)
+  if(!data){
+    return c.json({message:"Not found"},404)
   }
 
   return c.json(data)
 
 })
 
-
 /* =====================================================
-   CREATE
+CREATE
 ===================================================== */
-anime.post("/", async (c) => {
 
-  try {
+anime.post("/", async (c)=>{
 
-    const form = await c.req.formData()
+  const body = await c.req.json()
 
-    const title = String(form.get("title") || "")
-    const slug = String(form.get("slug") || "")
-
-    const type = form.get("type")
-    const status = form.get("status")
-
-    const year = form.get("year")
-    const rating = form.get("rating")
-
-    const language = form.get("language")
-    const duration = form.get("duration")
-
-    const categories = form.get("categories")
-    const tags = form.get("tags")
-    const description = form.get("description")
-
-    const isHome = form.get("isHome") ? 1 : 0
-    const isTrending = form.get("isTrending") ? 1 : 0
-    const isMostViewed = form.get("isMostViewed") ? 1 : 0
-    const isBanner = form.get("isBanner") ? 1 : 0
-
-    const posterFile = form.get("poster") as File
-    const bannerFile = form.get("banner") as File
-
-    if (!title || !slug) {
-      return c.json({ message: "Title & slug required" }, 400)
-    }
-
-    const imagekit = new ImageKit({
-      publicKey: c.env.IMAGEKIT_PUBLIC_KEY,
-      privateKey: c.env.IMAGEKIT_PRIVATE_KEY,
-      urlEndpoint: c.env.IMAGEKIT_URL_ENDPOINT
-    })
-
-    let posterUrl: string | null = null
-    let bannerUrl: string | null = null
-
-    /* ======================
-       POSTER UPLOAD
-    ====================== */
-
-    if (posterFile) {
-
-      const buffer = await posterFile.arrayBuffer()
-
-      const upload = await imagekit.upload({
-        file: Buffer.from(buffer),
-        fileName: posterFile.name,
-        folder: "/animehunt/posters"
-      })
-
-      posterUrl = upload.url
-    }
-
-    /* ======================
-       BANNER UPLOAD
-    ====================== */
-
-    if (bannerFile) {
-
-      const buffer = await bannerFile.arrayBuffer()
-
-      const upload = await imagekit.upload({
-        file: Buffer.from(buffer),
-        fileName: bannerFile.name,
-        folder: "/animehunt/banners"
-      })
-
-      bannerUrl = upload.url
-    }
-
-    const id = crypto.randomUUID()
-
-    await c.env.DB.prepare(`
-      INSERT INTO anime (
-        id,title,slug,type,status,
-        poster,banner,year,rating,
-        language,duration,categories,
-        tags,description,
-        isHome,isTrending,isMostViewed,isBanner
-      )
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).bind(
-      id,
-      title,
-      slug,
-      type || null,
-      status || null,
-      posterUrl,
-      bannerUrl,
-      year || null,
-      rating || null,
-      language || null,
-      duration || null,
-      categories || null,
-      tags || null,
-      description || null,
-      isHome,
-      isTrending,
-      isMostViewed,
-      isBanner
-    ).run()
-
-    return c.json({ success: true })
-
-  } catch (err:any) {
-
-    console.error(err)
-
-    return c.json({
-      message: "Insert failed",
-      error: err.message
-    }, 500)
-
+  if(!body.title || !body.slug){
+    return c.json({message:"Title & slug required"},400)
   }
+
+  const exists = await c.env.DB
+  .prepare("SELECT id FROM anime WHERE slug=?")
+  .bind(body.slug)
+  .first()
+
+  if(exists){
+    return c.json({message:"Slug already exists"},400)
+  }
+
+  const id = crypto.randomUUID()
+
+  await c.env.DB.prepare(`
+  INSERT INTO anime(
+  id,title,slug,type,status,
+  poster,banner,year,rating,
+  language,duration,categories,
+  tags,description,
+  isHome,isTrending,isMostViewed,isBanner
+  )
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+
+  id,
+  body.title,
+  body.slug,
+  body.type || null,
+  body.status || null,
+  body.poster || null,
+  body.banner || null,
+  body.year || null,
+  body.rating || null,
+  body.language || null,
+  body.duration || null,
+  body.categories || null,
+  body.tags || null,
+  body.description || null,
+  body.isHome ? 1 : 0,
+  body.isTrending ? 1 : 0,
+  body.isMostViewed ? 1 : 0,
+  body.isBanner ? 1 : 0
+
+  ).run()
+
+  return c.json({success:true})
 
 })
 
-
 /* =====================================================
-   UPDATE
+UPDATE
 ===================================================== */
-anime.patch("/:id", async (c) => {
 
-  try {
+anime.patch("/:id", async (c)=>{
 
-    const id = c.req.param("id")
+  const id = c.req.param("id")
+  const body = await c.req.json()
 
-    const body = await c.req.json()
+  await c.env.DB.prepare(`
+  UPDATE anime SET
+  title=?,slug=?,type=?,status=?,
+  poster=?,banner=?,year=?,rating=?,
+  language=?,duration=?,categories=?,
+  tags=?,description=?,
+  isHome=?,isTrending=?,isMostViewed=?,isBanner=?
+  WHERE id=?
+  `).bind(
 
-    await c.env.DB.prepare(`
-      UPDATE anime SET
-        title=?,
-        slug=?,
-        type=?,
-        status=?,
-        poster=?,
-        banner=?,
-        year=?,
-        rating=?,
-        language=?,
-        duration=?,
-        categories=?,
-        tags=?,
-        description=?,
-        isHome=?,
-        isTrending=?,
-        isMostViewed=?,
-        isBanner=?
-      WHERE id=?
-    `).bind(
-      body.title,
-      body.slug,
-      body.type || null,
-      body.status || null,
-      body.poster || null,
-      body.banner || null,
-      body.year || null,
-      body.rating || null,
-      body.language || null,
-      body.duration || null,
-      body.categories || null,
-      body.tags || null,
-      body.description || null,
-      body.isHome ? 1 : 0,
-      body.isTrending ? 1 : 0,
-      body.isMostViewed ? 1 : 0,
-      body.isBanner ? 1 : 0,
-      id
-    ).run()
+  body.title,
+  body.slug,
+  body.type,
+  body.status,
+  body.poster,
+  body.banner,
+  body.year,
+  body.rating,
+  body.language,
+  body.duration,
+  body.categories,
+  body.tags,
+  body.description,
+  body.isHome ? 1:0,
+  body.isTrending ? 1:0,
+  body.isMostViewed ? 1:0,
+  body.isBanner ? 1:0,
+  id
 
-    return c.json({ success: true })
+  ).run()
 
-  } catch {
-
-    return c.json({
-      message: "Update failed"
-    }, 500)
-
-  }
+  return c.json({success:true})
 
 })
 
-
 /* =====================================================
-   DELETE
+DELETE
 ===================================================== */
-anime.delete("/:id", async (c) => {
+
+anime.delete("/:id", async (c)=>{
 
   const id = c.req.param("id")
 
   await c.env.DB
-    .prepare("DELETE FROM anime WHERE id=?")
-    .bind(id)
-    .run()
+  .prepare("DELETE FROM anime WHERE id=?")
+  .bind(id)
+  .run()
 
-  return c.json({ success: true })
+  return c.json({success:true})
 
 })
 
