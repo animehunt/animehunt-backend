@@ -14,11 +14,25 @@ GET ALL BANNERS
 ================================ */
 banners.get("/", async (c) => {
 
-  const result = await c.env.DB
-    .prepare("SELECT * FROM banners ORDER BY banner_order ASC")
-    .all()
+  try {
 
-  return c.json(result.results || [])
+    const result = await c.env.DB
+      .prepare("SELECT * FROM banners ORDER BY banner_order ASC")
+      .all()
+
+    return c.json({
+      success: true,
+      data: result.results || []
+    })
+
+  } catch (err) {
+
+    return c.json({
+      success: false,
+      error: "Failed to fetch banners"
+    }, 500)
+
+  }
 
 })
 
@@ -47,10 +61,11 @@ banners.post("/", async (c) => {
     }
 
     /* ===============================
-       UPLOAD TO CLOUDINARY
+       CLOUDINARY UPLOAD
     =============================== */
 
     const cloudForm = new FormData()
+
     cloudForm.append("file", file)
     cloudForm.append("upload_preset", UPLOAD_PRESET)
 
@@ -64,7 +79,7 @@ banners.post("/", async (c) => {
 
     const cloudData: any = await uploadRes.json()
 
-    if (!cloudData.secure_url) {
+    if (!uploadRes.ok || !cloudData.secure_url) {
 
       return c.json({
         error: "Cloudinary upload failed",
@@ -77,7 +92,7 @@ banners.post("/", async (c) => {
     const id = crypto.randomUUID()
 
     /* ===============================
-       SAVE IN DATABASE
+       SAVE TO DATABASE
     =============================== */
 
     await c.env.DB.prepare(`
@@ -101,7 +116,10 @@ banners.post("/", async (c) => {
     )
     .run()
 
-    return c.json({ success: true })
+    return c.json({
+      success: true,
+      message: "Banner created"
+    })
 
   } catch (err: any) {
 
@@ -119,18 +137,28 @@ UPDATE STATUS
 ================================ */
 banners.put("/:id/status", async (c) => {
 
-  const id = c.req.param("id")
-  const body = await c.req.json()
+  try {
 
-  await c.env.DB.prepare(`
-    UPDATE banners
-    SET active=?
-    WHERE id=?
-  `)
-  .bind(body.active ? 1 : 0, id)
-  .run()
+    const id = c.req.param("id")
+    const body = await c.req.json()
 
-  return c.json({ success: true })
+    await c.env.DB.prepare(`
+      UPDATE banners
+      SET active=?
+      WHERE id=?
+    `)
+    .bind(body.active ? 1 : 0, id)
+    .run()
+
+    return c.json({ success: true })
+
+  } catch {
+
+    return c.json({
+      error: "Failed to update status"
+    }, 500)
+
+  }
 
 })
 
@@ -139,15 +167,26 @@ DELETE BANNER
 ================================ */
 banners.delete("/:id", async (c) => {
 
-  const id = c.req.param("id")
+  try {
 
-  await c.env.DB.prepare(`
-    DELETE FROM banners WHERE id=?
-  `)
-  .bind(id)
-  .run()
+    const id = c.req.param("id")
 
-  return c.json({ success: true })
+    await c.env.DB.prepare(`
+      DELETE FROM banners
+      WHERE id=?
+    `)
+    .bind(id)
+    .run()
+
+    return c.json({ success: true })
+
+  } catch {
+
+    return c.json({
+      error: "Failed to delete banner"
+    }, 500)
+
+  }
 
 })
 
