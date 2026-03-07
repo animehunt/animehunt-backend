@@ -14,27 +14,14 @@ GET ALL BANNERS
 ================================ */
 banners.get("/", async (c) => {
 
-  try {
+  const result = await c.env.DB
+    .prepare("SELECT * FROM banners ORDER BY banner_order ASC")
+    .all()
 
-    const result = await c.env.DB
-      .prepare("SELECT * FROM banners ORDER BY banner_order ASC")
-      .all()
-
-    return c.json({
-      success: true,
-      data: result.results || []
-    })
-
-  } catch (err) {
-
-    return c.json({
-      success: false,
-      error: "Failed to fetch banners"
-    }, 500)
-
-  }
+  return c.json(result.results || [])
 
 })
+
 
 /* ===============================
 CREATE BANNER
@@ -69,7 +56,7 @@ banners.post("/", async (c) => {
     cloudForm.append("file", file)
     cloudForm.append("upload_preset", UPLOAD_PRESET)
 
-    const uploadRes = await fetch(
+    const upload = await fetch(
       `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`,
       {
         method: "POST",
@@ -77,49 +64,41 @@ banners.post("/", async (c) => {
       }
     )
 
-    const cloudData: any = await uploadRes.json()
+    const data: any = await upload.json()
 
-    if (!uploadRes.ok || !cloudData.secure_url) {
+    if (!data.secure_url) {
 
       return c.json({
         error: "Cloudinary upload failed",
-        details: cloudData
+        details: data
       }, 500)
 
     }
 
-    const imageUrl = cloudData.secure_url
     const id = crypto.randomUUID()
-
-    /* ===============================
-       SAVE TO DATABASE
-    =============================== */
 
     await c.env.DB.prepare(`
       INSERT INTO banners
       (id,title,image,type,target,position,banner_order,device,active,autoRotate,page,category)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     `)
-    .bind(
-      id,
-      title,
-      imageUrl,
-      "page",
-      "",
-      position,
-      order,
-      "all",
-      active,
-      autoRotate,
-      page,
-      category
-    )
-    .run()
+      .bind(
+        id,
+        title,
+        data.secure_url,
+        "page",
+        "",
+        position,
+        order,
+        "all",
+        active,
+        autoRotate,
+        page,
+        category
+      )
+      .run()
 
-    return c.json({
-      success: true,
-      message: "Banner created"
-    })
+    return c.json({ success: true })
 
   } catch (err: any) {
 
@@ -132,61 +111,42 @@ banners.post("/", async (c) => {
 
 })
 
+
 /* ===============================
-UPDATE STATUS
+STATUS
 ================================ */
 banners.put("/:id/status", async (c) => {
 
-  try {
+  const id = c.req.param("id")
+  const body = await c.req.json()
 
-    const id = c.req.param("id")
-    const body = await c.req.json()
-
-    await c.env.DB.prepare(`
-      UPDATE banners
-      SET active=?
-      WHERE id=?
-    `)
+  await c.env.DB.prepare(`
+    UPDATE banners
+    SET active=?
+    WHERE id=?
+  `)
     .bind(body.active ? 1 : 0, id)
     .run()
 
-    return c.json({ success: true })
-
-  } catch {
-
-    return c.json({
-      error: "Failed to update status"
-    }, 500)
-
-  }
+  return c.json({ success: true })
 
 })
 
+
 /* ===============================
-DELETE BANNER
+DELETE
 ================================ */
 banners.delete("/:id", async (c) => {
 
-  try {
+  const id = c.req.param("id")
 
-    const id = c.req.param("id")
-
-    await c.env.DB.prepare(`
-      DELETE FROM banners
-      WHERE id=?
-    `)
+  await c.env.DB.prepare(`
+    DELETE FROM banners WHERE id=?
+  `)
     .bind(id)
     .run()
 
-    return c.json({ success: true })
-
-  } catch {
-
-    return c.json({
-      error: "Failed to delete banner"
-    }, 500)
-
-  }
+  return c.json({ success: true })
 
 })
 
