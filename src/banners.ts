@@ -1,13 +1,14 @@
 import { Hono } from "hono"
+import ImageKit from "imagekit"
 
 type Bindings = {
   DB: D1Database
+  IMAGEKIT_PUBLIC_KEY: string
+  IMAGEKIT_PRIVATE_KEY: string
+  IMAGEKIT_URL_ENDPOINT: string
 }
 
 const banners = new Hono<{ Bindings: Bindings }>()
-
-const CLOUD_NAME = "djzdjooly"
-const UPLOAD_PRESET = "animehunt"
 
 /* ===============================
 GET ALL BANNERS
@@ -48,34 +49,28 @@ banners.post("/", async (c) => {
     }
 
     /* ===============================
-       CLOUDINARY UPLOAD
+       IMAGEKIT SETUP
     =============================== */
 
-    const cloudForm = new FormData()
+    const imagekit = new ImageKit({
+      publicKey: c.env.IMAGEKIT_PUBLIC_KEY,
+      privateKey: c.env.IMAGEKIT_PRIVATE_KEY,
+      urlEndpoint: c.env.IMAGEKIT_URL_ENDPOINT
+    })
 
-    cloudForm.append("file", file)
-    cloudForm.append("upload_preset", UPLOAD_PRESET)
+    const buffer = await file.arrayBuffer()
 
-    const upload = await fetch(
-      `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`,
-      {
-        method: "POST",
-        body: cloudForm
-      }
-    )
-
-    const data: any = await upload.json()
-
-    if (!data.secure_url) {
-
-      return c.json({
-        error: "Cloudinary upload failed",
-        details: data
-      }, 500)
-
-    }
+    const upload = await imagekit.upload({
+      file: Buffer.from(buffer),
+      fileName: file.name,
+      folder: "/animehunt/banners"
+    })
 
     const id = crypto.randomUUID()
+
+    /* ===============================
+       SAVE TO DATABASE
+    =============================== */
 
     await c.env.DB.prepare(`
       INSERT INTO banners
@@ -85,7 +80,7 @@ banners.post("/", async (c) => {
       .bind(
         id,
         title,
-        data.secure_url,
+        upload.url,
         "page",
         "",
         position,
