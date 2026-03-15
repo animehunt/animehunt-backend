@@ -89,3 +89,6 @@ app.route("/api/admin", footer)
 import homepage from "./routes/homepage.js"
 
 app.route("/api/admin", homepage)
+import system from "./routes/system.js"
+
+app.route("/api/admin", system)
