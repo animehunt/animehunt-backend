@@ -40,3 +40,16 @@ app.route("/api", adClick)
 import ai from "./routes/ai.js"
 
 app.route("/api/admin", ai)
+import { runAIEngines } from "./services/aiScheduler.js"
+
+export default {
+
+fetch: app.fetch,
+
+async scheduled(event, env){
+
+await runAIEngines(env)
+
+}
+
+}
