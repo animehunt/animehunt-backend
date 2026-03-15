@@ -1,0 +1,10 @@
+{
+  "name": "animehunt-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "hono": "^4.0.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.0"
+  }
+}
