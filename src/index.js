@@ -55,7 +55,9 @@ await runAIEngines(env)
 }
 import analyticsTrack from "./routes/analyticsTrack.js"
 import analyticsAdmin from "./routes/analyticsAdmin.js"
+import deploy from "./routes/deploy.js"
 
+app.route("/api/admin", deploy)
 app.route("/api", analyticsTrack)
 app.route("/api/admin", analyticsAdmin)
 import anime from "./routes/anime.js"
