@@ -105,3 +105,8 @@ import seoPublic from "./routes/seoPublic.js"
 
 app.route("/api/admin", seoAdmin)
 app.route("/api", seoPublic)
+import securityAdmin from "./routes/securityAdmin.js"
+import securityStats from "./routes/securityStats.js"
+
+app.route("/api/admin", securityAdmin)
+app.route("/api", securityStats)
