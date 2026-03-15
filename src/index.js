@@ -58,3 +58,6 @@ import analyticsAdmin from "./routes/analyticsAdmin.js"
 
 app.route("/api", analyticsTrack)
 app.route("/api/admin", analyticsAdmin)
+import anime from "./routes/anime.js"
+
+app.route("/api/admin", anime)
