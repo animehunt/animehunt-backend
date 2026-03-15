@@ -37,3 +37,6 @@ app.route("/api/admin", adsAnalytics)
 
 app.route("/api", publicAds)
 app.route("/api", adClick)
+import ai from "./routes/ai.js"
+
+app.route("/api/admin", ai)
