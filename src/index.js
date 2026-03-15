@@ -66,3 +66,6 @@ import publicBanners from "./routes/publicBanners.js"
 
 app.route("/api/admin", banners)
 app.route("/api", publicBanners)
+import episodes from "./routes/episodes.js"
+
+app.route("/api/admin", episodes)
