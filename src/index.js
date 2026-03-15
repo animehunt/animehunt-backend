@@ -100,3 +100,8 @@ import searchPublic from "./routes/searchPublic.js"
 
 app.route("/api/admin", searchAdmin)
 app.route("/api", searchPublic)
+import seoAdmin from "./routes/seoAdmin.js"
+import seoPublic from "./routes/seoPublic.js"
+
+app.route("/api/admin", seoAdmin)
+app.route("/api", seoPublic)
