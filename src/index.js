@@ -61,3 +61,8 @@ app.route("/api/admin", analyticsAdmin)
 import anime from "./routes/anime.js"
 
 app.route("/api/admin", anime)
+import banners from "./routes/banners.js"
+import publicBanners from "./routes/publicBanners.js"
+
+app.route("/api/admin", banners)
+app.route("/api", publicBanners)
