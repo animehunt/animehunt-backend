@@ -53,3 +53,8 @@ await runAIEngines(env)
 }
 
 }
+import analyticsTrack from "./routes/analyticsTrack.js"
+import analyticsAdmin from "./routes/analyticsAdmin.js"
+
+app.route("/api", analyticsTrack)
+app.route("/api/admin", analyticsAdmin)
