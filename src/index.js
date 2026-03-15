@@ -110,3 +110,15 @@ import securityStats from "./routes/securityStats.js"
 
 app.route("/api/admin", securityAdmin)
 app.route("/api", securityStats)
+import { Hono } from "hono"
+
+import adminServers from "./routes/adminServers.js"
+import publicServers from "./routes/publicServers.js"
+
+const app = new Hono()
+
+app.route("/api/admin", adminServers)
+
+app.route("/api", publicServers)
+
+export default app
