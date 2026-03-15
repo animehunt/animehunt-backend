@@ -83,3 +83,6 @@ app.route("/api", publicCategories)
 import downloads from "./routes/downloads.js"
 
 app.route("/api/admin", downloads)
+import footer from "./routes/footer.js"
+
+app.route("/api/admin", footer)
