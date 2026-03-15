@@ -11,3 +11,6 @@ database_id = "YOUR_D1_DATABASE_ID"
 JWT_SECRET = "SUPER_SECRET_KEY_CHANGE_THIS"
 ADMIN_USERNAME = "anime_moderator_007"
 ADMIN_PASSWORD_HASH = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
+
+[triggers]
+crons = ["*/10 * * * *"]
