@@ -27,3 +27,6 @@ app.route('/api/admin', dashboard)
 app.route('/api/admin/system', system)
 
 export default app
+import ads from './routes/ads.js'
+
+app.route('/api/admin', ads)
