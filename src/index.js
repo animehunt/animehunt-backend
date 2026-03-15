@@ -80,3 +80,6 @@ app.route("/api/admin", categories)
 import publicCategories from "./routes/publicCategories.js"
 
 app.route("/api", publicCategories)
+import downloads from "./routes/downloads.js"
+
+app.route("/api/admin", downloads)
