@@ -95,3 +95,8 @@ app.route("/api/admin", system)
 import performance from "./routes/performance.js"
 
 app.route("/api/admin", performance)
+import searchAdmin from "./routes/searchAdmin.js"
+import searchPublic from "./routes/searchPublic.js"
+
+app.route("/api/admin", searchAdmin)
+app.route("/api", searchPublic)
