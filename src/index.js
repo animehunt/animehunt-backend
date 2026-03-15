@@ -92,3 +92,6 @@ app.route("/api/admin", homepage)
 import system from "./routes/system.js"
 
 app.route("/api/admin", system)
+import performance from "./routes/performance.js"
+
+app.route("/api/admin", performance)
