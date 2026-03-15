@@ -72,3 +72,9 @@ app.route("/api/admin", episodes)
 import publicEpisodes from "./routes/publicEpisodes.js"
 
 app.route("/api", publicEpisodes)
+import categories from "./routes/categories.js"
+
+app.route("/api/admin", categories)
+import publicCategories from "./routes/publicCategories.js"
+
+app.route("/api", publicCategories)
