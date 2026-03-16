@@ -8,9 +8,12 @@ database_name = "animehunt"
 database_id = "YOUR_D1_DATABASE_ID"
 
 [vars]
-JWT_SECRET = "SUPER_SECRET_KEY_CHANGE_THIS"
+JWT_SECRET = "CHANGE_THIS_TO_RANDOM_64_CHAR_SECRET"
 ADMIN_USERNAME = "anime_moderator_007"
 ADMIN_PASSWORD_HASH = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
+
+IMAGEKIT_PUBLIC_KEY = "YOUR_PUBLIC_KEY"
+IMAGEKIT_URL_ENDPOINT = "https://ik.imagekit.io/YOUR_ID"
 
 [triggers]
 crons = ["*/10 * * * *"]
