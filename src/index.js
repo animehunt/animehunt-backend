@@ -1,10 +1,21 @@
 import { Hono } from "hono"
+import { cors } from "hono/cors"
+
+/* ================= APP ================= */
 
 const app = new Hono()
 
+/* ================= CORS FIX ================= */
+
+app.use("*", cors({
+  origin: "*",
+  allowHeaders: ["Content-Type","Authorization"],
+  allowMethods: ["GET","POST","PUT","DELETE","OPTIONS"]
+}))
+
 /* ================= ROUTES ================= */
 
-/* AUTH + DASHBOARD */
+/* AUTH */
 import auth from "./routes/auth.js"
 import dashboard from "./routes/dashboard.js"
 
@@ -17,14 +28,14 @@ import publicCategories from "./routes/publicCategories.js"
 import banners from "./routes/banners.js"
 import publicBanners from "./routes/publicBanners.js"
 
-/* SERVERS + PLAYER */
+/* SERVERS */
 import adminServers from "./routes/adminServers.js"
 import publicServers from "./routes/publicServers.js"
 
 /* DOWNLOADS */
 import downloads from "./routes/downloads.js"
 
-/* UI CONTROL */
+/* UI */
 import homepage from "./routes/homepage.js"
 import footer from "./routes/footer.js"
 
@@ -63,42 +74,66 @@ import { runAIEngines } from "./services/aiScheduler.js"
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
 
-/* ================= API ROUTES ================= */
+/* ================= HEALTH CHECK ================= */
 
-app.get("/", (c) => c.json({ status: "AnimeHunt Backend Running 🚀" }))
+app.get("/", (c) => {
+  return c.json({
+    status: "AnimeHunt Backend Running 🚀"
+  })
+})
 
-/* ADMIN */
+/* ================= ADMIN ROUTES ================= */
+
 app.route("/api/admin", auth)
 app.route("/api/admin", dashboard)
+
 app.route("/api/admin", anime)
 app.route("/api/admin", episodes)
 app.route("/api/admin", categories)
 app.route("/api/admin", banners)
+
 app.route("/api/admin", adminServers)
+
 app.route("/api/admin", downloads)
+
 app.route("/api/admin", homepage)
 app.route("/api/admin", footer)
+
 app.route("/api/admin", searchAdmin)
+
 app.route("/api/admin", seoAdmin)
+
 app.route("/api/admin", securityAdmin)
+
 app.route("/api/admin", performance)
+
 app.route("/api/admin", system)
+
 app.route("/api/admin", ads)
 app.route("/api/admin", adsAnalytics)
+
 app.route("/api/admin", analyticsAdmin)
+
 app.route("/api/admin", ai)
+
 app.route("/api/admin", deploy)
 
-/* PUBLIC */
+/* ================= PUBLIC ROUTES ================= */
+
 app.route("/api", publicServers)
 app.route("/api", publicEpisodes)
 app.route("/api", publicCategories)
 app.route("/api", publicBanners)
+
 app.route("/api", publicAds)
 app.route("/api", adClick)
+
 app.route("/api", searchPublic)
+
 app.route("/api", seoPublic)
+
 app.route("/api", securityStats)
+
 app.route("/api", analyticsTrack)
 
 /* ================= EXPORT ================= */
