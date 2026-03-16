@@ -38,6 +38,7 @@ import downloads from "./routes/downloads.js"
 /* UI */
 import homepage from "./routes/homepage.js"
 import footer from "./routes/footer.js"
+import upload from "./routes/upload.js"
 
 /* SEARCH */
 import searchAdmin from "./routes/searchAdmin.js"
@@ -117,6 +118,8 @@ app.route("/api/admin", analyticsAdmin)
 app.route("/api/admin", ai)
 
 app.route("/api/admin", deploy)
+
+app.route("/api/admin", upload)
 
 /* ================= PUBLIC ROUTES ================= */
 
