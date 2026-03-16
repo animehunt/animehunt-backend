@@ -10,7 +10,7 @@ database_name = "animehunt"
 database_id = "eecb37c1-cdc3-403e-87c3-74504872b62d"
 
 [vars]
-JWT_SECRET = "CHANGE_THIS_TO_RANDOM_64_CHAR_SECRET"
+JWT_SECRET = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
 ADMIN_USERNAME = "anime_moderator_007"
 ADMIN_PASSWORD_HASH = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
 
