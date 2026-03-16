@@ -1,124 +1,112 @@
-import { Hono } from 'hono'
-import adminAuth from './routes/auth.js'
+import { Hono } from "hono"
 
 const app = new Hono()
 
-app.get('/', (c) => {
-  return c.json({
-    status: "AnimeHunt Backend Running"
-  })
-})
+/* ================= ROUTES ================= */
 
-app.route('/api/admin', adminAuth)
+/* AUTH + DASHBOARD */
+import auth from "./routes/auth.js"
+import dashboard from "./routes/dashboard.js"
 
-export default app
-import { Hono } from 'hono'
+/* CONTENT */
+import anime from "./routes/anime.js"
+import episodes from "./routes/episodes.js"
+import publicEpisodes from "./routes/publicEpisodes.js"
+import categories from "./routes/categories.js"
+import publicCategories from "./routes/publicCategories.js"
+import banners from "./routes/banners.js"
+import publicBanners from "./routes/publicBanners.js"
 
-import auth from './routes/auth.js'
-import dashboard from './routes/dashboard.js'
-import system from './routes/system.js'
+/* SERVERS + PLAYER */
+import adminServers from "./routes/adminServers.js"
+import publicServers from "./routes/publicServers.js"
 
-const app = new Hono()
+/* DOWNLOADS */
+import downloads from "./routes/downloads.js"
 
-app.get('/', c => c.json({status:"AnimeHunt API Running"}))
+/* UI CONTROL */
+import homepage from "./routes/homepage.js"
+import footer from "./routes/footer.js"
 
-app.route('/api/admin', auth)
-app.route('/api/admin', dashboard)
-app.route('/api/admin/system', system)
+/* SEARCH */
+import searchAdmin from "./routes/searchAdmin.js"
+import searchPublic from "./routes/searchPublic.js"
 
-export default app
+/* SEO */
+import seoAdmin from "./routes/seoAdmin.js"
+import seoPublic from "./routes/seoPublic.js"
+
+/* SECURITY */
+import securityAdmin from "./routes/securityAdmin.js"
+import securityStats from "./routes/securityStats.js"
+
+/* PERFORMANCE */
+import performance from "./routes/performance.js"
+
+/* SYSTEM */
+import system from "./routes/system.js"
+
+/* ADS */
 import ads from "./routes/ads.js"
 import publicAds from "./routes/publicAds.js"
 import adClick from "./routes/adClick.js"
 import adsAnalytics from "./routes/adsAnalytics.js"
 
-app.route("/api/admin", ads)
-app.route("/api/admin", adsAnalytics)
-
-app.route("/api", publicAds)
-app.route("/api", adClick)
-import ai from "./routes/ai.js"
-
-app.route("/api/admin", ai)
-import { runAIEngines } from "./services/aiScheduler.js"
-
-export default {
-
-fetch: app.fetch,
-
-async scheduled(event, env){
-
-await runAIEngines(env)
-
-}
-
-}
+/* ANALYTICS */
 import analyticsTrack from "./routes/analyticsTrack.js"
 import analyticsAdmin from "./routes/analyticsAdmin.js"
+
+/* AI */
+import ai from "./routes/ai.js"
+import { runAIEngines } from "./services/aiScheduler.js"
+
+/* DEPLOY */
 import deploy from "./routes/deploy.js"
 
-app.route("/api/admin", deploy)
-app.route("/api", analyticsTrack)
-app.route("/api/admin", analyticsAdmin)
-import anime from "./routes/anime.js"
+/* ================= API ROUTES ================= */
 
+app.get("/", (c) => c.json({ status: "AnimeHunt Backend Running 🚀" }))
+
+/* ADMIN */
+app.route("/api/admin", auth)
+app.route("/api/admin", dashboard)
 app.route("/api/admin", anime)
-import banners from "./routes/banners.js"
-import publicBanners from "./routes/publicBanners.js"
-
-app.route("/api/admin", banners)
-app.route("/api", publicBanners)
-import episodes from "./routes/episodes.js"
-
 app.route("/api/admin", episodes)
-import publicEpisodes from "./routes/publicEpisodes.js"
-
-app.route("/api", publicEpisodes)
-import categories from "./routes/categories.js"
-
 app.route("/api/admin", categories)
-import publicCategories from "./routes/publicCategories.js"
-
-app.route("/api", publicCategories)
-import downloads from "./routes/downloads.js"
-
-app.route("/api/admin", downloads)
-import footer from "./routes/footer.js"
-
-app.route("/api/admin", footer)
-import homepage from "./routes/homepage.js"
-
-app.route("/api/admin", homepage)
-import system from "./routes/system.js"
-
-app.route("/api/admin", system)
-import performance from "./routes/performance.js"
-
-app.route("/api/admin", performance)
-import searchAdmin from "./routes/searchAdmin.js"
-import searchPublic from "./routes/searchPublic.js"
-
-app.route("/api/admin", searchAdmin)
-app.route("/api", searchPublic)
-import seoAdmin from "./routes/seoAdmin.js"
-import seoPublic from "./routes/seoPublic.js"
-
-app.route("/api/admin", seoAdmin)
-app.route("/api", seoPublic)
-import securityAdmin from "./routes/securityAdmin.js"
-import securityStats from "./routes/securityStats.js"
-
-app.route("/api/admin", securityAdmin)
-app.route("/api", securityStats)
-import { Hono } from "hono"
-
-import adminServers from "./routes/adminServers.js"
-import publicServers from "./routes/publicServers.js"
-
-const app = new Hono()
-
+app.route("/api/admin", banners)
 app.route("/api/admin", adminServers)
+app.route("/api/admin", downloads)
+app.route("/api/admin", homepage)
+app.route("/api/admin", footer)
+app.route("/api/admin", searchAdmin)
+app.route("/api/admin", seoAdmin)
+app.route("/api/admin", securityAdmin)
+app.route("/api/admin", performance)
+app.route("/api/admin", system)
+app.route("/api/admin", ads)
+app.route("/api/admin", adsAnalytics)
+app.route("/api/admin", analyticsAdmin)
+app.route("/api/admin", ai)
+app.route("/api/admin", deploy)
 
+/* PUBLIC */
 app.route("/api", publicServers)
+app.route("/api", publicEpisodes)
+app.route("/api", publicCategories)
+app.route("/api", publicBanners)
+app.route("/api", publicAds)
+app.route("/api", adClick)
+app.route("/api", searchPublic)
+app.route("/api", seoPublic)
+app.route("/api", securityStats)
+app.route("/api", analyticsTrack)
 
-export default app
+/* ================= EXPORT ================= */
+
+export default {
+  fetch: app.fetch,
+
+  async scheduled(event, env) {
+    await runAIEngines(env)
+  }
+}
