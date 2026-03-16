@@ -15,7 +15,7 @@ ADMIN_USERNAME = "anime_moderator_007"
 ADMIN_PASSWORD_HASH = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
 
 IMAGEKIT_PUBLIC_KEY = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
-IMAGEKIT_URL_ENDPOINT = "https://ik.imagekit.io/YOUR_ID"
+IMAGEKIT_URL_ENDPOINT = "https://ik.imagekit.io/av2cevzsyi"
 
 [triggers]
 crons = ["*/10 * * * *"]
