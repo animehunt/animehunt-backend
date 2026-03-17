@@ -1,16 +1,14 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 
-/* ================= APP ================= */
-
 const app = new Hono()
 
-/* ================= CORS FIX ================= */
+/* ================= CORS ================= */
 
 app.use("*", cors({
   origin: "*",
-  allowHeaders: ["Content-Type","Authorization"],
-  allowMethods: ["GET","POST","PUT","DELETE","OPTIONS"]
+  allowHeaders: ["Content-Type", "Authorization"],
+  allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
 }))
 
 /* ================= ROUTES ================= */
@@ -38,6 +36,8 @@ import downloads from "./routes/downloads.js"
 /* UI */
 import homepage from "./routes/homepage.js"
 import footer from "./routes/footer.js"
+
+/* UPLOAD (ONLY THIS) */
 import upload from "./routes/upload.js"
 
 /* SEARCH */
@@ -75,7 +75,7 @@ import { runAIEngines } from "./services/aiScheduler.js"
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
 
-/* ================= HEALTH CHECK ================= */
+/* ================= HEALTH ================= */
 
 app.get("/", (c) => {
   return c.json({
@@ -83,7 +83,7 @@ app.get("/", (c) => {
   })
 })
 
-/* ================= ADMIN ROUTES ================= */
+/* ================= ADMIN ================= */
 
 app.route("/api/admin", auth)
 app.route("/api/admin", dashboard)
@@ -119,9 +119,10 @@ app.route("/api/admin", ai)
 
 app.route("/api/admin", deploy)
 
+/* ✅ UPLOAD FIX */
 app.route("/api/admin", upload)
 
-/* ================= PUBLIC ROUTES ================= */
+/* ================= PUBLIC ================= */
 
 app.route("/api", publicServers)
 app.route("/api", publicEpisodes)
