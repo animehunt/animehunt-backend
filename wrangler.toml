@@ -1,21 +1,37 @@
 name = "animehunt-backend"
 main = "src/index.js"
+
+# ✅ IMPORTANT (latest runtime support)
 compatibility_date = "2024-11-01"
 
+# ✅ REQUIRED for jwt, bcrypt, buffer, crypto
 compatibility_flags = ["nodejs_compat"]
+
+# ================= DATABASE =================
 
 [[d1_databases]]
 binding = "DB"
 database_name = "animehunt"
 database_id = "eecb37c1-cdc3-403e-87c3-74504872b62d"
 
+# ================= ENV VARIABLES =================
+
 [vars]
+
+# 🔐 CHANGE THIS (random string)
 JWT_SECRET = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
+
+# 👤 ADMIN LOGIN
 ADMIN_USERNAME = "anime_moderator_007"
+
+# 🔑 PASSWORD HASH (bcrypt)
 ADMIN_PASSWORD_HASH = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
 
+# 🖼 ImageKit (public चीजें vars में ही रहेंगी)
 IMAGEKIT_PUBLIC_KEY = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
 IMAGEKIT_URL_ENDPOINT = "https://ik.imagekit.io/av2cevzsyi"
+
+# ================= CRON =================
 
 [triggers]
 crons = ["*/10 * * * *"]
