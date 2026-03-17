@@ -8,14 +8,16 @@ app.post("/upload", async (c) => {
 
     const body = await c.req.json()
 
-    const file = body.file
+    let file = body.file
     const fileName = body.fileName || Date.now() + ".jpg"
 
     if (!file) {
-      return c.json({
-        success:false,
-        error:"No file received"
-      },400)
+      return c.json({ success:false, error:"No file received" },400)
+    }
+
+    // ✅ CRITICAL FIX
+    if (file.startsWith("data:")) {
+      file = file.split(",")[1]
     }
 
     const res = await fetch("https://upload.imagekit.io/api/v1/files/upload",{
