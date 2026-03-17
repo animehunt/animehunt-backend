@@ -18,17 +18,16 @@ app.post("/upload", async (c) => {
       },400)
     }
 
-    const form = new FormData()
-
-    form.append("file", file)
-    form.append("fileName", fileName)
-
     const res = await fetch("https://upload.imagekit.io/api/v1/files/upload",{
       method:"POST",
       headers:{
-        Authorization:"Basic " + btoa(c.env.IMAGEKIT_PRIVATE_KEY + ":")
+        Authorization:"Basic " + btoa(c.env.IMAGEKIT_PRIVATE_KEY + ":"),
+        "Content-Type":"application/json"
       },
-      body:form
+      body: JSON.stringify({
+        file: file,
+        fileName: fileName
+      })
     })
 
     const data = await res.json()
@@ -36,7 +35,8 @@ app.post("/upload", async (c) => {
     if(!data || !data.url){
       return c.json({
         success:false,
-        error:"ImageKit upload failed"
+        error:"ImageKit upload failed",
+        details:data
       },500)
     }
 
@@ -49,7 +49,8 @@ app.post("/upload", async (c) => {
 
     return c.json({
       success:false,
-      error:"Upload server error"
+      error:"Upload server error",
+      message:e.message
     },500)
 
   }
