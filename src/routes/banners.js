@@ -2,66 +2,83 @@ import { Hono } from "hono"
 
 const app = new Hono()
 
-app.post("/upload", async (c) => {
+/* ================= GET ================= */
 
-  try {
+app.get("/banners", async (c)=>{
 
-    const body = await c.req.json()
+const rows = await c.env.DB.prepare(`
+SELECT *
+FROM banners
+ORDER BY banner_order ASC
+`).all()
 
-    let file = body.file
-    const fileName = body.fileName || Date.now() + ".jpg"
+return c.json(rows.results)
 
-    if (!file) {
-      return c.json({ success:false, error:"No file" },400)
-    }
+})
 
-    // ✅ REMOVE PREFIX अगर आया हो
-    if (file.startsWith("data:")) {
-      file = file.split(",")[1]
-    }
+/* ================= CREATE / UPDATE ================= */
 
-    // ✅ BASE64 → BLOB
-    const binary = Uint8Array.from(atob(file), c => c.charCodeAt(0))
-    const blob = new Blob([binary])
+app.post("/banners", async (c)=>{
 
-    const form = new FormData()
-    form.append("file", blob)
-    form.append("fileName", fileName)
+const b = await c.req.json()
 
-    const res = await fetch("https://upload.imagekit.io/api/v1/files/upload",{
-      method:"POST",
-      headers:{
-        Authorization:"Basic " + btoa(c.env.IMAGEKIT_PRIVATE_KEY + ":")
-      },
-      body: form
-    })
+const id = b.id || crypto.randomUUID()
 
-    const data = await res.json()
+await c.env.DB.prepare(`
+INSERT OR REPLACE INTO banners(
 
-    console.log("IMAGEKIT:", data)
+id,title,page,category,position,
+banner_order,image,active,auto_rotate,created_at
 
-    if(!data || !data.url){
-      return c.json({
-        success:false,
-        error:"Upload failed",
-        details:data
-      },500)
-    }
+) VALUES(?,?,?,?,?,?,?,?,?,?)
+`)
+.bind(
 
-    return c.json({
-      success:true,
-      url:data.url
-    })
+id,
+b.title,
+b.page,
+b.category,
+b.position,
+b.banner_order,
+b.image,
+b.active ? 1 : 0,
+b.autoRotate ? 1 : 0,
+Date.now()
 
-  } catch(e){
+)
+.run()
 
-    return c.json({
-      success:false,
-      error:"Server error",
-      message:e.message
-    },500)
+return c.json({success:true,id})
 
-  }
+})
+
+/* ================= DELETE ================= */
+
+app.delete("/banners/:id", async (c)=>{
+
+await c.env.DB.prepare(`
+DELETE FROM banners WHERE id=?
+`)
+.bind(c.req.param("id"))
+.run()
+
+return c.json({success:true})
+
+})
+
+/* ================= STATUS TOGGLE ================= */
+
+app.patch("/banners/:id/status", async (c)=>{
+
+const {active} = await c.req.json()
+
+await c.env.DB.prepare(`
+UPDATE banners SET active=? WHERE id=?
+`)
+.bind(active ? 1 : 0, c.req.param("id"))
+.run()
+
+return c.json({success:true})
 
 })
 
