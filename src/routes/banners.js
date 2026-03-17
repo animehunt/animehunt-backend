@@ -15,8 +15,6 @@ return c.json(results)
 
 app.post("/banners", verifyAdmin, async (c)=>{
 
-try{
-
 const db = c.env.DB
 const body = await c.req.json()
 
@@ -52,24 +50,12 @@ body.autoRotate ? 1 : 0
 
 return c.json({ success:true, id })
 
-}catch(e){
-
-return c.json({
-success:false,
-error:"DB error",
-message:e.message
-},500)
-
-}
-
 })
 
 app.delete("/banners/:id", verifyAdmin, async (c)=>{
 
-await c.env.DB
-.prepare("DELETE FROM banners WHERE id=?")
-.bind(c.req.param("id"))
-.run()
+await c.env.DB.prepare("DELETE FROM banners WHERE id=?")
+.bind(c.req.param("id")).run()
 
 return c.json({success:true})
 
@@ -77,13 +63,11 @@ return c.json({success:true})
 
 app.patch("/banners/:id/status", verifyAdmin, async (c)=>{
 
-const id = c.req.param("id")
-const body = await c.req.json()
+const id=c.req.param("id")
+const body=await c.req.json()
 
-await c.env.DB
-.prepare("UPDATE banners SET active=? WHERE id=?")
-.bind(body.active ? 1 : 0, id)
-.run()
+await c.env.DB.prepare("UPDATE banners SET active=? WHERE id=?")
+.bind(body.active?1:0,id).run()
 
 return c.json({success:true})
 
