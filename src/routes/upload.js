@@ -12,34 +12,30 @@ app.post("/upload", async (c) => {
     const fileName = body.fileName || Date.now() + ".jpg"
 
     if (!file) {
-      return c.json({ success:false, error:"No file received" },400)
+      return c.json({ success:false, error:"No file" },400)
     }
 
-    // ✅ CRITICAL FIX
-    if (file.startsWith("data:")) {
-      file = file.split(",")[1]
+    // FIX
+    if(file.startsWith("data:")){
+      file=file.split(",")[1]
     }
 
     const res = await fetch("https://upload.imagekit.io/api/v1/files/upload",{
       method:"POST",
       headers:{
-        Authorization:"Basic " + btoa(c.env.IMAGEKIT_PRIVATE_KEY + ":"),
+        Authorization:"Basic "+btoa(c.env.IMAGEKIT_PRIVATE_KEY + ":"),
         "Content-Type":"application/json"
       },
       body: JSON.stringify({
-        file: file,
-        fileName: fileName
+        file:file,
+        fileName:fileName
       })
     })
 
     const data = await res.json()
 
-    if(!data || !data.url){
-      return c.json({
-        success:false,
-        error:"ImageKit upload failed",
-        details:data
-      },500)
+    if(!data.url){
+      return c.json({ success:false, error:"Upload failed", details:data })
     }
 
     return c.json({
@@ -51,9 +47,9 @@ app.post("/upload", async (c) => {
 
     return c.json({
       success:false,
-      error:"Upload server error",
+      error:"Server error",
       message:e.message
-    },500)
+    })
 
   }
 
