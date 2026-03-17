@@ -1,90 +1,89 @@
 import { Hono } from "hono"
-import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* =========================
-GET ALL
-========================= */
+/* ================= GET ALL ================= */
 
-app.get("/categories", verifyAdmin, async (c)=>{
+app.get("/categories", async (c)=>{
 
-const { results } = await c.env.DB
-.prepare(`
-SELECT * FROM categories
-ORDER BY category_order ASC
-`)
-.all()
+const rows = await c.env.DB.prepare(`
+SELECT *
+FROM categories
+ORDER BY priority ASC, category_order ASC
+`).all()
 
-return c.json(results)
+return c.json(rows.results)
 
 })
 
-/* =========================
-GET SINGLE
-========================= */
+/* ================= GET SINGLE ================= */
 
-app.get("/categories/:id", verifyAdmin, async (c)=>{
+app.get("/categories/:id", async (c)=>{
 
-const row = await c.env.DB
-.prepare("SELECT * FROM categories WHERE id=?")
+const row = await c.env.DB.prepare(`
+SELECT *
+FROM categories
+WHERE id=?
+`)
 .bind(c.req.param("id"))
 .first()
-
-if(!row) return c.json({error:"Not found"},404)
 
 return c.json(row)
 
 })
 
-/* =========================
-CREATE
-========================= */
+/* ================= CREATE ================= */
 
-app.post("/categories", verifyAdmin, async (c)=>{
+app.post("/categories", async (c)=>{
 
-const body = await c.req.json()
+const d = await c.req.json()
 
 const id = crypto.randomUUID()
 
 await c.env.DB.prepare(`
-INSERT INTO categories
-(id,name,slug,type,category_order,priority,show_home,active,featured,ai_trending,ai_popular,ai_assign)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO categories(
+
+id,name,slug,type,
+category_order,priority,
+show_home,active,featured,
+ai_trending,ai_popular,ai_assign,
+created_at
+
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 `)
 .bind(
 
 id,
-body.name,
-body.slug,
-body.type,
+d.name,
+d.slug,
+d.type,
 
-body.order,
-body.priority,
+d.order,
+d.priority,
 
-body.showHome?1:0,
-body.isActive?1:0,
+d.showHome ? 1 : 0,
+d.isActive ? 1 : 0,
+d.isFeatured ? 1 : 0,
 
-body.isFeatured?1:0,
+d.aiTrending ? 1 : 0,
+d.aiPopular ? 1 : 0,
+d.aiAssign ? 1 : 0,
 
-body.aiTrending?1:0,
-body.aiPopular?1:0,
-body.aiAssign?1:0
+Date.now()
 
 )
 .run()
 
-return c.json({success:true,id})
+return c.json({success:true})
 
 })
 
-/* =========================
-UPDATE
-========================= */
+/* ================= UPDATE ================= */
 
-app.put("/categories/:id", verifyAdmin, async (c)=>{
+app.put("/categories/:id", async (c)=>{
 
-const body = await c.req.json()
+const d = await c.req.json()
+const id = c.req.param("id")
 
 await c.env.DB.prepare(`
 UPDATE categories SET
@@ -98,7 +97,6 @@ priority=?,
 
 show_home=?,
 active=?,
-
 featured=?,
 
 ai_trending=?,
@@ -106,27 +104,25 @@ ai_popular=?,
 ai_assign=?
 
 WHERE id=?
-
 `)
 .bind(
 
-body.name,
-body.slug,
-body.type,
+d.name,
+d.slug,
+d.type,
 
-body.order,
-body.priority,
+d.order,
+d.priority,
 
-body.showHome?1:0,
-body.isActive?1:0,
+d.showHome ? 1 : 0,
+d.isActive ? 1 : 0,
+d.isFeatured ? 1 : 0,
 
-body.isFeatured?1:0,
+d.aiTrending ? 1 : 0,
+d.aiPopular ? 1 : 0,
+d.aiAssign ? 1 : 0,
 
-body.aiTrending?1:0,
-body.aiPopular?1:0,
-body.aiAssign?1:0,
-
-c.req.param("id")
+id
 
 )
 .run()
@@ -135,14 +131,13 @@ return c.json({success:true})
 
 })
 
-/* =========================
-DELETE
-========================= */
+/* ================= DELETE ================= */
 
-app.delete("/categories/:id", verifyAdmin, async (c)=>{
+app.delete("/categories/:id", async (c)=>{
 
-await c.env.DB
-.prepare("DELETE FROM categories WHERE id=?")
+await c.env.DB.prepare(`
+DELETE FROM categories WHERE id=?
+`)
 .bind(c.req.param("id"))
 .run()
 
