@@ -3,103 +3,92 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* ==========================
-GET ALL BANNERS
-========================== */
-
 app.get("/banners", verifyAdmin, async (c)=>{
 
-const { results } = await c.env.DB
-.prepare(`
-SELECT * FROM banners
-ORDER BY banner_order ASC
-`)
-.all()
+  const { results } = await c.env.DB
+  .prepare("SELECT * FROM banners ORDER BY banner_order ASC")
+  .all()
 
-return c.json(results)
+  return c.json(results)
 
 })
-
-/* ==========================
-CREATE / UPDATE
-========================== */
 
 app.post("/banners", verifyAdmin, async (c)=>{
 
-const db = c.env.DB
-const body = await c.req.json()
+  try{
 
-let id = body.id || crypto.randomUUID()
+    const db = c.env.DB
+    const body = await c.req.json()
 
-await db.prepare(`
-INSERT INTO banners
-(id,title,page,category,position,banner_order,image,active,auto_rotate)
-VALUES(?,?,?,?,?,?,?,?,?)
-ON CONFLICT(id)
-DO UPDATE SET
-title=excluded.title,
-page=excluded.page,
-category=excluded.category,
-position=excluded.position,
-banner_order=excluded.banner_order,
-image=excluded.image,
-active=excluded.active,
-auto_rotate=excluded.auto_rotate
-`)
-.bind(
-id,
-body.title,
-body.page,
-body.category,
-body.position,
-body.banner_order || 0,
-body.image,
-body.active?1:0,
-body.autoRotate?1:0
-)
-.run()
+    const id = body.id || crypto.randomUUID()
 
-return c.json({
-success:true,
-id
+    await db.prepare(`
+      INSERT INTO banners
+      (id,title,page,category,position,banner_order,image,active,auto_rotate)
+      VALUES(?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id)
+      DO UPDATE SET
+      title=excluded.title,
+      page=excluded.page,
+      category=excluded.category,
+      position=excluded.position,
+      banner_order=excluded.banner_order,
+      image=excluded.image,
+      active=excluded.active,
+      auto_rotate=excluded.auto_rotate
+    `)
+    .bind(
+      id,
+      body.title,
+      body.page,
+      body.category || "",
+      body.position,
+      body.banner_order || 0,
+      body.image,
+      body.active ? 1 : 0,
+      body.autoRotate ? 1 : 0
+    )
+    .run()
+
+    return c.json({
+      success:true,
+      id
+    })
+
+  }catch(e){
+
+    return c.json({
+      success:false,
+      error:"DB error",
+      message:e.message
+    },500)
+
+  }
+
 })
-
-})
-
-/* ==========================
-DELETE
-========================== */
 
 app.delete("/banners/:id", verifyAdmin, async (c)=>{
 
-await c.env.DB
-.prepare("DELETE FROM banners WHERE id=?")
-.bind(c.req.param("id"))
-.run()
+  await c.env.DB
+  .prepare("DELETE FROM banners WHERE id=?")
+  .bind(c.req.param("id"))
+  .run()
 
-return c.json({success:true})
+  return c.json({success:true})
 
 })
 
-/* ==========================
-STATUS TOGGLE
-========================== */
-
 app.patch("/banners/:id/status", verifyAdmin, async (c)=>{
 
-const id = c.req.param("id")
-const body = await c.req.json()
+  const id = c.req.param("id")
+  const body = await c.req.json()
 
-await c.env.DB
-.prepare(`
-UPDATE banners
-SET active=?
-WHERE id=?
-`)
-.bind(body.active?1:0,id)
-.run()
+  await c.env.DB
+  .prepare("UPDATE banners SET active=? WHERE id=?")
+  .bind(body.active ? 1 : 0, id)
+  .run()
 
-return c.json({success:true})
+  return c.json({success:true})
 
 })
 
