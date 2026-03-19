@@ -19,6 +19,7 @@ import dashboard from "./routes/dashboard.js"
 
 /* CONTENT */
 import anime from "./routes/anime.js"
+import animeHide from "./routes/anime-hide"
 import episodes from "./routes/episodes.js"
 import publicEpisodes from "./routes/publicEpisodes.js"
 import categories from "./routes/categories.js"
@@ -89,6 +90,8 @@ app.route("/api/admin", auth)
 app.route("/api/admin", dashboard)
 
 app.route("/api/admin", anime)
+app.route("/api/admin/anime-hide", animeHide)
+
 app.route("/api/admin", episodes)
 app.route("/api/admin", categories)
 app.route("/api/admin", banners)
