@@ -3,23 +3,32 @@ import { Hono } from "hono"
 const app = new Hono()
 
 /* =========================
-GET ANIME (FILTER + SEARCH)
+GET ANIME (LIST + SINGLE)
 ========================= */
 
 app.get("/anime", async (c)=>{
 
-const q = c.req.query("q") || ""
+const id = c.req.query("id")
 const type = c.req.query("type")
 const status = c.req.query("status")
 const home = c.req.query("home")
+const q = c.req.query("q")
 
-let query = `SELECT * FROM anime WHERE 1=1`
-let params = []
+/* SINGLE */
+if(id){
 
-if(q){
-query += " AND title LIKE ?"
-params.push("%"+q+"%")
+const row = await c.env.DB
+.prepare("SELECT * FROM anime WHERE id=?")
+.bind(id)
+.all()
+
+return c.json(row.results)
+
 }
+
+/* FILTER */
+let query = "SELECT * FROM anime WHERE 1=1"
+let params = []
 
 if(type){
 query += " AND type=?"
@@ -39,6 +48,11 @@ if(home === "no"){
 query += " AND is_home=0"
 }
 
+if(q){
+query += " AND title LIKE ?"
+params.push("%"+q+"%")
+}
+
 query += " ORDER BY created_at DESC LIMIT 200"
 
 const rows = await c.env.DB.prepare(query).bind(...params).all()
@@ -48,49 +62,88 @@ return c.json(rows.results)
 })
 
 /* =========================
-CREATE ANIME
+CREATE / UPDATE
 ========================= */
 
 app.post("/anime", async (c)=>{
 
-const b = await c.req.json()
+const body = await c.req.json()
 
-const id = crypto.randomUUID()
+const id = body.id || crypto.randomUUID()
+
+const slug = body.slug || body.title
+.toLowerCase()
+.replace(/[^a-z0-9]+/g,"-")
+.replace(/^-+|-+$/g,"")
 
 await c.env.DB.prepare(`
-INSERT INTO anime (
+INSERT OR REPLACE INTO anime(
 
-id,title,slug,type,status,
-poster,banner,year,rating,
-language,duration,genres,tags,description,
-is_home,is_trending,is_most_viewed,is_banner,
+id,
+title,
+slug,
+
+type,
+status,
+
+poster,
+banner,
+
+year,
+rating,
+
+language,
+duration,
+
+genres,
+tags,
+
+description,
+
+is_home,
+is_trending,
+is_most_viewed,
+is_banner,
+
+is_hidden,
+
+views,
+
 created_at
 
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `)
 .bind(
 
 id,
-b.title,
-b.slug,
-b.type,
-b.status,
+body.title,
+slug,
 
-b.poster,
-b.banner,
-b.year,
-b.rating,
+body.type,
+body.status,
 
-b.language,
-b.duration,
-b.genres,
-b.tags,
-b.description,
+body.poster,
+body.banner,
 
-b.isHome ? 1 : 0,
-b.isTrending ? 1 : 0,
-b.isMostViewed ? 1 : 0,
-b.isBanner ? 1 : 0,
+body.year,
+body.rating,
+
+body.language,
+body.duration,
+
+body.genres,
+body.tags,
+
+body.description,
+
+body.isHome ? 1 : 0,
+body.isTrending ? 1 : 0,
+body.isMostViewed ? 1 : 0,
+body.isBanner ? 1 : 0,
+
+0,
+
+0,
 
 Date.now()
 
@@ -125,11 +178,12 @@ app.patch("/anime-hide/:id", async (c)=>{
 
 const id = c.req.param("id")
 
-const row = await c.env.DB.prepare(`
-SELECT is_hidden FROM anime WHERE id=?
-`).bind(id).first()
+const row = await c.env.DB
+.prepare("SELECT is_hidden FROM anime WHERE id=?")
+.bind(id)
+.first()
 
-const newVal = row?.is_hidden ? 0 : 1
+const newVal = row.is_hidden ? 0 : 1
 
 await c.env.DB.prepare(`
 UPDATE anime SET is_hidden=? WHERE id=?
