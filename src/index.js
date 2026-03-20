@@ -20,6 +20,7 @@ import dashboard from "./routes/dashboard.js"
 /* CONTENT */
 import anime from "./routes/anime.js"
 import episodes from "./routes/episodes.js"
+import publicAnime from "./routes/publicAnime.js"
 import publicEpisodes from "./routes/publicEpisodes.js"
 import categories from "./routes/categories.js"
 import publicCategories from "./routes/publicCategories.js"
@@ -128,6 +129,7 @@ app.route("/api", publicServers)
 app.route("/api", publicEpisodes)
 app.route("/api", publicCategories)
 app.route("/api", publicBanners)
+app.route("/api", publicAnime)
 
 app.route("/api", publicAds)
 app.route("/api", adClick)
