@@ -3,6 +3,15 @@ export default {
 
     const url = new URL(req.url)
     const path = url.pathname
+    if (req.method === "OPTIONS") {
+  return new Response(null, {
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET,POST,DELETE,PATCH,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization"
+    }
+  })
+    }
 
     /* =========================
     AUTH CHECK
