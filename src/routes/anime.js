@@ -1,179 +1,205 @@
-import { Hono } from "hono"
-import { verifyAdmin } from "../middleware/adminAuth.js"
+export default {
+  async fetch(req, env) {
 
-const app = new Hono()
+    const url = new URL(req.url)
+    const path = url.pathname
 
-/* =============================
-GET ANIME LIST
-============================= */
+    /* =========================
+    AUTH CHECK
+    ========================= */
 
-app.get("/anime", verifyAdmin, async (c)=>{
+    const auth = req.headers.get("Authorization") || ""
+    if (!auth.startsWith("Bearer ")) {
+      return json({ error: "Unauthorized" }, 401)
+    }
 
-const db = c.env.DB
+    /* =========================
+    ROUTES
+    ========================= */
 
-const type = c.req.query("type")
-const status = c.req.query("status")
-const home = c.req.query("home")
-const q = c.req.query("q")
+    if (path === "/api/admin/anime" && req.method === "GET") {
+      return getAnime(req, env)
+    }
 
-let query = `SELECT * FROM anime WHERE 1=1`
+    if (path === "/api/admin/anime" && req.method === "POST") {
+      return saveAnime(req, env)
+    }
 
-if(type) query += ` AND type='${type}'`
-if(status) query += ` AND status='${status}'`
+    if (path.startsWith("/api/admin/anime/") && req.method === "DELETE") {
+      return deleteAnime(path, env)
+    }
 
-if(home==="yes") query += ` AND is_home=1`
-if(home==="no") query += ` AND is_home=0`
+    if (path.startsWith("/api/admin/anime-hide/") && req.method === "PATCH") {
+      return toggleHide(path, env)
+    }
 
-if(q) query += ` AND title LIKE '%${q}%'`
+    if (path.startsWith("/api/admin/anime/") && req.method === "GET") {
+      return getSingleAnime(path, env)
+    }
 
-query += ` ORDER BY created_at DESC`
+    return json({ error: "Not Found" }, 404)
+  }
+}
 
-const { results } = await db.prepare(query).all()
+/* =========================
+GET ALL ANIME
+========================= */
 
-return c.json(results)
+async function getAnime(req, env) {
 
-})
+  const url = new URL(req.url)
 
-/* =============================
-CREATE ANIME
-============================= */
+  const type = url.searchParams.get("type")
+  const status = url.searchParams.get("status")
+  const home = url.searchParams.get("home")
+  const q = url.searchParams.get("q")
 
-app.post("/anime", verifyAdmin, async (c)=>{
+  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
 
-const db = c.env.DB
-const body = await c.req.json()
+  if (type) list = list.filter(a => a.type === type)
+  if (status) list = list.filter(a => a.status === status)
 
-const id = crypto.randomUUID()
+  if (home === "yes") list = list.filter(a => a.is_home)
+  if (home === "no") list = list.filter(a => !a.is_home)
 
-const slug = body.slug || body.title
-.toLowerCase()
-.replace(/[^a-z0-9]+/g,"-")
+  if (q) {
+    list = list.filter(a =>
+      a.title.toLowerCase().includes(q.toLowerCase())
+    )
+  }
 
-await db.prepare(`
-INSERT INTO anime
-(id,title,slug,type,status,poster,banner,year,rating,language,duration,description,tags,genres,is_home,is_trending,is_most_viewed,is_banner)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-`)
-.bind(
-id,
-body.title,
-slug,
-body.type,
-body.status,
-body.poster,
-body.banner,
-body.year,
-body.rating,
-body.language,
-body.duration,
-body.description,
-body.tags,
-body.genres,
-body.isHome?1:0,
-body.isTrending?1:0,
-body.isMostViewed?1:0,
-body.isBanner?1:0
-)
-.run()
+  return json(list)
+}
 
-return c.json({success:true,id})
+/* =========================
+GET SINGLE
+========================= */
 
-})
+async function getSingleAnime(path, env) {
 
-/* =============================
-UPDATE ANIME
-============================= */
+  const id = path.split("/").pop()
 
-app.put("/anime/:id", verifyAdmin, async (c)=>{
+  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
 
-const db = c.env.DB
-const id = c.req.param("id")
+  const anime = list.find(a => a.id === id)
 
-const body = await c.req.json()
+  return json(anime || {})
+}
 
-await db.prepare(`
-UPDATE anime SET
-title=?,
-slug=?,
-type=?,
-status=?,
-poster=?,
-banner=?,
-year=?,
-rating=?,
-language=?,
-duration=?,
-description=?,
-tags=?,
-genres=?,
-is_home=?,
-is_trending=?,
-is_most_viewed=?,
-is_banner=?
-WHERE id=?
-`)
-.bind(
-body.title,
-body.slug,
-body.type,
-body.status,
-body.poster,
-body.banner,
-body.year,
-body.rating,
-body.language,
-body.duration,
-body.description,
-body.tags,
-body.genres,
-body.isHome?1:0,
-body.isTrending?1:0,
-body.isMostViewed?1:0,
-body.isBanner?1:0,
-id
-)
-.run()
+/* =========================
+SAVE (CREATE + UPDATE)
+========================= */
 
-return c.json({success:true})
+async function saveAnime(req, env) {
 
-})
+  const body = await req.json()
 
-/* =============================
-DELETE ANIME
-============================= */
+  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
 
-app.delete("/anime/:id", verifyAdmin, async (c)=>{
+  if (body.id) {
+    // UPDATE
+    list = list.map(a => a.id === body.id ? {
+      ...a,
+      ...mapFields(body)
+    } : a)
+  } else {
+    // CREATE
+    const newAnime = {
+      id: crypto.randomUUID(),
+      created: Date.now(),
+      is_hidden: false,
+      ...mapFields(body)
+    }
 
-await c.env.DB
-.prepare("DELETE FROM anime WHERE id=?")
-.bind(c.req.param("id"))
-.run()
+    list.unshift(newAnime)
+  }
 
-return c.json({success:true})
+  await env.ANIME_DB.put("anime_list", JSON.stringify(list))
 
-})
+  return json({ success: true })
+}
 
-/* =============================
+/* =========================
+DELETE
+========================= */
+
+async function deleteAnime(path, env) {
+
+  const id = path.split("/").pop()
+
+  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
+
+  list = list.filter(a => a.id !== id)
+
+  await env.ANIME_DB.put("anime_list", JSON.stringify(list))
+
+  return json({ success: true })
+}
+
+/* =========================
 HIDE / UNHIDE
-============================= */
+========================= */
 
-app.patch("/anime-hide/:id", verifyAdmin, async (c)=>{
+async function toggleHide(path, env) {
 
-const id = c.req.param("id")
-const db = c.env.DB
+  const id = path.split("/").pop()
 
-const row = await db.prepare(`
-SELECT is_hidden FROM anime WHERE id=?
-`).bind(id).first()
+  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
 
-const hidden = row.is_hidden ? 0 : 1
+  list = list.map(a => {
+    if (a.id === id) {
+      a.is_hidden = !a.is_hidden
+    }
+    return a
+  })
 
-await db.prepare(`
-UPDATE anime SET is_hidden=? WHERE id=?
-`).bind(hidden,id).run()
+  await env.ANIME_DB.put("anime_list", JSON.stringify(list))
 
-return c.json({success:true})
+  return json({ success: true })
+}
 
-})
+/* =========================
+FIELD MAPPER
+========================= */
 
-export default app
+function mapFields(body) {
+  return {
+    title: body.title,
+    slug: body.slug,
+
+    type: body.type,
+    status: body.status,
+
+    poster: body.poster,
+    banner: body.banner,
+
+    year: body.year,
+    rating: body.rating,
+
+    language: body.language,
+    duration: body.duration,
+
+    genres: body.genres,
+    tags: body.tags,
+    description: body.description,
+
+    is_home: body.isHome,
+    is_trending: body.isTrending,
+    is_most_viewed: body.isMostViewed,
+    is_banner: body.isBanner
+  }
+}
+
+/* =========================
+RESPONSE HELPER
+========================= */
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*"
+    }
+  })
+}
