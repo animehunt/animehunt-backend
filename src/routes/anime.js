@@ -2,123 +2,69 @@ import { Hono } from "hono"
 
 const app = new Hono()
 
-/* =========================
-GET ANIME (LIST + SINGLE)
-========================= */
-
+/* GET ANIME */
 app.get("/anime", async (c)=>{
 
-const id = c.req.query("id")
-const type = c.req.query("type")
-const status = c.req.query("status")
-const home = c.req.query("home")
-const q = c.req.query("q")
+const {type,status,home,q} = c.req.query()
 
-/* SINGLE */
-if(id){
-
-const row = await c.env.DB
-.prepare("SELECT * FROM anime WHERE id=?")
-.bind(id)
-.all()
-
-return c.json(row.results)
-
-}
-
-/* FILTER */
-let query = "SELECT * FROM anime WHERE 1=1"
-let params = []
+let query = `SELECT * FROM anime WHERE 1=1`
+let binds=[]
 
 if(type){
-query += " AND type=?"
-params.push(type)
+query += ` AND type=?`
+binds.push(type)
 }
 
 if(status){
-query += " AND status=?"
-params.push(status)
+query += ` AND status=?`
+binds.push(status)
 }
 
-if(home === "yes"){
-query += " AND is_home=1"
+if(home==="yes"){
+query += ` AND is_home=1`
 }
 
-if(home === "no"){
-query += " AND is_home=0"
+if(home==="no"){
+query += ` AND is_home=0`
 }
 
 if(q){
-query += " AND title LIKE ?"
-params.push("%"+q+"%")
+query += ` AND title LIKE ?`
+binds.push("%"+q+"%")
 }
 
-query += " ORDER BY created_at DESC LIMIT 200"
+query += ` ORDER BY created_at DESC`
 
-const rows = await c.env.DB.prepare(query).bind(...params).all()
+const rows = await c.env.DB.prepare(query).bind(...binds).all()
 
 return c.json(rows.results)
 
 })
 
-/* =========================
-CREATE / UPDATE
-========================= */
-
+/* CREATE / UPDATE */
 app.post("/anime", async (c)=>{
 
 const body = await c.req.json()
 
 const id = body.id || crypto.randomUUID()
 
-const slug = body.slug || body.title
-.toLowerCase()
-.replace(/[^a-z0-9]+/g,"-")
-.replace(/^-+|-+$/g,"")
-
 await c.env.DB.prepare(`
 INSERT OR REPLACE INTO anime(
 
-id,
-title,
-slug,
-
-type,
-status,
-
-poster,
-banner,
-
-year,
-rating,
-
-language,
-duration,
-
-genres,
-tags,
-
-description,
-
-is_home,
-is_trending,
-is_most_viewed,
-is_banner,
-
-is_hidden,
-
-views,
-
+id,title,slug,type,status,
+poster,banner,
+year,rating,language,duration,
+genres,tags,description,
+is_home,is_trending,is_most_viewed,is_banner,
 created_at
 
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `)
 .bind(
 
 id,
 body.title,
-slug,
-
+body.slug,
 body.type,
 body.status,
 
@@ -127,67 +73,45 @@ body.banner,
 
 body.year,
 body.rating,
-
 body.language,
 body.duration,
 
 body.genres,
 body.tags,
-
 body.description,
 
-body.isHome ? 1 : 0,
-body.isTrending ? 1 : 0,
-body.isMostViewed ? 1 : 0,
-body.isBanner ? 1 : 0,
-
-0,
-
-0,
+body.isHome,
+body.isTrending,
+body.isMostViewed,
+body.isBanner,
 
 Date.now()
 
 )
 .run()
 
-return c.json({success:true,id})
+return c.json({success:true})
 
 })
 
-/* =========================
-DELETE
-========================= */
-
+/* DELETE */
 app.delete("/anime/:id", async (c)=>{
-
-const id = c.req.param("id")
 
 await c.env.DB.prepare(`
 DELETE FROM anime WHERE id=?
-`).bind(id).run()
+`).bind(c.req.param("id")).run()
 
 return c.json({success:true})
 
 })
 
-/* =========================
-HIDE / UNHIDE
-========================= */
-
+/* HIDE */
 app.patch("/anime-hide/:id", async (c)=>{
 
-const id = c.req.param("id")
-
-const row = await c.env.DB
-.prepare("SELECT is_hidden FROM anime WHERE id=?")
-.bind(id)
-.first()
-
-const newVal = row.is_hidden ? 0 : 1
-
 await c.env.DB.prepare(`
-UPDATE anime SET is_hidden=? WHERE id=?
-`).bind(newVal,id).run()
+UPDATE anime SET is_hidden = CASE WHEN is_hidden=1 THEN 0 ELSE 1 END
+WHERE id=?
+`).bind(c.req.param("id")).run()
 
 return c.json({success:true})
 
