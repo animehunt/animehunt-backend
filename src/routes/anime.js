@@ -10,70 +10,77 @@ app.use('*', cors({
 }))
 
 /* ==========================================
-   HELPERS
-   ========================================== */
-const getList = async (env) => await env.ANIME_DB.get("anime_list", { type: "json" }) || []
-const saveList = async (env, data) => await env.ANIME_DB.put("anime_list", JSON.stringify(data))
-
-/* ==========================================
-   ROUTES
+   ROUTES (Using D1 Database)
    ========================================== */
 
 // GET ALL & SEARCH
 app.get('/', async (c) => {
   const { type, status, home, q } = c.req.query()
-  let list = await getList(c.env)
+  
+  let query = "SELECT * FROM anime WHERE 1=1"
+  const params = []
 
-  if (type) list = list.filter(a => a.type === type)
-  if (status) list = list.filter(a => a.status === status)
-  if (home === "yes") list = list.filter(a => a.is_home === true)
-  if (q) list = list.filter(a => a.title.toLowerCase().includes(q.toLowerCase()))
+  if (type) { query += " AND type = ?"; params.push(type); }
+  if (status) { query += " AND status = ?"; params.push(status); }
+  if (home === "yes") { query += " AND is_home = 1"; }
+  if (q) { query += " AND title LIKE ?"; params.push(`%${q}%`); }
 
-  return c.json(list)
+  query += " ORDER BY created_at DESC"
+
+  try {
+    const { results } = await c.env.DB.prepare(query).bind(...params).all()
+    return c.json(results)
+  } catch (e) {
+    return c.json({ error: e.message }, 500)
+  }
 })
 
 // GET SINGLE
 app.get('/:id', async (c) => {
   const id = c.req.param('id')
-  const list = await getList(c.env)
-  const anime = list.find(a => a.id === id)
-  return anime ? c.json(anime) : c.json({ error: "Not Found" }, 404)
+  const result = await c.env.DB.prepare("SELECT * FROM anime WHERE id = ?").bind(id).first()
+  return result ? c.json(result) : c.json({ error: "Not Found" }, 404)
 })
 
 // SAVE / UPDATE
 app.post('/', async (c) => {
   try {
     const body = await c.req.json()
-    let list = await getList(c.env)
+    const id = body.id || crypto.randomUUID()
+    
+    // Check if exists
+    const existing = body.id ? await c.env.DB.prepare("SELECT id FROM anime WHERE id = ?").bind(body.id).first() : null
 
-    const animeData = {
-      title: body.title,
-      slug: body.slug,
-      type: body.type,
-      status: body.status,
-      poster: body.poster,
-      banner: body.banner,
-      year: body.year,
-      rating: body.rating,
-      language: body.language,
-      duration: body.duration,
-      genres: body.genres,
-      tags: body.tags,
-      description: body.description,
-      is_home: Boolean(body.isHome),
-      is_trending: Boolean(body.isTrending),
-      is_most_viewed: Boolean(body.isMostViewed),
-      is_banner: Boolean(body.isBanner),
-      updated_at: Date.now()
-    }
-
-    if (body.id) {
-      list = list.map(a => a.id === body.id ? { ...a, ...animeData } : a)
+    if (existing) {
+      // UPDATE QUERY
+      await c.env.DB.prepare(`
+        UPDATE anime SET 
+        title=?, slug=?, type=?, status=?, poster=?, banner=?, 
+        year=?, rating=?, language=?, duration=?, genres=?, tags=?, 
+        description=?, is_home=?, is_trending=?, is_most_viewed=?, is_banner=?, updated_at=?
+        WHERE id=?
+      `).bind(
+        body.title, body.slug, body.type, body.status, body.poster, body.banner,
+        body.year, body.rating, body.language, body.duration, body.genres, body.tags,
+        body.description, body.isHome ? 1 : 0, body.isTrending ? 1 : 0, 
+        body.isMostViewed ? 1 : 0, body.isBanner ? 1 : 0, Date.now(), body.id
+      ).run()
     } else {
-      list.unshift({ ...animeData, id: crypto.randomUUID(), created_at: Date.now(), is_hidden: false })
+      // INSERT QUERY
+      await c.env.DB.prepare(`
+        INSERT INTO anime (
+          id, title, slug, type, status, poster, banner, year, rating, 
+          language, duration, genres, tags, description, is_home, 
+          is_trending, is_most_viewed, is_banner, is_hidden, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      `).bind(
+        id, body.title, body.slug, body.type, body.status, body.poster, body.banner,
+        body.year, body.rating, body.language, body.duration, body.genres, body.tags,
+        body.description, body.isHome ? 1 : 0, body.isTrending ? 1 : 0, 
+        body.isMostViewed ? 1 : 0, body.isBanner ? 1 : 0, Date.now()
+      ).run()
     }
 
-    await saveList(c.env, list)
     return c.json({ success: true })
   } catch (err) {
     return c.json({ success: false, error: err.message }, 500)
@@ -83,17 +90,14 @@ app.post('/', async (c) => {
 // DELETE
 app.delete('/:id', async (c) => {
   const id = c.req.param('id')
-  let list = await getList(c.env)
-  await saveList(c.env, list.filter(a => a.id !== id))
+  await c.env.DB.prepare("DELETE FROM anime WHERE id = ?").bind(id).run()
   return c.json({ success: true })
 })
 
 // HIDE
 app.patch('/hide/:id', async (c) => {
   const id = c.req.param('id')
-  let list = await getList(c.env)
-  list = list.map(a => a.id === id ? { ...a, is_hidden: !a.is_hidden } : a)
-  await saveList(c.env, list)
+  await c.env.DB.prepare("UPDATE anime SET is_hidden = 1 - is_hidden WHERE id = ?").bind(id).run()
   return c.json({ success: true })
 })
 
