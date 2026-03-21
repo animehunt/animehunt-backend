@@ -1,216 +1,133 @@
-export default {
-  async fetch(req, env) {
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { uploadImage } from "./utils/upload"; // Make sure path is correct
 
-    const url = new URL(req.url)
-    const path = url.pathname
-    if (req.method === "OPTIONS") {
-  return new Response(null, {
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET,POST,DELETE,PATCH,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization"
-    }
-  })
-    }
+const app = new Hono();
 
-    /* =========================
-    AUTH CHECK
-    ========================= */
+// 1. CORS Middleware
+app.use("*", cors({
+  origin: "*",
+  allowMethods: ["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+  allowHeaders: ["Content-Type", "Authorization"],
+}));
 
-    const auth = req.headers.get("Authorization") || ""
-    if (!auth.startsWith("Bearer ")) {
-      return json({ error: "Unauthorized" }, 401)
-    }
-
-    /* =========================
-    ROUTES
-    ========================= */
-
-    if (path === "/api/admin/anime" && req.method === "GET") {
-      return getAnime(req, env)
-    }
-
-    if (path === "/api/admin/anime" && req.method === "POST") {
-      return saveAnime(req, env)
-    }
-
-    if (path.startsWith("/api/admin/anime/") && req.method === "DELETE") {
-      return deleteAnime(path, env)
-    }
-
-    if (path.startsWith("/api/admin/anime-hide/") && req.method === "PATCH") {
-      return toggleHide(path, env)
-    }
-
-    if (path.startsWith("/api/admin/anime/") && req.method === "GET") {
-      return getSingleAnime(path, env)
-    }
-
-    return json({ error: "Not Found" }, 404)
+// 2. Auth Middleware (Optional but recommended)
+app.use("/api/admin/*", async (c, next) => {
+  const auth = c.req.header("Authorization");
+  if (!auth || !auth.startsWith("Bearer ")) {
+    return c.json({ error: "Unauthorized" }, 401);
   }
-}
+  await next();
+});
 
-/* =========================
-GET ALL ANIME
-========================= */
+/* ==========================================
+   IMAGE UPLOAD ROUTE
+   ========================================== */
+app.post("/upload", async (c) => {
+  try {
+    const body = await c.req.json();
+    if (!body.file) return c.json({ success: false, error: "No file" }, 400);
 
-async function getAnime(req, env) {
+    // uploadImage handles ImageKit/Cloudinary logic
+    const url = await uploadImage(body.file, c.env);
+    
+    return c.json({ success: true, url });
+  } catch (e) {
+    return c.json({ success: false, error: e.message }, 500);
+  }
+});
 
-  const url = new URL(req.url)
+/* ==========================================
+   ANIME CRUD ROUTES
+   ========================================== */
 
-  const type = url.searchParams.get("type")
-  const status = url.searchParams.get("status")
-  const home = url.searchParams.get("home")
-  const q = url.searchParams.get("q")
+// GET ALL & SEARCH
+app.get("/api/admin/anime", async (c) => {
+  const { type, status, home, q } = c.req.query();
+  let list = await c.env.ANIME_DB.get("anime_list", { type: "json" }) || [];
 
-  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
-
-  if (type) list = list.filter(a => a.type === type)
-  if (status) list = list.filter(a => a.status === status)
-
-  if (home === "yes") list = list.filter(a => a.is_home)
-  if (home === "no") list = list.filter(a => !a.is_home)
-
+  if (type) list = list.filter(a => a.type === type);
+  if (status) list = list.filter(a => a.status === status);
+  if (home === "yes") list = list.filter(a => a.is_home);
+  if (home === "no") list = list.filter(a => !a.is_home);
   if (q) {
-    list = list.filter(a =>
-      a.title.toLowerCase().includes(q.toLowerCase())
-    )
+    list = list.filter(a => a.title.toLowerCase().includes(q.toLowerCase()));
   }
 
-  return json(list)
-}
+  return c.json(list);
+});
 
-/* =========================
-GET SINGLE
-========================= */
+// GET SINGLE
+app.get("/api/admin/anime/:id", async (c) => {
+  const id = c.req.param("id");
+  const list = await c.env.ANIME_DB.get("anime_list", { type: "json" }) || [];
+  const anime = list.find(a => a.id === id);
+  return anime ? c.json(anime) : c.json({ error: "Not found" }, 404);
+});
 
-async function getSingleAnime(path, env) {
+// SAVE (CREATE & UPDATE)
+app.post("/api/admin/anime", async (c) => {
+  const body = await c.req.json();
+  let list = await c.env.ANIME_DB.get("anime_list", { type: "json" }) || [];
 
-  const id = path.split("/").pop()
-
-  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
-
-  const anime = list.find(a => a.id === id)
-
-  return json(anime || {})
-}
-
-/* =========================
-SAVE (CREATE + UPDATE)
-========================= */
-
-async function saveAnime(req, env) {
-
-  const body = await req.json()
-
-  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
-
-  if (body.id) {
-    // UPDATE
-    list = list.map(a => a.id === body.id ? {
-      ...a,
-      ...mapFields(body)
-    } : a)
-  } else {
-    // CREATE
-    const newAnime = {
-      id: crypto.randomUUID(),
-      created: Date.now(),
-      is_hidden: false,
-      ...mapFields(body)
-    }
-
-    list.unshift(newAnime)
-  }
-
-  await env.ANIME_DB.put("anime_list", JSON.stringify(list))
-
-  return json({ success: true })
-}
-
-/* =========================
-DELETE
-========================= */
-
-async function deleteAnime(path, env) {
-
-  const id = path.split("/").pop()
-
-  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
-
-  list = list.filter(a => a.id !== id)
-
-  await env.ANIME_DB.put("anime_list", JSON.stringify(list))
-
-  return json({ success: true })
-}
-
-/* =========================
-HIDE / UNHIDE
-========================= */
-
-async function toggleHide(path, env) {
-
-  const id = path.split("/").pop()
-
-  let list = await env.ANIME_DB.get("anime_list", { type: "json" }) || []
-
-  list = list.map(a => {
-    if (a.id === id) {
-      a.is_hidden = !a.is_hidden
-    }
-    return a
-  })
-
-  await env.ANIME_DB.put("anime_list", JSON.stringify(list))
-
-  return json({ success: true })
-}
-
-/* =========================
-FIELD MAPPER
-========================= */
-
-function mapFields(body) {
-  return {
+  const animeData = {
     title: body.title,
     slug: body.slug,
-
     type: body.type,
     status: body.status,
-
     poster: body.poster,
     banner: body.banner,
-
     year: body.year,
     rating: body.rating,
-
     language: body.language,
     duration: body.duration,
-
     genres: body.genres,
     tags: body.tags,
     description: body.description,
-
     is_home: body.isHome,
     is_trending: body.isTrending,
     is_most_viewed: body.isMostViewed,
-    is_banner: body.isBanner
+    is_banner: body.isBanner,
+    updated_at: Date.now()
+  };
+
+  if (body.id) {
+    // UPDATE
+    list = list.map(a => a.id === body.id ? { ...a, ...animeData } : a);
+  } else {
+    // CREATE
+    const newAnime = {
+      ...animeData,
+      id: crypto.randomUUID(),
+      created_at: Date.now(),
+      is_hidden: false
+    };
+    list.unshift(newAnime);
   }
-}
 
-/* =========================
-RESPONSE HELPER
-========================= */
+  await c.env.ANIME_DB.put("anime_list", JSON.stringify(list));
+  return c.json({ success: true });
+});
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET,POST,DELETE,PATCH,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization"
-    }
-  })
-}
+// DELETE
+app.delete("/api/admin/anime/:id", async (c) => {
+  const id = c.req.param("id");
+  let list = await c.env.ANIME_DB.get("anime_list", { type: "json" }) || [];
+  list = list.filter(a => a.id !== id);
+  await c.env.ANIME_DB.put("anime_list", JSON.stringify(list));
+  return c.json({ success: true });
+});
+
+// TOGGLE HIDE
+app.patch("/api/admin/anime-hide/:id", async (c) => {
+  const id = c.req.param("id");
+  let list = await c.env.ANIME_DB.get("anime_list", { type: "json" }) || [];
+  list = list.map(a => {
+    if (a.id === id) a.is_hidden = !a.is_hidden;
+    return a;
+  });
+  await c.env.ANIME_DB.put("anime_list", JSON.stringify(list));
+  return c.json({ success: true });
+});
+
+export default app;
