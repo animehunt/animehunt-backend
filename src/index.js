@@ -11,7 +11,6 @@ app.use("*", cors({
   allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 }))
 
-/* ✅ IMPORTANT (OPTIONS FIX) */
 app.options('*', (c) => c.text('', 204))
 
 /* ================= ROUTES ================= */
@@ -89,11 +88,13 @@ app.get("/", (c) => {
 
 /* ================= ADMIN ================= */
 
-/* AUTH */
+/* 🔐 AUTH (IMPORTANT) */
 app.route("/api/admin/auth", auth)
+
+/* DASHBOARD */
 app.route("/api/admin/dashboard", dashboard)
 
-/* CORE CONTENT */
+/* CONTENT */
 app.route("/api/admin/anime", anime)
 app.route("/api/admin/episodes", episodes)
 app.route("/api/admin/categories", categories)
@@ -137,7 +138,7 @@ app.route("/api/admin/ai", ai)
 /* DEPLOY */
 app.route("/api/admin/deploy", deploy)
 
-/* ✅ UPLOAD (SEPARATE - VERY IMPORTANT) */
+/* ✅ UPLOAD (SEPARATE — NO CONFLICT) */
 app.route("/api/upload", upload)
 
 /* ================= PUBLIC ================= */
