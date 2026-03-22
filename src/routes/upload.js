@@ -1,104 +1,87 @@
-// ===============================
-// Upload System (ImageKit)
-// ===============================
+import { Hono } from 'hono'
 
-const Upload = (() => {
+const uploadRoute = new Hono()
 
-  const CONFIG = {
-    urlEndpoint: "https://upload.imagekit.io/api/v1/files/upload",
-    publicKey: "YOUR_PUBLIC_KEY", // already added by you
-  };
+// Utility: retry wrapper
+async function retry(fn, retries = 2) {
+  try {
+    return await fn()
+  } catch (err) {
+    if (retries <= 0) throw err
+    return retry(fn, retries - 1)
+  }
+}
 
-  // ===============================
-  // INTERNAL: upload to ImageKit
-  // ===============================
-  async function uploadToImageKit(file, retry = 2) {
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("fileName", Date.now() + "_" + file.name);
+// Utility: structured response
+const success = (data) => ({
+  success: true,
+  data
+})
 
-      const res = await fetch(CONFIG.urlEndpoint, {
+const failure = (message, code = "UPLOAD_ERROR") => ({
+  success: false,
+  message,
+  error_code: code
+})
+
+// Upload API
+uploadRoute.post('/', async (c) => {
+  try {
+    const body = await c.req.parseBody()
+
+    const file = body.file
+
+    if (!file || typeof file === 'string') {
+      return c.json(failure("File missing or invalid", "NO_FILE"), 400)
+    }
+
+    // Convert file to base64
+    const arrayBuffer = await file.arrayBuffer()
+    const base64 = btoa(
+      new Uint8Array(arrayBuffer)
+        .reduce((data, byte) => data + String.fromCharCode(byte), '')
+    )
+
+    // ImageKit upload
+    const uploadToImageKit = async () => {
+      const res = await fetch("https://upload.imagekit.io/api/v1/files/upload", {
         method: "POST",
         headers: {
-          Authorization: "Basic " + btoa(CONFIG.publicKey + ":"),
+          Authorization: `Basic ${btoa(c.env.IMAGEKIT_PRIVATE_KEY + ":")}`,
         },
-        body: formData,
-      });
+        body: new URLSearchParams({
+          file: `data:${file.type};base64,${base64}`,
+          fileName: file.name || `img_${Date.now()}`,
+          useUniqueFileName: "true",
+          folder: "/animehunt"
+        })
+      })
 
-      if (!res.ok) throw new Error("Upload failed");
+      const data = await res.json()
 
-      const data = await res.json();
-
-      return {
-        success: true,
-        url: data.url,
-        fileId: data.fileId,
-      };
-
-    } catch (err) {
-
-      // 🔁 retry system
-      if (retry > 0) {
-        console.warn("Retry upload...", retry);
-        return uploadToImageKit(file, retry - 1);
+      if (!res.ok) {
+        throw new Error(data?.message || "Upload failed")
       }
 
-      return {
-        success: false,
-        error: err.message,
-      };
+      return data
     }
+
+    const result = await retry(uploadToImageKit, 2)
+
+    return c.json(success({
+      url: result.url,
+      fileId: result.fileId,
+      name: result.name
+    }))
+
+  } catch (err) {
+    console.error("UPLOAD_ERROR:", err)
+
+    return c.json(
+      failure(err.message || "Something went wrong"),
+      500
+    )
   }
+})
 
-  // ===============================
-  // PUBLIC: bind input file → auto upload
-  // ===============================
-  function bindFileInput({
-    fileInput,
-    urlInput,
-    previewImg,
-    errorBox
-  }) {
-
-    fileInput.addEventListener("change", async () => {
-      const file = fileInput.files[0];
-      if (!file) return;
-
-      // preview show
-      if (previewImg) {
-        previewImg.src = URL.createObjectURL(file);
-        previewImg.style.display = "block";
-      }
-
-      if (errorBox) errorBox.style.display = "none";
-
-      urlInput.value = "Uploading...";
-
-      const res = await uploadToImageKit(file);
-
-      if (!res.success) {
-        urlInput.value = "";
-        if (errorBox) errorBox.style.display = "block";
-        console.error("Upload error:", res.error);
-        return;
-      }
-
-      // ✅ auto set URL
-      urlInput.value = res.url;
-    });
-  }
-
-  // ===============================
-  // PUBLIC: manual upload (API use)
-  // ===============================
-  async function upload(file) {
-    return await uploadToImageKit(file);
-  }
-
-  return {
-    bindFileInput,
-    upload
-  };
-
-})();
+export default uploadRoute
