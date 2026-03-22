@@ -3,16 +3,16 @@ import { uploadImage } from "../utils/upload"
 
 const app = new Hono()
 
-app.post("/upload", async (c) => {
+app.post("/", async (c) => {
 
   try {
 
     const body = await c.req.json()
 
-    if (!body.file) {
+    if(!body.file){
       return c.json({
         success:false,
-        error:"File required"
+        error:"File missing"
       },400)
     }
 
@@ -23,11 +23,13 @@ app.post("/upload", async (c) => {
       url
     })
 
-  } catch (e) {
+  } catch (err) {
+
+    console.error(err)
 
     return c.json({
       success:false,
-      error:e.message || "Upload failed"
+      error:err.message
     },500)
 
   }
