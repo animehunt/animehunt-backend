@@ -3,154 +3,121 @@ import { Hono } from "hono"
 const app = new Hono()
 
 /* =========================
-GET ALL ANIME (FILTER + SEARCH)
+GET ALL ANIME
 ========================= */
 
 app.get("/", async (c) => {
 
-  const { DB } = c.env
+  const { type, status, home, q } = c.req.query()
 
-  const type = c.req.query("type")
-  const status = c.req.query("status")
-  const home = c.req.query("home")
-  const q = c.req.query("q")
+  let sql = `SELECT * FROM anime WHERE 1=1`
+  const params = []
 
-  let sql = "SELECT * FROM anime WHERE 1=1"
-  let params = []
-
-  if(type){
-    sql += " AND type=?"
+  if (type) {
+    sql += ` AND type=?`
     params.push(type)
   }
 
-  if(status){
-    sql += " AND status=?"
+  if (status) {
+    sql += ` AND status=?`
     params.push(status)
   }
 
-  if(home === "yes"){
-    sql += " AND is_home=1"
+  if (home === "yes") {
+    sql += ` AND is_home=1`
   }
 
-  if(home === "no"){
-    sql += " AND is_home=0"
+  if (home === "no") {
+    sql += ` AND is_home=0`
   }
 
-  if(q){
-    sql += " AND title LIKE ?"
+  if (q) {
+    sql += ` AND title LIKE ?`
     params.push(`%${q}%`)
   }
 
-  sql += " ORDER BY created_at DESC"
+  sql += ` ORDER BY created_at DESC`
 
-  const result = await DB.prepare(sql).bind(...params).all()
+  const { results } = await c.env.DB.prepare(sql).bind(...params).all()
 
-  return c.json(result.results)
+  return c.json(results)
 })
 
 /* =========================
-GET SINGLE ANIME
+GET SINGLE
 ========================= */
 
 app.get("/:id", async (c) => {
 
   const id = c.req.param("id")
 
-  const data = await c.env.DB.prepare(`
+  const { results } = await c.env.DB.prepare(`
     SELECT * FROM anime WHERE id=?
-  `).bind(id).first()
+  `).bind(id).all()
 
-  return c.json(data || {})
+  return c.json(results[0] || {})
 })
 
 /* =========================
-SAVE (CREATE + UPDATE)
+CREATE / UPDATE
 ========================= */
 
 app.post("/", async (c) => {
 
-  try{
+  const b = await c.req.json()
 
-    const body = await c.req.json()
+  const id = b.id || crypto.randomUUID()
 
-    /* VALIDATION */
-    if(!body.title){
-      return c.json({ success:false, error:"Title required" },400)
-    }
-
-    /* AUTO SLUG */
-    let slug = body.slug
-    if(!slug){
-      slug = body.title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g,'-')
-        .replace(/(^-|-$)/g,'')
-    }
-
-    const id = body.id || crypto.randomUUID()
-
-    /* DUPLICATE SLUG CHECK */
-    const existing = await c.env.DB.prepare(`
-      SELECT id FROM anime WHERE slug=? AND id!=?
-    `).bind(slug, id).first()
-
-    if(existing){
-      slug = slug + "-" + Date.now()
-    }
-
-    await c.env.DB.prepare(`
-      INSERT OR REPLACE INTO anime (
-        id,title,slug,type,status,
-        poster,banner,
-        year,rating,language,duration,
-        genres,tags,description,
-        is_home,is_trending,is_most_viewed,is_banner,
-        is_hidden,created_at
-      )
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).bind(
+  await c.env.DB.prepare(`
+    INSERT OR REPLACE INTO anime(
       id,
-      body.title,
+      title,
       slug,
-      body.type || "anime",
-      body.status || "ongoing",
+      type,
+      status,
+      poster,
+      banner,
+      year,
+      rating,
+      language,
+      duration,
+      genres,
+      tags,
+      description,
+      is_home,
+      is_trending,
+      is_most_viewed,
+      is_banner,
+      is_hidden,
+      created_at
+    )
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
 
-      body.poster || "",
-      body.banner || "",
+    id,
+    b.title,
+    b.slug,
+    b.type,
+    b.status,
+    b.poster,
+    b.banner,
+    b.year,
+    b.rating,
+    b.language,
+    b.duration,
+    b.genres,
+    b.tags,
+    b.description,
+    b.isHome ? 1 : 0,
+    b.isTrending ? 1 : 0,
+    b.isMostViewed ? 1 : 0,
+    b.isBanner ? 1 : 0,
+    0,
+    Date.now()
 
-      body.year || "",
-      body.rating || "",
-      body.language || "",
-      body.duration || "",
+  ).run()
 
-      body.genres || "",
-      body.tags || "",
-      body.description || "",
-
-      body.isHome ? 1 : 0,
-      body.isTrending ? 1 : 0,
-      body.isMostViewed ? 1 : 0,
-      body.isBanner ? 1 : 0,
-
-      body.isHidden ? 1 : 0,
-      Date.now()
-    ).run()
-
-    return c.json({
-      success:true,
-      id,
-      slug
-    })
-
-  }catch(err){
-
-    console.error(err)
-
-    return c.json({
-      success:false,
-      error:err.message
-    },500)
-  }
+  return c.json({ success: true, id })
 })
 
 /* =========================
@@ -165,7 +132,7 @@ app.delete("/:id", async (c) => {
     DELETE FROM anime WHERE id=?
   `).bind(id).run()
 
-  return c.json({ success:true })
+  return c.json({ success: true })
 })
 
 /* =========================
@@ -176,13 +143,17 @@ app.patch("/hide/:id", async (c) => {
 
   const id = c.req.param("id")
 
-  await c.env.DB.prepare(`
-    UPDATE anime
-    SET is_hidden = CASE WHEN is_hidden=1 THEN 0 ELSE 1 END
-    WHERE id=?
-  `).bind(id).run()
+  const { results } = await c.env.DB.prepare(`
+    SELECT is_hidden FROM anime WHERE id=?
+  `).bind(id).all()
 
-  return c.json({ success:true })
+  const current = results[0]?.is_hidden ? 1 : 0
+
+  await c.env.DB.prepare(`
+    UPDATE anime SET is_hidden=? WHERE id=?
+  `).bind(current ? 0 : 1, id).run()
+
+  return c.json({ success: true })
 })
 
 export default app
