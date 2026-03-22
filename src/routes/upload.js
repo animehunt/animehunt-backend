@@ -3,24 +3,25 @@ import { Hono } from "hono"
 const app = new Hono()
 
 app.post("/", async (c) => {
+
   try {
 
-    const body = await c.req.json()
+    const { file } = await c.req.json()
 
-    if (!body.file) {
+    if (!file) {
       return c.json({ success: false, error: "File required" }, 400)
     }
 
-    let base64 = body.file
+    let base64 = file
 
-    // remove prefix
-    if (base64.startsWith("data:")) {
-      base64 = base64.split(",")[1]
+    // ✅ ensure full base64 format
+    if (!base64.startsWith("data:")) {
+      base64 = `data:image/jpeg;base64,${base64}`
     }
 
     const form = new FormData()
 
-    form.append("file", base64)
+    form.append("file", base64)   // ✅ FIXED
     form.append("fileName", Date.now() + ".jpg")
     form.append("folder", "/animehunt")
     form.append("useUniqueFileName", "true")
@@ -37,17 +38,17 @@ app.post("/", async (c) => {
 
     if (!data.url) {
       console.error("ImageKit Error:", data)
-      return c.json({ success: false, error: "Upload failed" }, 500)
+      return c.json({ success: false, error: data.error || "Upload failed" }, 500)
     }
 
     return c.json({
       success: true,
-      url: data.url   // 🔥 IMPORTANT
+      url: data.url
     })
 
   } catch (err) {
 
-    console.error(err)
+    console.error("Upload crash:", err)
 
     return c.json({
       success: false,
@@ -55,6 +56,7 @@ app.post("/", async (c) => {
     }, 500)
 
   }
+
 })
 
 export default app
