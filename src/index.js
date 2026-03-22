@@ -8,7 +8,7 @@ const app = new Hono()
 app.use("*", cors({
   origin: "*",
   allowHeaders: ["Content-Type", "Authorization"],
-  allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+  allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 }))
 
 /* ================= ROUTES ================= */
@@ -38,7 +38,7 @@ import downloads from "./routes/downloads.js"
 import homepage from "./routes/homepage.js"
 import footer from "./routes/footer.js"
 
-/* UPLOAD (ONLY THIS) */
+/* 🔥 UPLOAD FIX */
 import upload from "./routes/upload.js"
 
 /* SEARCH */
@@ -120,7 +120,7 @@ app.route("/api/admin", ai)
 
 app.route("/api/admin", deploy)
 
-/* ✅ UPLOAD FIX */
+/* ✅ UPLOAD ROUTE (IMPORTANT) */
 app.route("/api/admin", upload)
 
 /* ================= PUBLIC ================= */
