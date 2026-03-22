@@ -1,79 +1,199 @@
-import { Hono } from "hono"
-const app = new Hono()
+import { Hono } from 'hono'
 
-// GET ALL ANIME
-app.get("/", async (c) => {
-  const { type, status, home, q } = c.req.query()
-  let sql = `SELECT * FROM anime WHERE 1=1`
-  const params = []
+const animeRoute = new Hono()
 
-  if (type) { sql += ` AND type=?`; params.push(type); }
-  if (status) { sql += ` AND status=?`; params.push(status); }
-  if (home === "yes") sql += ` AND is_home=1`
-  if (home === "no") sql += ` AND is_home=0`
-  if (q) { sql += ` AND title LIKE ?`; params.push(`%${q}%`); }
+// ==========================
+// UTILITIES
+// ==========================
 
-  sql += ` ORDER BY created_at DESC`
-  const { results } = await c.env.DB.prepare(sql).bind(...params).all()
-  return c.json(results || [])
+const success = (data) => ({
+  success: true,
+  data
 })
 
-// GET SINGLE ANIME
-app.get("/:id", async (c) => {
-  const id = c.req.param("id")
-  const row = await c.env.DB.prepare(`SELECT * FROM anime WHERE id=?`).bind(id).first()
-  return c.json(row || {})
+const failure = (message, code = "ERROR") => ({
+  success: false,
+  message,
+  error_code: code
 })
 
-// CREATE OR UPDATE ANIME (FIXED SQL)
-app.post("/", async (c) => {
+const now = () => new Date().toISOString()
+
+// ==========================
+// CREATE ANIME
+// ==========================
+animeRoute.post('/', async (c) => {
   try {
-    const b = await c.req.json()
-    if (!b.title) return c.json({ success: false, error: "Title required" }, 400)
+    const db = c.env.DB
+    const body = await c.req.json()
 
-    const id = b.id || crypto.randomUUID()
-    const createdAt = b.id ? undefined : Date.now() // Sirf naye anime ke liye date
+    if (!body.title) {
+      return c.json(failure("Title required"), 400)
+    }
 
-    // Query with exactly 20 columns
-    const sql = `
-      INSERT OR REPLACE INTO anime (
-        id, title, slug, type, status, poster, banner, 
-        year, rating, language, duration, genres, tags, 
-        description, is_home, is_trending, is_most_viewed, 
-        is_banner, is_hidden, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM anime WHERE id=?), ?))
-    `
+    // slug check unique
+    const slugCheck = await db.prepare(
+      `SELECT id FROM anime WHERE slug = ?`
+    ).bind(body.slug).first()
 
-    await c.env.DB.prepare(sql).bind(
-      id, b.title, b.slug || "", b.type || "anime", b.status || "ongoing",
-      b.poster || "", b.banner || "", b.year || "", b.rating || "",
-      b.language || "", b.duration || "", b.genres || "", b.tags || "",
-      b.description || "", 
-      b.isHome ? 1 : 0, b.isTrending ? 1 : 0, b.isMostViewed ? 1 : 0, b.isBanner ? 1 : 0,
-      0, id, Date.now()
+    if (slugCheck) {
+      return c.json(failure("Slug already exists", "SLUG_EXISTS"), 400)
+    }
+
+    const id = crypto.randomUUID()
+
+    await db.prepare(`
+      INSERT INTO anime (
+        id, title, slug, type, status,
+        poster, banner, year, rating,
+        language, duration, genres, tags,
+        isHome, isTrending, isMostViewed,
+        isBanner, isHidden,
+        description, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id,
+      body.title,
+      body.slug,
+      body.type,
+      body.status,
+      body.poster,
+      body.banner,
+      body.year,
+      body.rating,
+      body.language,
+      body.duration,
+      JSON.stringify(body.genres || []),
+      JSON.stringify(body.tags || []),
+      body.isHome ? 1 : 0,
+      body.isTrending ? 1 : 0,
+      body.isMostViewed ? 1 : 0,
+      body.isBanner ? 1 : 0,
+      body.isHidden ? 1 : 0,
+      body.description,
+      now(),
+      now()
     ).run()
 
-    return c.json({ success: true, id })
-  } catch (e) {
-    console.error(e)
-    return c.json({ success: false, error: e.message }, 500)
+    return c.json(success({ id }))
+
+  } catch (err) {
+    console.error(err)
+    return c.json(failure(err.message), 500)
   }
 })
 
+
+// ==========================
+// GET ALL ANIME
+// ==========================
+animeRoute.get('/', async (c) => {
+  try {
+    const db = c.env.DB
+
+    const { results } = await db.prepare(`
+      SELECT * FROM anime
+      ORDER BY created_at DESC
+    `).all()
+
+    const parsed = results.map(a => ({
+      ...a,
+      genres: JSON.parse(a.genres || "[]"),
+      tags: JSON.parse(a.tags || "[]"),
+      isHome: !!a.isHome,
+      isTrending: !!a.isTrending,
+      isMostViewed: !!a.isMostViewed,
+      isBanner: !!a.isBanner,
+      isHidden: !!a.isHidden
+    }))
+
+    return c.json(success(parsed))
+
+  } catch (err) {
+    console.error(err)
+    return c.json(failure(err.message), 500)
+  }
+})
+
+
+// ==========================
+// UPDATE ANIME
+// ==========================
+animeRoute.put('/:id', async (c) => {
+  try {
+    const db = c.env.DB
+    const id = c.req.param('id')
+    const body = await c.req.json()
+
+    // slug conflict check
+    const slugCheck = await db.prepare(
+      `SELECT id FROM anime WHERE slug = ? AND id != ?`
+    ).bind(body.slug, id).first()
+
+    if (slugCheck) {
+      return c.json(failure("Slug already exists"), 400)
+    }
+
+    await db.prepare(`
+      UPDATE anime SET
+        title = ?, slug = ?, type = ?, status = ?,
+        poster = ?, banner = ?, year = ?, rating = ?,
+        language = ?, duration = ?, genres = ?, tags = ?,
+        isHome = ?, isTrending = ?, isMostViewed = ?,
+        isBanner = ?, isHidden = ?,
+        description = ?, updated_at = ?
+      WHERE id = ?
+    `).bind(
+      body.title,
+      body.slug,
+      body.type,
+      body.status,
+      body.poster,
+      body.banner,
+      body.year,
+      body.rating,
+      body.language,
+      body.duration,
+      JSON.stringify(body.genres || []),
+      JSON.stringify(body.tags || []),
+      body.isHome ? 1 : 0,
+      body.isTrending ? 1 : 0,
+      body.isMostViewed ? 1 : 0,
+      body.isBanner ? 1 : 0,
+      body.isHidden ? 1 : 0,
+      body.description,
+      now(),
+      id
+    ).run()
+
+    return c.json(success({ id }))
+
+  } catch (err) {
+    console.error(err)
+    return c.json(failure(err.message), 500)
+  }
+})
+
+
+// ==========================
 // DELETE ANIME
-app.delete("/:id", async (c) => {
-  const id = c.req.param("id")
-  await c.env.DB.prepare(`DELETE FROM anime WHERE id=?`).bind(id).run()
-  return c.json({ success: true })
+// ==========================
+animeRoute.delete('/:id', async (c) => {
+  try {
+    const db = c.env.DB
+    const id = c.req.param('id')
+
+    await db.prepare(`DELETE FROM anime WHERE id = ?`)
+      .bind(id)
+      .run()
+
+    return c.json(success({ id }))
+
+  } catch (err) {
+    console.error(err)
+    return c.json(failure(err.message), 500)
+  }
 })
 
-// TOGGLE HIDE
-app.patch("/hide/:id", async (c) => {
-  const id = c.req.param("id")
-  const row = await c.env.DB.prepare(`SELECT is_hidden FROM anime WHERE id=?`).bind(id).first()
-  const next = row?.is_hidden ? 0 : 1
-  await c.env.DB.prepare(`UPDATE anime SET is_hidden=? WHERE id=?`).bind(next, id).run()
-  return c.json({ success: true })
-})
-
-export default app
+export default animeRoute
