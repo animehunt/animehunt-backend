@@ -1,66 +1,19 @@
-import { Hono } from 'hono'
+import { Hono } from "hono"
 
 const app = new Hono()
 
 /* =========================
-CORS
-========================= */
-app.use('*', async (c, next) => {
-  c.header("Access-Control-Allow-Origin", "*")
-  c.header("Access-Control-Allow-Methods", "GET,POST,DELETE,PATCH,OPTIONS")
-  c.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-  if (c.req.method === "OPTIONS") return c.text("")
-  await next()
-})
-
-/* =========================
-AUTH MIDDLEWARE
-========================= */
-app.use('/api/admin/*', async (c, next) => {
-  const auth = c.req.header("Authorization") || ""
-  if (!auth.startsWith("Bearer ")) {
-    return c.json({ error: "Unauthorized" }, 401)
-  }
-  await next()
-})
-
-/* =========================
-UTILS
+GET ALL ANIME (FILTER + SEARCH)
 ========================= */
 
-function slugify(text){
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g,'-')
-    .replace(/(^-|-$)/g,'')
-}
-
-/* IMAGEKIT UPLOAD */
-async function uploadImage(env, fileBase64){
-
-  const res = await fetch("https://upload.imagekit.io/api/v1/files/upload",{
-    method:"POST",
-    headers:{
-      Authorization:"Basic "+btoa(env.IMAGEKIT_PUBLIC_KEY+":")
-    },
-    body:new URLSearchParams({
-      file:fileBase64,
-      fileName:"anime_"+Date.now()+".jpg"
-    })
-  })
-
-  const data = await res.json()
-  return data.url
-}
-app.get('/api/admin/anime', async (c) => {
+app.get("/", async (c) => {
 
   const { DB } = c.env
 
-  const type = c.req.query('type')
-  const status = c.req.query('status')
-  const home = c.req.query('home')
-  const q = c.req.query('q')
+  const type = c.req.query("type")
+  const status = c.req.query("status")
+  const home = c.req.query("home")
+  const q = c.req.query("q")
 
   let sql = "SELECT * FROM anime WHERE 1=1"
   let params = []
@@ -94,72 +47,119 @@ app.get('/api/admin/anime', async (c) => {
 
   return c.json(result.results)
 })
-app.post('/api/admin/anime', async (c) => {
 
-  const { DB, IMAGEKIT_PUBLIC_KEY } = c.env
-  const body = await c.req.json()
+/* =========================
+GET SINGLE ANIME
+========================= */
 
-  let poster = body.poster
-  let banner = body.banner
+app.get("/:id", async (c) => {
 
-  /* AUTO IMAGE UPLOAD */
-  if(poster && poster.startsWith("data:")){
-    poster = await uploadImage(c.env, poster)
-  }
+  const id = c.req.param("id")
 
-  if(banner && banner.startsWith("data:")){
-    banner = await uploadImage(c.env, banner)
-  }
+  const data = await c.env.DB.prepare(`
+    SELECT * FROM anime WHERE id=?
+  `).bind(id).first()
 
-  const id = body.id || crypto.randomUUID()
-
-  const slug = body.slug || slugify(body.title)
-
-  await DB.prepare(`
-    INSERT OR REPLACE INTO anime (
-      id,title,slug,type,status,
-      poster,banner,
-      year,rating,language,duration,
-      genres,tags,description,
-      is_home,is_trending,is_most_viewed,is_banner,
-      is_hidden,created_at
-    )
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `)
-  .bind(
-    id,
-    body.title,
-    slug,
-    body.type,
-    body.status,
-
-    poster,
-    banner,
-
-    body.year,
-    body.rating,
-    body.language,
-    body.duration,
-
-    body.genres,
-    body.tags,
-    body.description,
-
-    body.isHome ? 1 : 0,
-    body.isTrending ? 1 : 0,
-    body.isMostViewed ? 1 : 0,
-    body.isBanner ? 1 : 0,
-
-    0,
-    Date.now()
-  )
-  .run()
-
-  return c.json({ success:true })
+  return c.json(data || {})
 })
-app.delete('/api/admin/anime/:id', async (c) => {
 
-  const id = c.req.param('id')
+/* =========================
+SAVE (CREATE + UPDATE)
+========================= */
+
+app.post("/", async (c) => {
+
+  try{
+
+    const body = await c.req.json()
+
+    /* VALIDATION */
+    if(!body.title){
+      return c.json({ success:false, error:"Title required" },400)
+    }
+
+    /* AUTO SLUG */
+    let slug = body.slug
+    if(!slug){
+      slug = body.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g,'-')
+        .replace(/(^-|-$)/g,'')
+    }
+
+    const id = body.id || crypto.randomUUID()
+
+    /* DUPLICATE SLUG CHECK */
+    const existing = await c.env.DB.prepare(`
+      SELECT id FROM anime WHERE slug=? AND id!=?
+    `).bind(slug, id).first()
+
+    if(existing){
+      slug = slug + "-" + Date.now()
+    }
+
+    await c.env.DB.prepare(`
+      INSERT OR REPLACE INTO anime (
+        id,title,slug,type,status,
+        poster,banner,
+        year,rating,language,duration,
+        genres,tags,description,
+        is_home,is_trending,is_most_viewed,is_banner,
+        is_hidden,created_at
+      )
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(
+      id,
+      body.title,
+      slug,
+      body.type || "anime",
+      body.status || "ongoing",
+
+      body.poster || "",
+      body.banner || "",
+
+      body.year || "",
+      body.rating || "",
+      body.language || "",
+      body.duration || "",
+
+      body.genres || "",
+      body.tags || "",
+      body.description || "",
+
+      body.isHome ? 1 : 0,
+      body.isTrending ? 1 : 0,
+      body.isMostViewed ? 1 : 0,
+      body.isBanner ? 1 : 0,
+
+      body.isHidden ? 1 : 0,
+      Date.now()
+    ).run()
+
+    return c.json({
+      success:true,
+      id,
+      slug
+    })
+
+  }catch(err){
+
+    console.error(err)
+
+    return c.json({
+      success:false,
+      error:err.message
+    },500)
+  }
+})
+
+/* =========================
+DELETE
+========================= */
+
+app.delete("/:id", async (c) => {
+
+  const id = c.req.param("id")
 
   await c.env.DB.prepare(`
     DELETE FROM anime WHERE id=?
@@ -167,9 +167,14 @@ app.delete('/api/admin/anime/:id', async (c) => {
 
   return c.json({ success:true })
 })
-app.patch('/api/admin/anime-hide/:id', async (c) => {
 
-  const id = c.req.param('id')
+/* =========================
+HIDE / UNHIDE
+========================= */
+
+app.patch("/hide/:id", async (c) => {
+
+  const id = c.req.param("id")
 
   await c.env.DB.prepare(`
     UPDATE anime
@@ -179,4 +184,5 @@ app.patch('/api/admin/anime-hide/:id', async (c) => {
 
   return c.json({ success:true })
 })
+
 export default app
