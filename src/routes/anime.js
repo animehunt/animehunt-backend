@@ -3,9 +3,8 @@ import { Hono } from "hono"
 const app = new Hono()
 
 /* =========================
-GET ALL ANIME
+GET ALL
 ========================= */
-
 app.get("/", async (c) => {
 
   const { type, status, home, q } = c.req.query()
@@ -23,13 +22,8 @@ app.get("/", async (c) => {
     params.push(status)
   }
 
-  if (home === "yes") {
-    sql += ` AND is_home=1`
-  }
-
-  if (home === "no") {
-    sql += ` AND is_home=0`
-  }
+  if (home === "yes") sql += ` AND is_home=1`
+  if (home === "no") sql += ` AND is_home=0`
 
   if (q) {
     sql += ` AND title LIKE ?`
@@ -46,84 +40,76 @@ app.get("/", async (c) => {
 /* =========================
 GET SINGLE
 ========================= */
-
 app.get("/:id", async (c) => {
 
   const id = c.req.param("id")
 
-  const { results } = await c.env.DB.prepare(`
+  const row = await c.env.DB.prepare(`
     SELECT * FROM anime WHERE id=?
-  `).bind(id).all()
+  `).bind(id).first()
 
-  return c.json(results[0] || {})
+  return c.json(row || {})
 })
 
 /* =========================
 CREATE / UPDATE
 ========================= */
-
 app.post("/", async (c) => {
 
   const b = await c.req.json()
+
+  if (!b.title) {
+    return c.json({ success:false, error:"Title required" },400)
+  }
 
   const id = b.id || crypto.randomUUID()
 
   await c.env.DB.prepare(`
     INSERT OR REPLACE INTO anime(
-      id,
-      title,
-      slug,
-      type,
-      status,
-      poster,
-      banner,
-      year,
-      rating,
-      language,
-      duration,
-      genres,
-      tags,
-      description,
-      is_home,
-      is_trending,
-      is_most_viewed,
-      is_banner,
-      is_hidden,
-      created_at
+      id,title,slug,type,status,
+      poster,banner,
+      year,rating,language,duration,
+      genres,tags,description,
+      is_home,is_trending,is_most_viewed,is_banner,
+      is_hidden,created_at
     )
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
 
     id,
     b.title,
-    b.slug,
-    b.type,
-    b.status,
-    b.poster,
-    b.banner,
-    b.year,
-    b.rating,
-    b.language,
-    b.duration,
-    b.genres,
-    b.tags,
-    b.description,
+    b.slug || "",
+    b.type || "anime",
+    b.status || "ongoing",
+
+    b.poster || "",
+    b.banner || "",
+
+    b.year || "",
+    b.rating || "",
+    b.language || "",
+    b.duration || "",
+
+    b.genres || "",
+    b.tags || "",
+    b.description || "",
+
     b.isHome ? 1 : 0,
     b.isTrending ? 1 : 0,
     b.isMostViewed ? 1 : 0,
     b.isBanner ? 1 : 0,
+
     0,
     Date.now()
 
   ).run()
 
-  return c.json({ success: true, id })
+  return c.json({ success:true, id })
 })
 
 /* =========================
 DELETE
 ========================= */
-
 app.delete("/:id", async (c) => {
 
   const id = c.req.param("id")
@@ -132,28 +118,27 @@ app.delete("/:id", async (c) => {
     DELETE FROM anime WHERE id=?
   `).bind(id).run()
 
-  return c.json({ success: true })
+  return c.json({ success:true })
 })
 
 /* =========================
-HIDE / UNHIDE
+HIDE
 ========================= */
-
 app.patch("/hide/:id", async (c) => {
 
   const id = c.req.param("id")
 
-  const { results } = await c.env.DB.prepare(`
+  const row = await c.env.DB.prepare(`
     SELECT is_hidden FROM anime WHERE id=?
-  `).bind(id).all()
+  `).bind(id).first()
 
-  const current = results[0]?.is_hidden ? 1 : 0
+  const next = row?.is_hidden ? 0 : 1
 
   await c.env.DB.prepare(`
     UPDATE anime SET is_hidden=? WHERE id=?
-  `).bind(current ? 0 : 1, id).run()
+  `).bind(next, id).run()
 
-  return c.json({ success: true })
+  return c.json({ success:true })
 })
 
 export default app
