@@ -1,115 +1,174 @@
 import { Hono } from 'hono'
-import { cors } from 'hono/cors'
 
 const app = new Hono()
 
-app.use('*', cors())
+/* =========================
+CORS
+========================= */
+app.use('*', async (c, next) => {
+  c.header("Access-Control-Allow-Origin", "*")
+  c.header("Access-Control-Allow-Methods", "GET,POST,DELETE,PATCH,OPTIONS")
+  c.header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-// ---------------- GET LIST ----------------
-app.get('/', async (c) => {
-  const { type, status, home, q } = c.req.query()
-
-  let query = "SELECT * FROM anime WHERE 1=1"
-  const params = []
-
-  if (type) { query += " AND type=?"; params.push(type) }
-  if (status) { query += " AND status=?"; params.push(status) }
-  if (home === "yes") query += " AND is_home=1"
-  if (home === "no") query += " AND is_home=0"
-  if (q) { query += " AND title LIKE ?"; params.push(`%${q}%`) }
-
-  query += " ORDER BY created_at DESC"
-
-  const { results } = await c.env.DB.prepare(query).bind(...params).all()
-  return c.json(results)
+  if (c.req.method === "OPTIONS") return c.text("")
+  await next()
 })
 
-// ---------------- GET ONE ----------------
-app.get('/:id', async (c) => {
-  const id = c.req.param('id')
-  const result = await c.env.DB.prepare(
-    "SELECT * FROM anime WHERE id=?"
-  ).bind(id).first()
-
-  return c.json(result || {})
-})
-
-// ---------------- SAVE ----------------
-app.post('/', async (c) => {
-  try {
-    const body = await c.req.json()
-    const isUpdate = !!body.id
-    const id = body.id || crypto.randomUUID()
-
-    if (isUpdate) {
-
-      await c.env.DB.prepare(`
-        UPDATE anime SET
-        title=?, slug=?, type=?, status=?, poster=?, banner=?,
-        year=?, rating=?, language=?, duration=?,
-        genres=?, tags=?, description=?,
-        is_home=?, is_trending=?, is_most_viewed=?, is_banner=?,
-        created_at=?
-        WHERE id=?
-      `).bind(
-        body.title, body.slug, body.type, body.status,
-        body.poster, body.banner,
-        body.year, body.rating, body.language, body.duration,
-        body.genres, body.tags, body.description,
-        body.isHome ? 1:0,
-        body.isTrending ? 1:0,
-        body.isMostViewed ? 1:0,
-        body.isBanner ? 1:0,
-        Date.now(),
-        id
-      ).run()
-
-    } else {
-
-      await c.env.DB.prepare(`
-        INSERT INTO anime (
-          title, slug, type, status, poster, banner,
-          year, rating, language, duration,
-          genres, tags, description,
-          is_home, is_trending, is_most_viewed, is_banner,
-          created_at, is_hidden, id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      `).bind(
-        body.title, body.slug, body.type, body.status,
-        body.poster, body.banner,
-        body.year, body.rating, body.language, body.duration,
-        body.genres, body.tags, body.description,
-        body.isHome ? 1:0,
-        body.isTrending ? 1:0,
-        body.isMostViewed ? 1:0,
-        body.isBanner ? 1:0,
-        Date.now(),
-        0,
-        id
-      ).run()
-
-    }
-
-    return c.json({ success:true })
-
-  } catch (err) {
-    return c.json({ success:false, error:err.message })
+/* =========================
+AUTH MIDDLEWARE
+========================= */
+app.use('/api/admin/*', async (c, next) => {
+  const auth = c.req.header("Authorization") || ""
+  if (!auth.startsWith("Bearer ")) {
+    return c.json({ error: "Unauthorized" }, 401)
   }
+  await next()
 })
 
-// ---------------- DELETE ----------------
-app.delete('/:id', async (c) => {
-  const id = c.req.param('id')
+/* =========================
+UTILS
+========================= */
 
-  await c.env.DB.prepare(
-    "DELETE FROM anime WHERE id=?"
-  ).bind(id).run()
+function slugify(text){
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g,'-')
+    .replace(/(^-|-$)/g,'')
+}
+
+/* IMAGEKIT UPLOAD */
+async function uploadImage(env, fileBase64){
+
+  const res = await fetch("https://upload.imagekit.io/api/v1/files/upload",{
+    method:"POST",
+    headers:{
+      Authorization:"Basic "+btoa(env.IMAGEKIT_PUBLIC_KEY+":")
+    },
+    body:new URLSearchParams({
+      file:fileBase64,
+      fileName:"anime_"+Date.now()+".jpg"
+    })
+  })
+
+  const data = await res.json()
+  return data.url
+}
+app.get('/api/admin/anime', async (c) => {
+
+  const { DB } = c.env
+
+  const type = c.req.query('type')
+  const status = c.req.query('status')
+  const home = c.req.query('home')
+  const q = c.req.query('q')
+
+  let sql = "SELECT * FROM anime WHERE 1=1"
+  let params = []
+
+  if(type){
+    sql += " AND type=?"
+    params.push(type)
+  }
+
+  if(status){
+    sql += " AND status=?"
+    params.push(status)
+  }
+
+  if(home === "yes"){
+    sql += " AND is_home=1"
+  }
+
+  if(home === "no"){
+    sql += " AND is_home=0"
+  }
+
+  if(q){
+    sql += " AND title LIKE ?"
+    params.push(`%${q}%`)
+  }
+
+  sql += " ORDER BY created_at DESC"
+
+  const result = await DB.prepare(sql).bind(...params).all()
+
+  return c.json(result.results)
+})
+app.post('/api/admin/anime', async (c) => {
+
+  const { DB, IMAGEKIT_PUBLIC_KEY } = c.env
+  const body = await c.req.json()
+
+  let poster = body.poster
+  let banner = body.banner
+
+  /* AUTO IMAGE UPLOAD */
+  if(poster && poster.startsWith("data:")){
+    poster = await uploadImage(c.env, poster)
+  }
+
+  if(banner && banner.startsWith("data:")){
+    banner = await uploadImage(c.env, banner)
+  }
+
+  const id = body.id || crypto.randomUUID()
+
+  const slug = body.slug || slugify(body.title)
+
+  await DB.prepare(`
+    INSERT OR REPLACE INTO anime (
+      id,title,slug,type,status,
+      poster,banner,
+      year,rating,language,duration,
+      genres,tags,description,
+      is_home,is_trending,is_most_viewed,is_banner,
+      is_hidden,created_at
+    )
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `)
+  .bind(
+    id,
+    body.title,
+    slug,
+    body.type,
+    body.status,
+
+    poster,
+    banner,
+
+    body.year,
+    body.rating,
+    body.language,
+    body.duration,
+
+    body.genres,
+    body.tags,
+    body.description,
+
+    body.isHome ? 1 : 0,
+    body.isTrending ? 1 : 0,
+    body.isMostViewed ? 1 : 0,
+    body.isBanner ? 1 : 0,
+
+    0,
+    Date.now()
+  )
+  .run()
 
   return c.json({ success:true })
 })
+app.delete('/api/admin/anime/:id', async (c) => {
 
-// ---------------- TOGGLE HIDE ----------------
-app.patch('/hide/:id', async (c) => {
+  const id = c.req.param('id')
+
+  await c.env.DB.prepare(`
+    DELETE FROM anime WHERE id=?
+  `).bind(id).run()
+
+  return c.json({ success:true })
+})
+app.patch('/api/admin/anime-hide/:id', async (c) => {
+
   const id = c.req.param('id')
 
   await c.env.DB.prepare(`
@@ -120,5 +179,4 @@ app.patch('/hide/:id', async (c) => {
 
   return c.json({ success:true })
 })
-
 export default app
