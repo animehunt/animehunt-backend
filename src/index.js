@@ -11,7 +11,7 @@ app.use("*", cors({
   allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 }))
 
-/* ✅ OPTIONS FIX (IMPORTANT) */
+/* ✅ OPTIONS FIX */
 app.options("*", (c) => c.text("", 204))
 
 /* ================= ROUTES ================= */
@@ -89,41 +89,57 @@ app.get("/", (c) => {
 
 /* ================= ADMIN ================= */
 
-app.route("/api/admin/auth", auth)
+/* 🔥 AUTH (DUAL SUPPORT) */
+app.route("/api/admin", auth)          // OLD (important)
+app.route("/api/admin/auth", auth)     // NEW
+
 app.route("/api/admin/dashboard", dashboard)
 
+/* CORE */
 app.route("/api/admin/anime", anime)
 app.route("/api/admin/episodes", episodes)
 app.route("/api/admin/categories", categories)
 app.route("/api/admin/banners", banners)
 
+/* SERVERS */
 app.route("/api/admin/servers", adminServers)
 
+/* DOWNLOADS */
 app.route("/api/admin/downloads", downloads)
 
+/* UI */
 app.route("/api/admin/homepage", homepage)
 app.route("/api/admin/footer", footer)
 
+/* SEARCH */
 app.route("/api/admin/search", searchAdmin)
 
+/* SEO */
 app.route("/api/admin/seo", seoAdmin)
 
+/* SECURITY */
 app.route("/api/admin/security", securityAdmin)
 
+/* PERFORMANCE */
 app.route("/api/admin/performance", performance)
 
+/* SYSTEM */
 app.route("/api/admin/system", system)
 
+/* ADS */
 app.route("/api/admin/ads", ads)
 app.route("/api/admin/ads-analytics", adsAnalytics)
 
+/* ANALYTICS */
 app.route("/api/admin/analytics", analyticsAdmin)
 
+/* AI */
 app.route("/api/admin/ai", ai)
 
+/* DEPLOY */
 app.route("/api/admin/deploy", deploy)
 
-/* ✅ UPLOAD (IMPORTANT FIX) */
+/* ✅ UPLOAD (FIXED) */
 app.route("/api/upload", upload)
 
 /* ================= PUBLIC ================= */
