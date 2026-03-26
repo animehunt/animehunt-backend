@@ -2,6 +2,10 @@ import { Hono } from 'hono'
 
 const animeRoute = new Hono()
 
+/* ========================== */
+/* HELPERS */
+/* ========================== */
+
 const success = (data) => ({
   success: true,
   data
@@ -15,24 +19,52 @@ const failure = (message, code = "ERROR") => ({
 
 const now = () => new Date().toISOString()
 
-// ==========================
-// CREATE ANIME
-// ==========================
+const makeSlug = (text) => {
+  return text
+    ?.toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
+}
+
+const safeParse = (val) => {
+  try {
+    return JSON.parse(val || "[]")
+  } catch {
+    return []
+  }
+}
+
+/* ========================== */
+/* CREATE */
+/* ========================== */
+
 animeRoute.post('/anime', async (c) => {
   try {
     const db = c.env.DB
     const body = await c.req.json()
 
-    if (!body.title) {
+    console.log("CREATE BODY:", body)
+
+    // VALIDATION
+    if (!body.title?.trim()) {
       return c.json(failure("Title required"), 400)
     }
 
-    const slugCheck = await db.prepare(
-      `SELECT id FROM anime WHERE slug = ?`
-    ).bind(body.slug).first()
+    if (!body.poster) {
+      return c.json(failure("Poster required"), 400)
+    }
 
-    if (slugCheck) {
-      return c.json(failure("Slug already exists", "SLUG_EXISTS"), 400)
+    // SLUG AUTO
+    const slug = (body.slug?.trim() || makeSlug(body.title))
+
+    // UNIQUE CHECK
+    const exists = await db.prepare(
+      `SELECT id FROM anime WHERE slug = ?`
+    ).bind(slug).first()
+
+    if (exists) {
+      return c.json(failure("Slug already exists"), 400)
     }
 
     const id = crypto.randomUUID()
@@ -49,24 +81,31 @@ animeRoute.post('/anime', async (c) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
-      body.title,
-      body.slug,
-      body.type,
-      body.status,
-      body.poster,
-      body.banner,
-      body.year,
-      body.rating,
-      body.language,
-      body.duration,
-      JSON.stringify(body.genres || []),
-      JSON.stringify(body.tags || []),
+      body.title.trim(),
+      slug,
+
+      body.type || "anime",
+      body.status || "ongoing",
+
+      body.poster || "",
+      body.banner || "",
+
+      Number(body.year) || null,
+      Number(body.rating) || null,
+
+      body.language || "",
+      body.duration || "",
+
+      JSON.stringify(Array.isArray(body.genres) ? body.genres : []),
+      JSON.stringify(Array.isArray(body.tags) ? body.tags : []),
+
       body.isHome ? 1 : 0,
       body.isTrending ? 1 : 0,
       body.isMostViewed ? 1 : 0,
       body.isBanner ? 1 : 0,
       body.isHidden ? 1 : 0,
-      body.description,
+
+      body.description || "",
       now(),
       now()
     ).run()
@@ -74,14 +113,15 @@ animeRoute.post('/anime', async (c) => {
     return c.json(success({ id }))
 
   } catch (err) {
-    console.error(err)
+    console.error("CREATE ERROR:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
-// ==========================
-// GET ALL ANIME
-// ==========================
+/* ========================== */
+/* GET ALL */
+/* ========================== */
+
 animeRoute.get('/anime', async (c) => {
   try {
     const db = c.env.DB
@@ -91,10 +131,10 @@ animeRoute.get('/anime', async (c) => {
       ORDER BY created_at DESC
     `).all()
 
-    const parsed = results.map(a => ({
+    const data = results.map(a => ({
       ...a,
-      genres: JSON.parse(a.genres || "[]"),
-      tags: JSON.parse(a.tags || "[]"),
+      genres: safeParse(a.genres),
+      tags: safeParse(a.tags),
       isHome: !!a.isHome,
       isTrending: !!a.isTrending,
       isMostViewed: !!a.isMostViewed,
@@ -102,28 +142,41 @@ animeRoute.get('/anime', async (c) => {
       isHidden: !!a.isHidden
     }))
 
-    return c.json(success(parsed))
+    return c.json(success(data))
 
   } catch (err) {
-    console.error(err)
+    console.error("GET ERROR:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
-// ==========================
-// UPDATE
-// ==========================
+/* ========================== */
+/* UPDATE */
+/* ========================== */
+
 animeRoute.put('/anime/:id', async (c) => {
   try {
     const db = c.env.DB
     const id = c.req.param('id')
     const body = await c.req.json()
 
-    const slugCheck = await db.prepare(
-      `SELECT id FROM anime WHERE slug = ? AND id != ?`
-    ).bind(body.slug, id).first()
+    console.log("UPDATE BODY:", body)
 
-    if (slugCheck) {
+    if (!body.title?.trim()) {
+      return c.json(failure("Title required"), 400)
+    }
+
+    if (!body.poster) {
+      return c.json(failure("Poster required"), 400)
+    }
+
+    const slug = (body.slug?.trim() || makeSlug(body.title))
+
+    const exists = await db.prepare(
+      `SELECT id FROM anime WHERE slug = ? AND id != ?`
+    ).bind(slug, id).first()
+
+    if (exists) {
       return c.json(failure("Slug already exists"), 400)
     }
 
@@ -137,24 +190,31 @@ animeRoute.put('/anime/:id', async (c) => {
         description = ?, updated_at = ?
       WHERE id = ?
     `).bind(
-      body.title,
-      body.slug,
-      body.type,
-      body.status,
-      body.poster,
-      body.banner,
-      body.year,
-      body.rating,
-      body.language,
-      body.duration,
-      JSON.stringify(body.genres || []),
-      JSON.stringify(body.tags || []),
+      body.title.trim(),
+      slug,
+
+      body.type || "anime",
+      body.status || "ongoing",
+
+      body.poster || "",
+      body.banner || "",
+
+      Number(body.year) || null,
+      Number(body.rating) || null,
+
+      body.language || "",
+      body.duration || "",
+
+      JSON.stringify(Array.isArray(body.genres) ? body.genres : []),
+      JSON.stringify(Array.isArray(body.tags) ? body.tags : []),
+
       body.isHome ? 1 : 0,
       body.isTrending ? 1 : 0,
       body.isMostViewed ? 1 : 0,
       body.isBanner ? 1 : 0,
       body.isHidden ? 1 : 0,
-      body.description,
+
+      body.description || "",
       now(),
       id
     ).run()
@@ -162,14 +222,15 @@ animeRoute.put('/anime/:id', async (c) => {
     return c.json(success({ id }))
 
   } catch (err) {
-    console.error(err)
+    console.error("UPDATE ERROR:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
-// ==========================
-// DELETE
-// ==========================
+/* ========================== */
+/* DELETE */
+/* ========================== */
+
 animeRoute.delete('/anime/:id', async (c) => {
   try {
     const db = c.env.DB
@@ -182,7 +243,7 @@ animeRoute.delete('/anime/:id', async (c) => {
     return c.json(success({ id }))
 
   } catch (err) {
-    console.error(err)
+    console.error("DELETE ERROR:", err)
     return c.json(failure(err.message), 500)
   }
 })
