@@ -88,7 +88,10 @@ app.get("/", (c) => {
 
 /* ================= ADMIN ================= */
 
-app.route("/api/admin/auth", auth)
+// ✅ LOGIN FIX (IMPORTANT)
+app.route("/api/admin", auth)
+
+// बाकी सभी routes proper path पर
 app.route("/api/admin/dashboard", dashboard)
 
 app.route("/api/admin/anime", anime)
@@ -122,7 +125,7 @@ app.route("/api/admin/ai", ai)
 
 app.route("/api/admin/deploy", deploy)
 
-/* ✅ UPLOAD */
+// ✅ UPLOAD FIX
 app.route("/api/admin/upload", upload)
 
 /* ================= PUBLIC ================= */
