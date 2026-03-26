@@ -24,25 +24,22 @@ const failure = (message, code = "UPLOAD_ERROR") => ({
   error_code: code
 })
 
-// Upload API
-uploadRoute.post('/', async (c) => {
+// ✅ FIXED ROUTE
+uploadRoute.post('/upload', async (c) => {
   try {
     const body = await c.req.parseBody()
-
     const file = body.file
 
     if (!file || typeof file === 'string') {
       return c.json(failure("File missing or invalid", "NO_FILE"), 400)
     }
 
-    // Convert file to base64
     const arrayBuffer = await file.arrayBuffer()
     const base64 = btoa(
       new Uint8Array(arrayBuffer)
         .reduce((data, byte) => data + String.fromCharCode(byte), '')
     )
 
-    // ImageKit upload
     const uploadToImageKit = async () => {
       const res = await fetch("https://upload.imagekit.io/api/v1/files/upload", {
         method: "POST",
