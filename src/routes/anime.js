@@ -2,10 +2,6 @@ import { Hono } from 'hono'
 
 const animeRoute = new Hono()
 
-// ==========================
-// UTILITIES
-// ==========================
-
 const success = (data) => ({
   success: true,
   data
@@ -22,7 +18,7 @@ const now = () => new Date().toISOString()
 // ==========================
 // CREATE ANIME
 // ==========================
-animeRoute.post('/', async (c) => {
+animeRoute.post('/anime', async (c) => {
   try {
     const db = c.env.DB
     const body = await c.req.json()
@@ -31,7 +27,6 @@ animeRoute.post('/', async (c) => {
       return c.json(failure("Title required"), 400)
     }
 
-    // slug check unique
     const slugCheck = await db.prepare(
       `SELECT id FROM anime WHERE slug = ?`
     ).bind(body.slug).first()
@@ -84,11 +79,10 @@ animeRoute.post('/', async (c) => {
   }
 })
 
-
 // ==========================
 // GET ALL ANIME
 // ==========================
-animeRoute.get('/', async (c) => {
+animeRoute.get('/anime', async (c) => {
   try {
     const db = c.env.DB
 
@@ -116,17 +110,15 @@ animeRoute.get('/', async (c) => {
   }
 })
 
-
 // ==========================
-// UPDATE ANIME
+// UPDATE
 // ==========================
-animeRoute.put('/:id', async (c) => {
+animeRoute.put('/anime/:id', async (c) => {
   try {
     const db = c.env.DB
     const id = c.req.param('id')
     const body = await c.req.json()
 
-    // slug conflict check
     const slugCheck = await db.prepare(
       `SELECT id FROM anime WHERE slug = ? AND id != ?`
     ).bind(body.slug, id).first()
@@ -175,11 +167,10 @@ animeRoute.put('/:id', async (c) => {
   }
 })
 
-
 // ==========================
-// DELETE ANIME
+// DELETE
 // ==========================
-animeRoute.delete('/:id', async (c) => {
+animeRoute.delete('/anime/:id', async (c) => {
   try {
     const db = c.env.DB
     const id = c.req.param('id')
