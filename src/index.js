@@ -40,7 +40,7 @@ import downloads from "./routes/downloads.js"
 import homepage from "./routes/homepage.js"
 import footer from "./routes/footer.js"
 
-/* UPLOAD */
+/* 🔥 UPLOAD */
 import upload from "./routes/upload.js"
 
 /* SEARCH */
@@ -88,65 +88,62 @@ app.get("/", (c) => {
 
 /* ================= ADMIN ================= */
 
-// ✅ LOGIN FIX (IMPORTANT)
+/* ⚠️ IMPORTANT: same base route (LOGIN BREAK NAHI HOGA) */
 app.route("/api/admin", auth)
+app.route("/api/admin", dashboard)
 
-// बाकी सभी routes proper path पर
-app.route("/api/admin/dashboard", dashboard)
+app.route("/api/admin", anime)
+app.route("/api/admin", episodes)
+app.route("/api/admin", categories)
+app.route("/api/admin", banners)
 
-app.route("/api/admin/anime", anime)
-app.route("/api/admin/episodes", episodes)
-app.route("/api/admin/categories", categories)
-app.route("/api/admin/banners", banners)
+app.route("/api/admin", adminServers)
 
-app.route("/api/admin/servers", adminServers)
+app.route("/api/admin", downloads)
 
-app.route("/api/admin/downloads", downloads)
+app.route("/api/admin", homepage)
+app.route("/api/admin", footer)
 
-app.route("/api/admin/homepage", homepage)
-app.route("/api/admin/footer", footer)
+app.route("/api/admin", searchAdmin)
 
-app.route("/api/admin/search", searchAdmin)
+app.route("/api/admin", seoAdmin)
 
-app.route("/api/admin/seo", seoAdmin)
+app.route("/api/admin", securityAdmin)
 
-app.route("/api/admin/security", securityAdmin)
+app.route("/api/admin", performance)
 
-app.route("/api/admin/performance", performance)
+app.route("/api/admin", system)
 
-app.route("/api/admin/system", system)
+app.route("/api/admin", ads)
+app.route("/api/admin", adsAnalytics)
 
-app.route("/api/admin/ads", ads)
-app.route("/api/admin/ads-analytics", adsAnalytics)
+app.route("/api/admin", analyticsAdmin)
 
-app.route("/api/admin/analytics", analyticsAdmin)
+app.route("/api/admin", ai)
 
-app.route("/api/admin/ai", ai)
+app.route("/api/admin", deploy)
 
-app.route("/api/admin/deploy", deploy)
-
-// ✅ UPLOAD FIX
-app.route("/api/admin/upload", upload)
+/* ✅ UPLOAD (same base route, change mat karna) */
+app.route("/api/admin", upload)
 
 /* ================= PUBLIC ================= */
 
-app.route("/api/anime", publicAnime)
-app.route("/api/episodes", publicEpisodes)
-app.route("/api/categories", publicCategories)
-app.route("/api/banners", publicBanners)
+app.route("/api", publicServers)
+app.route("/api", publicEpisodes)
+app.route("/api", publicCategories)
+app.route("/api", publicBanners)
+app.route("/api", publicAnime)
 
-app.route("/api/servers", publicServers)
+app.route("/api", publicAds)
+app.route("/api", adClick)
 
-app.route("/api/ads", publicAds)
-app.route("/api/ad-click", adClick)
+app.route("/api", searchPublic)
 
-app.route("/api/search", searchPublic)
+app.route("/api", seoPublic)
 
-app.route("/api/seo", seoPublic)
+app.route("/api", securityStats)
 
-app.route("/api/security", securityStats)
-
-app.route("/api/analytics", analyticsTrack)
+app.route("/api", analyticsTrack)
 
 /* ================= EXPORT ================= */
 
