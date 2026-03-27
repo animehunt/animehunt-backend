@@ -46,7 +46,6 @@ animeRoute.post('/anime', async (c) => {
 
     console.log("CREATE BODY:", body)
 
-    // VALIDATION
     if (!body.title?.trim()) {
       return c.json(failure("Title required"), 400)
     }
@@ -55,10 +54,8 @@ animeRoute.post('/anime', async (c) => {
       return c.json(failure("Poster required"), 400)
     }
 
-    // SLUG AUTO
     const slug = (body.slug?.trim() || makeSlug(body.title))
 
-    // UNIQUE CHECK
     const exists = await db.prepare(
       `SELECT id FROM anime WHERE slug = ?`
     ).bind(slug).first()
@@ -70,42 +67,34 @@ animeRoute.post('/anime', async (c) => {
     const id = crypto.randomUUID()
 
     await db.prepare(`
-  INSERT INTO anime (
-    id, title, slug, type, status,
-    poster, banner, year, rating,
-    language, duration, genres, tags,
-    is_home, is_trending, is_most_viewed,
-    is_banner, is_hidden,
-    description, created_at, updated_at
-  )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`)
-      .bind(
+      INSERT INTO anime (
+        id, title, slug, type, status,
+        poster, banner, year, rating,
+        language, duration, genres, tags,
+        is_home, is_trending, is_most_viewed,
+        is_banner, is_hidden,
+        description, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
       id,
       body.title.trim(),
       slug,
-
       body.type || "anime",
       body.status || "ongoing",
-
       body.poster || "",
       body.banner || "",
-
       Number(body.year) || null,
       Number(body.rating) || null,
-
       body.language || "",
       body.duration || "",
-
       JSON.stringify(Array.isArray(body.genres) ? body.genres : []),
       JSON.stringify(Array.isArray(body.tags) ? body.tags : []),
-
       body.isHome ? 1 : 0,
       body.isTrending ? 1 : 0,
       body.isMostViewed ? 1 : 0,
       body.isBanner ? 1 : 0,
       body.isHidden ? 1 : 0,
-
       body.description || "",
       now(),
       now()
@@ -133,14 +122,30 @@ animeRoute.get('/anime', async (c) => {
     `).all()
 
     const data = results.map(a => ({
-      ...a,
+      id: a.id,
+      title: a.title,
+      slug: a.slug,
+      type: a.type,
+      status: a.status,
+      poster: a.poster,
+      banner: a.banner,
+      year: a.year,
+      rating: a.rating,
+      language: a.language,
+      duration: a.duration,
       genres: safeParse(a.genres),
       tags: safeParse(a.tags),
-      isHome: !!a.isHome,
-      isTrending: !!a.isTrending,
-      isMostViewed: !!a.isMostViewed,
-      isBanner: !!a.isBanner,
-      isHidden: !!a.isHidden
+
+      // ✅ FIXED MAPPING
+      isHome: !!a.is_home,
+      isTrending: !!a.is_trending,
+      isMostViewed: !!a.is_most_viewed,
+      isBanner: !!a.is_banner,
+      isHidden: !!a.is_hidden,
+
+      description: a.description,
+      created_at: a.created_at,
+      updated_at: a.updated_at
     }))
 
     return c.json(success(data))
@@ -183,38 +188,31 @@ animeRoute.put('/anime/:id', async (c) => {
 
     await db.prepare(`
       UPDATE anime SET
-  title = ?, slug = ?, type = ?, status = ?,
-  poster = ?, banner = ?, year = ?, rating = ?,
-  language = ?, duration = ?, genres = ?, tags = ?,
-  is_home = ?, is_trending = ?, is_most_viewed = ?,
-  is_banner = ?, is_hidden = ?,
-  description = ?, updated_at = ?
-WHERE id = ?
+        title = ?, slug = ?, type = ?, status = ?,
+        poster = ?, banner = ?, year = ?, rating = ?,
+        language = ?, duration = ?, genres = ?, tags = ?,
+        is_home = ?, is_trending = ?, is_most_viewed = ?,
+        is_banner = ?, is_hidden = ?,
+        description = ?, updated_at = ?
+      WHERE id = ?
     `).bind(
       body.title.trim(),
       slug,
-
       body.type || "anime",
       body.status || "ongoing",
-
       body.poster || "",
       body.banner || "",
-
       Number(body.year) || null,
       Number(body.rating) || null,
-
       body.language || "",
       body.duration || "",
-
       JSON.stringify(Array.isArray(body.genres) ? body.genres : []),
       JSON.stringify(Array.isArray(body.tags) ? body.tags : []),
-
       body.isHome ? 1 : 0,
       body.isTrending ? 1 : 0,
       body.isMostViewed ? 1 : 0,
       body.isBanner ? 1 : 0,
       body.isHidden ? 1 : 0,
-
       body.description || "",
       now(),
       id
