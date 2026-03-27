@@ -70,16 +70,17 @@ animeRoute.post('/anime', async (c) => {
     const id = crypto.randomUUID()
 
     await db.prepare(`
-      INSERT INTO anime (
-        id, title, slug, type, status,
-        poster, banner, year, rating,
-        language, duration, genres, tags,
-        isHome, isTrending, isMostViewed,
-        isBanner, isHidden,
-        description, created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
+  INSERT INTO anime (
+    id, title, slug, type, status,
+    poster, banner, year, rating,
+    language, duration, genres, tags,
+    is_home, is_trending, is_most_viewed,
+    is_banner, is_hidden,
+    description, created_at, updated_at
+  )
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`)
+      .bind(
       id,
       body.title.trim(),
       slug,
@@ -182,13 +183,13 @@ animeRoute.put('/anime/:id', async (c) => {
 
     await db.prepare(`
       UPDATE anime SET
-        title = ?, slug = ?, type = ?, status = ?,
-        poster = ?, banner = ?, year = ?, rating = ?,
-        language = ?, duration = ?, genres = ?, tags = ?,
-        isHome = ?, isTrending = ?, isMostViewed = ?,
-        isBanner = ?, isHidden = ?,
-        description = ?, updated_at = ?
-      WHERE id = ?
+  title = ?, slug = ?, type = ?, status = ?,
+  poster = ?, banner = ?, year = ?, rating = ?,
+  language = ?, duration = ?, genres = ?, tags = ?,
+  is_home = ?, is_trending = ?, is_most_viewed = ?,
+  is_banner = ?, is_hidden = ?,
+  description = ?, updated_at = ?
+WHERE id = ?
     `).bind(
       body.title.trim(),
       slug,
