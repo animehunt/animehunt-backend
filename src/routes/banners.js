@@ -23,12 +23,11 @@ const now = () => Date.now()
 /* CREATE */
 /* ========================== */
 
-bannerRoute.post('/', async (c) => {
+bannerRoute.post('/banner', async (c) => {
   try {
     const db = c.env.DB
     const body = await c.req.json()
 
-    // VALIDATION
     if (!body.title?.trim()) {
       return c.json(failure("Title required"), 400)
     }
@@ -37,14 +36,13 @@ bannerRoute.post('/', async (c) => {
       return c.json(failure("Image required"), 400)
     }
 
-    // VALID URL CHECK
+    // URL validation
     try {
       new URL(body.image)
     } catch {
       return c.json(failure("Invalid image URL"), 400)
     }
 
-    // ORDER LOGIC (SAFE)
     let order = Number(body.order)
 
     if (!order || order < 0) {
@@ -97,7 +95,7 @@ bannerRoute.post('/', async (c) => {
 /* GET ALL (ADMIN) */
 /* ========================== */
 
-bannerRoute.get('/', async (c) => {
+bannerRoute.get('/banner', async (c) => {
   try {
     const db = c.env.DB
 
@@ -134,7 +132,7 @@ bannerRoute.get('/', async (c) => {
 /* PUBLIC FETCH */
 /* ========================== */
 
-bannerRoute.get('/public', async (c) => {
+bannerRoute.get('/banner/public', async (c) => {
   try {
     const db = c.env.DB
 
@@ -185,13 +183,12 @@ bannerRoute.get('/public', async (c) => {
 /* UPDATE */
 /* ========================== */
 
-bannerRoute.put('/:id', async (c) => {
+bannerRoute.put('/banner/:id', async (c) => {
   try {
     const db = c.env.DB
     const id = c.req.param('id')
     const body = await c.req.json()
 
-    // ORDER SHIFT FIX
     if (body.order !== undefined) {
       const newOrder = Number(body.order) || 0
 
@@ -255,7 +252,7 @@ bannerRoute.put('/:id', async (c) => {
 /* DELETE */
 /* ========================== */
 
-bannerRoute.delete('/:id', async (c) => {
+bannerRoute.delete('/banner/:id', async (c) => {
   try {
     const db = c.env.DB
     const id = c.req.param('id')
