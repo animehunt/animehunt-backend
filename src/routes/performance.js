@@ -13,6 +13,23 @@ const row = await c.env.DB
 .prepare("SELECT * FROM performance_settings WHERE id=1")
 .first()
 
+if(!row){
+  return c.json({
+    lazyLoad:false,
+    smartPreload:false,
+    assetMinify:false,
+    imgOptimize:false,
+    jsOptimize:false,
+    cssOptimize:false,
+    smartCache:false,
+    mobilePriority:false,
+    cdnMode:false,
+    adaptiveLoad:false,
+    preconnect:false,
+    bandwidth:false
+  })
+}
+
 return c.json(row)
 
 })
