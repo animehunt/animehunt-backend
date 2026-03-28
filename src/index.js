@@ -39,6 +39,7 @@ import downloads from "./routes/downloads.js"
 /* UI */
 import homepage from "./routes/homepage.js"
 import footer from "./routes/footer.js"
+import player from "./routes/player.js"
 
 /* 🔥 UPLOAD */
 import upload from "./routes/upload.js"
@@ -103,6 +104,7 @@ app.route("/api/admin", downloads)
 
 app.route("/api/admin", homepage)
 app.route("/api/admin", footer)
+app.route("/api/admin", player)
 
 app.route("/api/admin", searchAdmin)
 
