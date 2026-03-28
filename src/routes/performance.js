@@ -44,15 +44,37 @@ const body = await c.req.json()
 
 const db = c.env.DB
 
-for(const key in body){
-
 await db.prepare(`
-UPDATE performance_settings
-SET ${key}=?
+UPDATE performance_settings SET
+lazyLoad=?,
+smartPreload=?,
+assetMinify=?,
+imgOptimize=?,
+jsOptimize=?,
+cssOptimize=?,
+smartCache=?,
+mobilePriority=?,
+cdnMode=?,
+adaptiveLoad=?,
+preconnect=?,
+bandwidth=?
 WHERE id=1
-`)
-.bind(body[key] ? 1 : 0)
-.run()
+`).bind(
+
+body.lazyLoad,
+body.smartPreload,
+body.assetMinify,
+body.imgOptimize,
+body.jsOptimize,
+body.cssOptimize,
+body.smartCache,
+body.mobilePriority,
+body.cdnMode,
+body.adaptiveLoad,
+body.preconnect,
+body.bandwidth
+
+).run()
 
 }
 
