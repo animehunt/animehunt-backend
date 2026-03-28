@@ -75,9 +75,6 @@ body.preconnect,
 body.bandwidth
 
 ).run()
-
-}
-
 return c.json({success:true})
 
 })
