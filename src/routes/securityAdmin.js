@@ -3,96 +3,142 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* GET */
-app.get("/security", verifyAdmin, async (c) => {
+/* =========================
+GET SECURITY SETTINGS
+========================= */
+
+app.get("/security", verifyAdmin, async (c)=>{
 
   const row = await c.env.DB
     .prepare("SELECT * FROM security_settings WHERE id=1")
     .first()
 
-  return c.json({
-    ultra: !!row.ultra,
-    firewallLevel: row.firewall_level,
+  if(!row){
+    return c.json({ error: "Settings not found" }, 500)
+  }
 
-    core: {
+  return c.json({
+
+    ultra: !!row.ultra,
+    firewallLevel: row.firewall_level ?? 3,
+
+    core:{
       bot: !!row.core_bot,
       scraper: !!row.core_scraper,
       hotlink: !!row.core_hotlink,
       embed: !!row.core_embed
     },
 
-    geo: {
+    geo:{
       indiaOnly: !!row.geo_india_only,
       blockForeign: !!row.geo_block_foreign
     },
 
-    admin: {
+    admin:{
       loginLimit: !!row.admin_login_limit,
       deviceLock: !!row.admin_device_lock
     },
 
-    ai: {
+    ai:{
       autoBan: !!row.ai_auto_ban,
       brute: !!row.ai_brute,
       bot: !!row.ai_bot
     },
 
-    advanced: {
+    advanced:{
       sessionMonitor: !!row.session_monitor,
       hideServer: !!row.hide_server,
       hideStack: !!row.hide_stack
     }
+
   })
+
 })
 
-/* POST */
-app.post("/security", verifyAdmin, async (c) => {
+/* =========================
+UPDATE SECURITY SETTINGS
+========================= */
 
-  const body = await c.req.json()
+app.post("/security", verifyAdmin, async (c)=>{
+
+  let body
+
+  try{
+    body = await c.req.json()
+  }catch{
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  /* SAFETY FALLBACKS */
+
+  const safe = {
+    ultra: !!body.ultra,
+    firewallLevel: Number(body.firewallLevel || 3),
+
+    core: body.core || {},
+    geo: body.geo || {},
+    admin: body.admin || {},
+    ai: body.ai || {},
+
+    sessionMonitor: !!body.sessionMonitor,
+    hideServer: !!body.hideServer,
+    hideStack: !!body.hideStack
+  }
 
   await c.env.DB.prepare(`
     UPDATE security_settings SET
+
     ultra=?,
     firewall_level=?,
 
-    core_bot=?, core_scraper=?, core_hotlink=?, core_embed=?,
+    core_bot=?,
+    core_scraper=?,
+    core_hotlink=?,
+    core_embed=?,
 
-    geo_india_only=?, geo_block_foreign=?,
+    geo_india_only=?,
+    geo_block_foreign=?,
 
-    admin_login_limit=?, admin_device_lock=?,
+    admin_login_limit=?,
+    admin_device_lock=?,
 
-    ai_auto_ban=?, ai_brute=?, ai_bot=?,
+    ai_auto_ban=?,
+    ai_brute=?,
+    ai_bot=?,
 
-    session_monitor=?, hide_server=?, hide_stack=?
+    session_monitor=?,
+    hide_server=?,
+    hide_stack=?
 
     WHERE id=1
   `).bind(
 
-    body.ultra,
-    body.firewallLevel,
+    safe.ultra,
+    safe.firewallLevel,
 
-    body.core.bot,
-    body.core.scraper,
-    body.core.hotlink,
-    body.core.embed,
+    !!safe.core.bot,
+    !!safe.core.scraper,
+    !!safe.core.hotlink,
+    !!safe.core.embed,
 
-    body.geo.indiaOnly,
-    body.geo.blockForeign,
+    !!safe.geo.indiaOnly,
+    !!safe.geo.blockForeign,
 
-    body.admin.loginLimit,
-    body.admin.deviceLock,
+    !!safe.admin.loginLimit,
+    !!safe.admin.deviceLock,
 
-    body.ai.autoBan,
-    body.ai.brute,
-    body.ai.bot,
+    !!safe.ai.autoBan,
+    !!safe.ai.brute,
+    !!safe.ai.bot,
 
-    body.sessionMonitor,
-    body.hideServer,
-    body.hideStack
+    safe.sessionMonitor,
+    safe.hideServer,
+    safe.hideStack
 
   ).run()
 
-  return c.json({ success: true })
+  return c.json({ success:true })
+
 })
 
 export default app
