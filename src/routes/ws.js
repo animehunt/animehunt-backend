@@ -1,30 +1,33 @@
-import { Hono } from "hono"
-
-const app = new Hono()
-
 let clients = []
 
-app.get("/ws", (c)=>{
+export function wsHandler(c){
 
-  const { socket, response } = Deno.upgradeWebSocket(c.req.raw)
+  const pair = new WebSocketPair()
+  const client = pair[0]
+  const server = pair[1]
 
-  socket.onopen = ()=>{
-    clients.push(socket)
-  }
+  server.accept()
 
-  socket.onclose = ()=>{
-    clients = clients.filter(c=>c!==socket)
-  }
+  clients.push(server)
 
-  return response
-})
+  server.addEventListener("close",()=>{
+    clients = clients.filter(c=>c!==server)
+  })
 
-export function broadcastAttack(data){
-  clients.forEach(ws=>{
-    try{
-      ws.send(JSON.stringify(data))
-    }catch{}
+  return new Response(null,{
+    status:101,
+    webSocket:client
   })
 }
 
-export default app
+/* BROADCAST */
+export function broadcastAttack(data){
+
+  const msg = JSON.stringify(data)
+
+  clients.forEach(ws=>{
+    try{
+      ws.send(msg)
+    }catch{}
+  })
+}
