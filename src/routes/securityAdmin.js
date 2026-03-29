@@ -3,114 +3,123 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* =========================
-GET SECURITY SETTINGS
-========================= */
+async function ensureRow(DB){
+await DB.prepare(`
+INSERT OR IGNORE INTO security_settings (id) VALUES (1)
+`).run()
+}
+
+/* GET */
 
 app.get("/security", verifyAdmin, async (c)=>{
 
-  const db = c.env.DB
+const DB = c.env.DB
+await ensureRow(DB)
 
-  const row = await db
-    .prepare("SELECT * FROM security_settings WHERE id=1")
-    .first()
+const row = await DB
+.prepare("SELECT * FROM security_settings WHERE id=1")
+.first()
 
-  // ✅ DEFAULT SAFE
-  if(!row){
-    return c.json({
-      ultra:false,
-      firewallLevel:3,
-      core:{bot:false,scraper:false,hotlink:false,embed:false},
-      geo:{indiaOnly:false,blockForeign:false},
-      admin:{loginLimit:false,deviceLock:false},
-      ai:{autoBan:false,brute:false,bot:false}
-    })
-  }
+return c.json({
 
-  return c.json({
-    ultra: !!row.ultra,
-    firewallLevel: row.firewall_level,
+ultra:!!row.ultra,
+firewallLevel:row.firewall_level,
 
-    core:{
-      bot: !!row.core_bot,
-      scraper: !!row.core_scraper,
-      hotlink: !!row.core_hotlink,
-      embed: !!row.core_embed
-    },
+core:{
+bot:!!row.core_bot,
+scraper:!!row.core_scraper,
+hotlink:!!row.core_hotlink,
+embed:!!row.core_embed
+},
 
-    geo:{
-      indiaOnly: !!row.geo_india_only,
-      blockForeign: !!row.geo_block_foreign
-    },
+geo:{
+indiaOnly:!!row.geo_india_only,
+blockForeign:!!row.geo_block_foreign
+},
 
-    admin:{
-      loginLimit: !!row.admin_login_limit,
-      deviceLock: !!row.admin_device_lock
-    },
+admin:{
+loginLimit:!!row.admin_login_limit,
+deviceLock:!!row.admin_device_lock
+},
 
-    ai:{
-      autoBan: !!row.ai_auto_ban,
-      brute: !!row.ai_brute,
-      bot: !!row.ai_bot
-    }
-  })
+ai:{
+autoBan:!!row.ai_auto_ban,
+brute:!!row.ai_brute,
+bot:!!row.ai_bot
+},
+
+advanced:{
+sessionMonitor:!!row.session_monitor,
+hideServer:!!row.hide_server,
+hideStack:!!row.hide_stack
+}
 
 })
 
-/* =========================
-UPDATE SECURITY
-========================= */
+})
+
+/* POST */
 
 app.post("/security", verifyAdmin, async (c)=>{
 
-  const db = c.env.DB
-  const body = await c.req.json()
+const DB = c.env.DB
+await ensureRow(DB)
 
-  await db.prepare(`
-    UPDATE security_settings SET
+const body = await c.req.json()
 
-    ultra=?,
-    firewall_level=?,
+await DB.prepare(`
+UPDATE security_settings SET
 
-    core_bot=?,
-    core_scraper=?,
-    core_hotlink=?,
-    core_embed=?,
+ultra=?,
+firewall_level=?,
 
-    geo_india_only=?,
-    geo_block_foreign=?,
+core_bot=?,
+core_scraper=?,
+core_hotlink=?,
+core_embed=?,
 
-    admin_login_limit=?,
-    admin_device_lock=?,
+geo_india_only=?,
+geo_block_foreign=?,
 
-    ai_auto_ban=?,
-    ai_brute=?,
-    ai_bot=?
+admin_login_limit=?,
+admin_device_lock=?,
 
-    WHERE id=1
-  `).bind(
+ai_auto_ban=?,
+ai_brute=?,
+ai_bot=?,
 
-    body.ultra ? 1 : 0,
-    body.firewallLevel,
+session_monitor=?,
+hide_server=?,
+hide_stack=?
 
-    body.core.bot ? 1 : 0,
-    body.core.scraper ? 1 : 0,
-    body.core.hotlink ? 1 : 0,
-    body.core.embed ? 1 : 0,
+WHERE id=1
+`).bind(
 
-    body.geo.indiaOnly ? 1 : 0,
-    body.geo.blockForeign ? 1 : 0,
+body.ultra ? 1 : 0,
+body.firewallLevel,
 
-    body.admin.loginLimit ? 1 : 0,
-    body.admin.deviceLock ? 1 : 0,
+body.core.bot ? 1 : 0,
+body.core.scraper ? 1 : 0,
+body.core.hotlink ? 1 : 0,
+body.core.embed ? 1 : 0,
 
-    body.ai.autoBan ? 1 : 0,
-    body.ai.brute ? 1 : 0,
-    body.ai.bot ? 1 : 0
+body.geo.indiaOnly ? 1 : 0,
+body.geo.blockForeign ? 1 : 0,
 
-  ).run()
+body.admin.loginLimit ? 1 : 0,
+body.admin.deviceLock ? 1 : 0,
 
-  return c.json({ success:true })
+body.ai.autoBan ? 1 : 0,
+body.ai.brute ? 1 : 0,
+body.ai.bot ? 1 : 0,
+
+body.advanced.sessionMonitor ? 1 : 0,
+body.advanced.hideServer ? 1 : 0,
+body.advanced.hideStack ? 1 : 0
+
+).run()
+
+return c.json({success:true})
 
 })
 
