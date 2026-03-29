@@ -79,6 +79,11 @@ import { runAIEngines } from "./services/aiScheduler.js"
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
 
+import ws from "./routes/ws.js"
+import heatmap from "./routes/heatmap.js"
+import graph from "./routes/graph.js"
+
+
 /* ================= HEALTH ================= */
 
 app.get("/", (c) => {
@@ -146,7 +151,9 @@ app.route("/api", seoPublic)
 app.route("/api", securityStats)
 
 app.route("/api", analyticsTrack)
-
+app.route("/", ws)
+app.route("/api", heatmap)
+app.route("/api", graph)
 /* ================= EXPORT ================= */
 
 export default {
