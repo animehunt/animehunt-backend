@@ -1,109 +1,62 @@
 import { autoBan } from "../security/autoBan.js"
+import { updateScore } from "./ipReputation.js"
 
-export async function firewall(c,next){
+export async function firewall(c, next) {
 
-const ip =
-c.req.header("CF-Connecting-IP") ||
-"0.0.0.0"
+  const ip = c.req.header("CF-Connecting-IP") || "0.0.0.0"
+  const ua = c.req.header("user-agent") || ""
+  const country = c.req.cf?.country || "XX"
 
-const ua = c.req.header("user-agent") || ""
-const country = c.req.cf?.country || "XX"
+  const DB = c.env.DB
 
-const db = c.env.DB
+  const settings = await DB
+    .prepare("SELECT * FROM security_settings WHERE id=1")
+    .first()
 
-const settings = await db
-.prepare("SELECT * FROM security_settings WHERE id=1")
-.first()
+  /* BLOCKED IP */
+  const banned = await DB
+    .prepare("SELECT ip FROM blocked_ips WHERE ip=?")
+    .bind(ip)
+    .first()
 
-/* =====================
-BLOCKED IP
-===================== */
+  if (banned) return c.text("Blocked", 403)
 
-const banned = await db
-.prepare("SELECT ip FROM blocked_ips WHERE ip=?")
-.bind(ip)
-.first()
+  /* GEO FIREWALL */
+  if (settings.geo_india_only && country !== "IN") {
+    await autoBan(DB, ip, "Geo Block")
+    return c.text("Geo blocked", 403)
+  }
 
-if(banned){
-return c.text("Access denied",403)
-}
+  /* BOT DETECTION */
+  if (settings.core_bot) {
+    if (!ua || ua.length < 10) {
+      const score = await updateScore(DB, ip, 3)
 
-/* =====================
-GEO FIREWALL
-===================== */
+      if (score >= 10 && settings.ai_auto_ban) {
+        await autoBan(DB, ip, "Bot detected")
+      }
 
-if(settings.geo_india_only && country !== "IN"){
-return c.text("India only access",403)
-}
+      return c.text("Bot blocked", 403)
+    }
+  }
 
-if(settings.geo_block_foreign && country !== "IN"){
-return c.text("Foreign blocked",403)
-}
+  /* ADVANCED RATE LIMIT */
+  const key = "rate_" + ip
+  const now = Date.now()
 
-/* =====================
-BOT DETECTION
-===================== */
+  if (!globalThis.RATE) globalThis.RATE = {}
 
-if(settings.ai_bot){
+  if (!globalThis.RATE[key]) {
+    globalThis.RATE[key] = []
+  }
 
-if(ua.length < 10 || ua.includes("bot")){
-await increaseScore(db,ip,2)
-}
+  globalThis.RATE[key] = globalThis.RATE[key].filter(t => now - t < 1000)
+  globalThis.RATE[key].push(now)
 
-}
+  if (globalThis.RATE[key].length > 40) {
+    await autoBan(DB, ip, "Rate limit exceeded")
+    return c.text("Too many requests", 429)
+  }
 
-/* =====================
-RATE LIMIT (BURST)
-===================== */
-
-const now = Date.now()
-
-const key = "rate:"+ip
-
-const count = (c.env.RATE_LIMIT?.get(key) || 0) + 1
-
-c.env.RATE_LIMIT?.put(key,count,{expirationTtl:1})
-
-if(count > 40){
-await autoBan(db,ip,"burst attack")
-return c.text("Rate limit exceeded",429)
-}
-
-/* =====================
-ULTRA MODE
-===================== */
-
-if(settings.ultra){
-
-if(ua.length < 15){
-return c.text("Ultra block",403)
-}
-
-}
-
-/* =====================
-IP SCORE SYSTEM
-===================== */
-
-async function increaseScore(db,ip,points){
-
-const row = await db
-.prepare("SELECT score FROM ip_scores WHERE ip=?")
-.bind(ip)
-.first()
-
-const newScore = (row?.score || 0) + points
-
-await db.prepare(`
-INSERT OR REPLACE INTO ip_scores(ip,score)
-VALUES(?,?)
-`).bind(ip,newScore).run()
-
-if(newScore >= 10){
-await autoBan(db,ip,"AI auto ban")
-}
-
-}
-
-await next()
+  await next()
 }
