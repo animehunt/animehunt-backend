@@ -41,7 +41,7 @@ import homepage from "./routes/homepage.js"
 import footer from "./routes/footer.js"
 import player from "./routes/player.js"
 
-/* 🔥 UPLOAD */
+/* UPLOAD */
 import upload from "./routes/upload.js"
 
 /* SEARCH */
@@ -55,6 +55,11 @@ import seoPublic from "./routes/seoPublic.js"
 /* SECURITY */
 import securityAdmin from "./routes/securityAdmin.js"
 import securityStats from "./routes/securityStats.js"
+
+/* 🚨 NEW SECURITY SYSTEM */
+import logs from "./routes/securityLogs.js"
+import heatmap from "./routes/securityHeatmap.js"
+import graph from "./routes/securityGraph.js"
 
 /* PERFORMANCE */
 import performance from "./routes/performance.js"
@@ -79,10 +84,8 @@ import { runAIEngines } from "./services/aiScheduler.js"
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
 
-import ws from "./routes/ws.js"
-import heatmap from "./routes/heatmap.js"
-import graph from "./routes/graph.js"
-
+/* 🌐 WEBSOCKET */
+import { wsHandler } from "./routes/ws.js"
 
 /* ================= HEALTH ================= */
 
@@ -94,7 +97,6 @@ app.get("/", (c) => {
 
 /* ================= ADMIN ================= */
 
-/* ⚠️ IMPORTANT: same base route (LOGIN BREAK NAHI HOGA) */
 app.route("/api/admin", auth)
 app.route("/api/admin", dashboard)
 
@@ -130,7 +132,6 @@ app.route("/api/admin", ai)
 
 app.route("/api/admin", deploy)
 
-/* ✅ UPLOAD (same base route, change mat karna) */
 app.route("/api/admin", upload)
 
 /* ================= PUBLIC ================= */
@@ -151,9 +152,18 @@ app.route("/api", seoPublic)
 app.route("/api", securityStats)
 
 app.route("/api", analyticsTrack)
-app.route("/", ws)
-app.route("/api", heatmap)
-app.route("/api", graph)
+
+/* ================= 🔥 SECURITY LIVE ================= */
+
+/* EXACT MATCH FRONTEND */
+app.get("/api/security/logs", logs)
+app.get("/api/security/heatmap", heatmap)
+app.get("/api/security/graph", graph)
+
+/* ================= ⚡ WEBSOCKET ================= */
+
+app.get("/ws", wsHandler)
+
 /* ================= EXPORT ================= */
 
 export default {
