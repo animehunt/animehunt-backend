@@ -1,7 +1,4 @@
 import { autoBan } from "../security/autoBan.js"
-import { updateScore } from "./ipReputation.js"
-import { trackMetrics } from "./metrics.js"
-import { broadcastAttack } from "../routes/ws.js"
 
 export async function firewall(c, next) {
 
@@ -10,7 +7,6 @@ export async function firewall(c, next) {
     "0.0.0.0"
 
   const ua = c.req.header("user-agent") || ""
-  const country = c.req.cf?.country || "XX"
 
   const DB = c.env.DB
 
@@ -22,27 +18,9 @@ export async function firewall(c, next) {
     .prepare("SELECT * FROM security_settings WHERE id=1")
     .first()
 
-  /* =========================
-  TRACK REQUEST
-  ========================= */
-
-  await trackMetrics(DB, "request")
-
-  await DB.prepare(`
-    INSERT INTO security_logs(ip,event,created_at,country)
-    VALUES(?,?,?,?)
-  `).bind(ip,"request",Date.now(),country).run()
-
-  /* =========================
-  REALTIME ATTACK STREAM
-  ========================= */
-
-  broadcastAttack({
-    ip,
-    country,
-    type: "request",
-    time: Date.now()
-  })
+  if (!settings) {
+    return c.text("Security config missing", 500)
+  }
 
   /* =========================
   BLOCKED IP CHECK
@@ -54,80 +32,19 @@ export async function firewall(c, next) {
     .first()
 
   if (banned) {
-
-    await trackMetrics(DB, "blocked")
-
-    broadcastAttack({
-      ip,
-      country,
-      type: "blocked"
-    })
-
     return c.text("Access Denied", 403)
   }
 
   /* =========================
-  GEO FIREWALL
-  ========================= */
-
-  if (settings.geo_india_only && country !== "IN") {
-
-    await autoBan(DB, ip, "Geo blocked")
-
-    await trackMetrics(DB, "blocked")
-
-    broadcastAttack({
-      ip,
-      country,
-      type: "geo_block"
-    })
-
-    return c.text("Geo blocked", 403)
-  }
-
-  if (settings.geo_block_foreign && country !== "IN") {
-
-    await autoBan(DB, ip, "Foreign blocked")
-
-    await trackMetrics(DB, "blocked")
-
-    broadcastAttack({
-      ip,
-      country,
-      type: "foreign_block"
-    })
-
-    return c.text("Foreign blocked", 403)
-  }
-
-  /* =========================
-  BOT DETECTION
+  BOT PROTECTION
   ========================= */
 
   if (settings.core_bot) {
 
     if (!ua || ua.length < 10) {
 
-      const score = await updateScore(DB, ip, 3)
-
-      await trackMetrics(DB, "suspicious")
-
-      await DB.prepare(`
-        INSERT INTO security_logs(ip,event,created_at,country)
-        VALUES(?,?,?,?)
-      `).bind(ip,"bot_detected",Date.now(),country).run()
-
-      broadcastAttack({
-        ip,
-        country,
-        type: "bot"
-      })
-
-      if (score >= 10 && settings.ai_auto_ban) {
-
+      if (settings.ai_auto_ban) {
         await autoBan(DB, ip, "Bot detected")
-
-        await trackMetrics(DB, "blocked")
       }
 
       return c.text("Bot blocked", 403)
@@ -135,33 +52,20 @@ export async function firewall(c, next) {
   }
 
   /* =========================
-  SCRAPER DETECTION
+  SCRAPER SHIELD
   ========================= */
 
   if (settings.core_scraper) {
 
+    const badUA = ua.toLowerCase()
+
     if (
-      ua.toLowerCase().includes("python") ||
-      ua.toLowerCase().includes("curl") ||
-      ua.toLowerCase().includes("wget")
+      badUA.includes("python") ||
+      badUA.includes("curl") ||
+      badUA.includes("wget")
     ) {
 
-      const score = await updateScore(DB, ip, 2)
-
-      await trackMetrics(DB, "suspicious")
-
-      await DB.prepare(`
-        INSERT INTO security_logs(ip,event,created_at,country)
-        VALUES(?,?,?,?)
-      `).bind(ip,"scraper_detected",Date.now(),country).run()
-
-      broadcastAttack({
-        ip,
-        country,
-        type: "scraper"
-      })
-
-      if (score >= 10 && settings.ai_auto_ban) {
+      if (settings.ai_auto_ban) {
         await autoBan(DB, ip, "Scraper detected")
       }
 
@@ -170,8 +74,18 @@ export async function firewall(c, next) {
   }
 
   /* =========================
-  RATE LIMIT
+  RATE LIMIT (FIREWALL LEVEL BASED)
   ========================= */
+
+  const level = settings.firewall_level || 3
+
+  let limit = 40
+
+  if (level === 1) limit = 80
+  if (level === 2) limit = 60
+  if (level === 3) limit = 40
+  if (level === 4) limit = 25
+  if (level === 5) limit = 15
 
   const key = "rate_" + ip
   const now = Date.now()
@@ -187,81 +101,17 @@ export async function firewall(c, next) {
 
   globalThis.RATE[key].push(now)
 
-  if (globalThis.RATE[key].length > 40) {
+  if (globalThis.RATE[key].length > limit) {
 
-    await autoBan(DB, ip, "Rate limit")
-
-    await trackMetrics(DB, "blocked")
-
-    await DB.prepare(`
-      INSERT INTO security_logs(ip,event,created_at,country)
-      VALUES(?,?,?,?)
-    `).bind(ip,"rate_limit",Date.now(),country).run()
-
-    broadcastAttack({
-      ip,
-      country,
-      type: "rate_limit"
-    })
+    if (settings.ai_auto_ban) {
+      await autoBan(DB, ip, "Rate limit exceeded")
+    }
 
     return c.text("Too many requests", 429)
   }
 
   /* =========================
-  BURST DETECTION
-  ========================= */
-
-  if (globalThis.RATE[key].length > 25) {
-
-    await updateScore(DB, ip, 1)
-
-    await trackMetrics(DB, "suspicious")
-
-    broadcastAttack({
-      ip,
-      country,
-      type: "burst"
-    })
-  }
-
-  /* =========================
-  IP REPUTATION
-  ========================= */
-
-  const scoreRow = await DB
-    .prepare("SELECT score FROM ip_scores WHERE ip=?")
-    .bind(ip)
-    .first()
-
-  if (scoreRow && scoreRow.score >= 15) {
-
-    await autoBan(DB, ip, "High risk IP")
-
-    await trackMetrics(DB, "blocked")
-
-    broadcastAttack({
-      ip,
-      country,
-      type: "high_risk"
-    })
-
-    return c.text("High risk blocked", 403)
-  }
-
-  /* =========================
-  STEALTH MODE
-  ========================= */
-
-  if (settings.hide_server) {
-    c.header("Server", "cloudflare")
-  }
-
-  if (settings.hide_stack) {
-    c.header("X-Powered-By", "unknown")
-  }
-
-  /* =========================
-  PASS
+  PASS REQUEST
   ========================= */
 
   await next()
