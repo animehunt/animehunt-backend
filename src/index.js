@@ -52,14 +52,8 @@ import searchPublic from "./routes/searchPublic.js"
 import seoAdmin from "./routes/seoAdmin.js"
 import seoPublic from "./routes/seoPublic.js"
 
-/* SECURITY */
+/* SECURITY (ONLY ADMIN PANEL) */
 import securityAdmin from "./routes/securityAdmin.js"
-import securityStats from "./routes/securityStats.js"
-
-/* 🚨 NEW SECURITY SYSTEM */
-import logs from "./routes/securityLogs.js"
-import heatmap from "./routes/securityHeatmap.js"
-import graph from "./routes/securityGraph.js"
 
 /* PERFORMANCE */
 import performance from "./routes/performance.js"
@@ -83,9 +77,6 @@ import { runAIEngines } from "./services/aiScheduler.js"
 
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
-
-/* 🌐 WEBSOCKET */
-import { wsHandler } from "./routes/ws.js"
 
 /* ================= HEALTH ================= */
 
@@ -117,6 +108,7 @@ app.route("/api/admin", searchAdmin)
 
 app.route("/api/admin", seoAdmin)
 
+/* ✅ ONLY SECURITY */
 app.route("/api/admin", securityAdmin)
 
 app.route("/api/admin", performance)
@@ -149,20 +141,7 @@ app.route("/api", searchPublic)
 
 app.route("/api", seoPublic)
 
-app.route("/api", securityStats)
-
 app.route("/api", analyticsTrack)
-
-/* ================= 🔥 SECURITY LIVE ================= */
-
-/* EXACT MATCH FRONTEND */
-app.get("/api/security/logs", logs)
-app.get("/api/security/heatmap", heatmap)
-app.get("/api/security/graph", graph)
-
-/* ================= ⚡ WEBSOCKET ================= */
-
-app.get("/ws", wsHandler)
 
 /* ================= EXPORT ================= */
 
