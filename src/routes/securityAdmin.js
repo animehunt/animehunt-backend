@@ -4,7 +4,7 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 const app = new Hono()
 
 /* =========================
-GET SECURITY SETTINGS
+GET SECURITY
 ========================= */
 
 app.get("/security", verifyAdmin, async (c)=>{
@@ -14,12 +14,10 @@ app.get("/security", verifyAdmin, async (c)=>{
     .first()
 
   if(!row){
-    return c.json({ error: "Settings not found" }, 500)
+    return c.json({ error:"Not found" },500)
   }
 
   return c.json({
-
-    ultra: !!row.ultra,
     firewallLevel: row.firewall_level ?? 3,
 
     core:{
@@ -29,34 +27,23 @@ app.get("/security", verifyAdmin, async (c)=>{
       embed: !!row.core_embed
     },
 
-    geo:{
-      indiaOnly: !!row.geo_india_only,
-      blockForeign: !!row.geo_block_foreign
-    },
-
     admin:{
-      loginLimit: !!row.admin_login_limit,
-      deviceLock: !!row.admin_device_lock
-    },
-
-    ai:{
-      autoBan: !!row.ai_auto_ban,
-      brute: !!row.ai_brute,
-      bot: !!row.ai_bot
+      loginLimit: !!row.admin_login_limit
     },
 
     advanced:{
-      sessionMonitor: !!row.session_monitor,
-      hideServer: !!row.hide_server,
-      hideStack: !!row.hide_stack
+      sessionMonitor: !!row.session_monitor
+    },
+
+    ai:{
+      autoBan: !!row.ai_auto_ban
     }
 
   })
-
 })
 
 /* =========================
-UPDATE SECURITY SETTINGS
+UPDATE SECURITY
 ========================= */
 
 app.post("/security", verifyAdmin, async (c)=>{
@@ -66,29 +53,21 @@ app.post("/security", verifyAdmin, async (c)=>{
   try{
     body = await c.req.json()
   }catch{
-    return c.json({ error: "Invalid JSON" }, 400)
+    return c.json({ error:"Invalid JSON" },400)
   }
 
-  /* SAFETY FALLBACKS */
-
   const safe = {
-    ultra: !!body.ultra,
     firewallLevel: Number(body.firewallLevel || 3),
 
     core: body.core || {},
-    geo: body.geo || {},
     admin: body.admin || {},
-    ai: body.ai || {},
-
-    sessionMonitor: !!body.sessionMonitor,
-    hideServer: !!body.hideServer,
-    hideStack: !!body.hideStack
+    advanced: body.advanced || {},
+    ai: body.ai || {}
   }
 
   await c.env.DB.prepare(`
     UPDATE security_settings SET
 
-    ultra=?,
     firewall_level=?,
 
     core_bot=?,
@@ -96,24 +75,15 @@ app.post("/security", verifyAdmin, async (c)=>{
     core_hotlink=?,
     core_embed=?,
 
-    geo_india_only=?,
-    geo_block_foreign=?,
-
     admin_login_limit=?,
-    admin_device_lock=?,
-
-    ai_auto_ban=?,
-    ai_brute=?,
-    ai_bot=?,
 
     session_monitor=?,
-    hide_server=?,
-    hide_stack=?
+
+    ai_auto_ban=?
 
     WHERE id=1
   `).bind(
 
-    safe.ultra,
     safe.firewallLevel,
 
     !!safe.core.bot,
@@ -121,24 +91,15 @@ app.post("/security", verifyAdmin, async (c)=>{
     !!safe.core.hotlink,
     !!safe.core.embed,
 
-    !!safe.geo.indiaOnly,
-    !!safe.geo.blockForeign,
-
     !!safe.admin.loginLimit,
-    !!safe.admin.deviceLock,
 
-    !!safe.ai.autoBan,
-    !!safe.ai.brute,
-    !!safe.ai.bot,
+    !!safe.advanced.sessionMonitor,
 
-    safe.sessionMonitor,
-    safe.hideServer,
-    safe.hideStack
+    !!safe.ai.autoBan
 
   ).run()
 
   return c.json({ success:true })
-
 })
 
 export default app
