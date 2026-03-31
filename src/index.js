@@ -1,6 +1,10 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 
+/* 🔥 MIDDLEWARE ADD (IMPORTANT) */
+import { firewall } from "./middleware/firewall.js"
+import { systemGuard } from "./middleware/systemGuard.js"
+
 const app = new Hono()
 
 /* ================= CORS ================= */
@@ -10,6 +14,11 @@ app.use("*", cors({
   allowHeaders: ["Content-Type", "Authorization"],
   allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 }))
+
+/* ================= GLOBAL SECURITY ================= */
+/* 🔥 YE TUMNE MISS KIYA THA */
+app.use("*", systemGuard)
+app.use("*", firewall)
 
 /* ================= ROUTES ================= */
 
@@ -52,7 +61,7 @@ import searchPublic from "./routes/searchPublic.js"
 import seoAdmin from "./routes/seoAdmin.js"
 import seoPublic from "./routes/seoPublic.js"
 
-/* SECURITY (ONLY ADMIN PANEL) */
+/* SECURITY */
 import securityAdmin from "./routes/securityAdmin.js"
 
 /* PERFORMANCE */
@@ -108,7 +117,7 @@ app.route("/api/admin", searchAdmin)
 
 app.route("/api/admin", seoAdmin)
 
-/* ✅ ONLY SECURITY */
+/* 🔐 SECURITY */
 app.route("/api/admin", securityAdmin)
 
 app.route("/api/admin", performance)
@@ -142,6 +151,16 @@ app.route("/api", searchPublic)
 app.route("/api", seoPublic)
 
 app.route("/api", analyticsTrack)
+
+/* ================= ERROR HANDLER ================= */
+/* 🔥 CRASH FIX (VERY IMPORTANT) */
+
+app.onError((err, c) => {
+  console.error("GLOBAL ERROR:", err)
+  return c.json({
+    error: err.message || "Internal Server Error"
+  }, 500)
+})
 
 /* ================= EXPORT ================= */
 
