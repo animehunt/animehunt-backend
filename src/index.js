@@ -56,8 +56,7 @@ import seoPublic from "./routes/seoPublic.js"
       
 /* SECURITY */      
 import securityAdmin from "./routes/securityAdmin.js"      
-import securityStats from "./routes/securityStats.js"      
-      
+
 /* PERFORMANCE */      
 import performance from "./routes/performance.js"      
       
@@ -142,9 +141,7 @@ app.route("/api", adClick)
 app.route("/api", searchPublic)      
       
 app.route("/api", seoPublic)      
-      
-app.route("/api", securityStats)      
-      
+            
 app.route("/api", analyticsTrack)     
 
 /* ================= GLOBAL SECURITY ================= */
