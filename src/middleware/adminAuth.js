@@ -1,27 +1,51 @@
 import jwt from "jsonwebtoken"
 
-export async function verifyAdmin(c,next){
+export async function verifyAdmin(c, next) {
+  try {
 
-const auth = c.req.header("Authorization")
+    // 🔹 Authorization header
+    const authHeader = c.req.header("Authorization")
 
-if(!auth){
-return c.json({error:"Unauthorized"},401)
-}
+    if (!authHeader) {
+      return c.json({ error: "No Authorization header" }, 401)
+    }
 
-const token = auth.replace("Bearer ","")
+    // 🔹 Extract token
+    const parts = authHeader.split(" ")
 
-try{
+    if (parts.length !== 2 || parts[0] !== "Bearer") {
+      return c.json({ error: "Invalid Authorization format" }, 401)
+    }
 
-const decoded = jwt.verify(token,c.env.JWT_SECRET)
+    const token = parts[1]
 
-c.set("admin",decoded)
+    if (!token) {
+      return c.json({ error: "Token missing" }, 401)
+    }
 
-await next()
+    // 🔹 Check secret exists
+    if (!c.env.JWT_SECRET) {
+      console.error("JWT_SECRET missing in env")
+      return c.json({ error: "Server config error" }, 500)
+    }
 
-}catch(e){
+    // 🔹 Verify token
+    let decoded
+    try {
+      decoded = jwt.verify(token, c.env.JWT_SECRET)
+    } catch (err) {
+      console.error("JWT VERIFY ERROR:", err.message)
+      return c.json({ error: "Invalid or expired token" }, 401)
+    }
 
-return c.json({error:"Invalid token"},401)
+    // 🔹 Attach admin to context
+    c.set("admin", decoded)
 
-}
+    // 🔹 Continue request
+    await next()
 
+  } catch (err) {
+    console.error("ADMIN AUTH CRASH:", err)
+    return c.json({ error: "Auth failed" }, 500)
+  }
 }
