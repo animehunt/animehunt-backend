@@ -3,11 +3,20 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* =========================
-GET SECURITY
-========================= */
+function safe(fn){
+  return async (c)=>{
+    try{
+      return await fn(c)
+    }catch(e){
+      console.error("ROUTE ERROR:", e)
+      return c.json({ error:"Internal crash", details:e.message },500)
+    }
+  }
+}
 
-app.get("/security", verifyAdmin, async (c)=>{
+/* ================= GET ================= */
+
+app.get("/security", verifyAdmin, safe(async (c)=>{
 
   const row = await c.env.DB
     .prepare("SELECT * FROM security_settings WHERE id=1")
@@ -40,13 +49,12 @@ app.get("/security", verifyAdmin, async (c)=>{
     }
 
   })
-})
 
-/* =========================
-UPDATE SECURITY
-========================= */
+}))
 
-app.post("/security", verifyAdmin, async (c)=>{
+/* ================= POST ================= */
+
+app.post("/security", verifyAdmin, safe(async (c)=>{
 
   let body
 
@@ -56,9 +64,8 @@ app.post("/security", verifyAdmin, async (c)=>{
     return c.json({ error:"Invalid JSON" },400)
   }
 
-  const safe = {
+  const safeData = {
     firewallLevel: Number(body.firewallLevel || 3),
-
     core: body.core || {},
     admin: body.admin || {},
     advanced: body.advanced || {},
@@ -67,39 +74,28 @@ app.post("/security", verifyAdmin, async (c)=>{
 
   await c.env.DB.prepare(`
     UPDATE security_settings SET
-
     firewall_level=?,
-
     core_bot=?,
     core_scraper=?,
     core_hotlink=?,
     core_embed=?,
-
     admin_login_limit=?,
-
     session_monitor=?,
-
     ai_auto_ban=?
-
     WHERE id=1
   `).bind(
-
-    safe.firewallLevel,
-
-    !!safe.core.bot,
-    !!safe.core.scraper,
-    !!safe.core.hotlink,
-    !!safe.core.embed,
-
-    !!safe.admin.loginLimit,
-
-    !!safe.advanced.sessionMonitor,
-
-    !!safe.ai.autoBan
-
+    safeData.firewallLevel,
+    safeData.core.bot ? 1 : 0,
+    safeData.core.scraper ? 1 : 0,
+    safeData.core.hotlink ? 1 : 0,
+    safeData.core.embed ? 1 : 0,
+    safeData.admin.loginLimit ? 1 : 0,
+    safeData.advanced.sessionMonitor ? 1 : 0,
+    safeData.ai.autoBan ? 1 : 0
   ).run()
 
   return c.json({ success:true })
-})
+
+}))
 
 export default app
