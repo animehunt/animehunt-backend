@@ -2,117 +2,119 @@ import { autoBan } from "../security/autoBan.js"
 
 export async function firewall(c, next) {
 
-  const ip =
-    c.req.header("CF-Connecting-IP") ||
-    "0.0.0.0"
+  try {
 
-  const ua = c.req.header("user-agent") || ""
+    const DB = c.env.DB
 
-  const DB = c.env.DB
+    if (!DB) {
+      console.error("DB missing")
+      return await next()
+    }
 
-  /* =========================
-  LOAD SETTINGS
-  ========================= */
+    const ip =
+      c.req.header("CF-Connecting-IP") ||
+      c.req.header("x-forwarded-for") ||
+      "0.0.0.0"
 
-  const settings = await DB
-    .prepare("SELECT * FROM security_settings WHERE id=1")
-    .first()
+    const ua = (c.req.header("user-agent") || "").toLowerCase()
 
-  if (!settings) {
-    return c.text("Security config missing", 500)
-  }
+    /* ================= SETTINGS ================= */
 
-  /* =========================
-  BLOCKED IP CHECK
-  ========================= */
+    const settings = await DB
+      .prepare("SELECT * FROM security_settings WHERE id=1")
+      .first()
 
-  const banned = await DB
-    .prepare("SELECT ip FROM blocked_ips WHERE ip=?")
-    .bind(ip)
-    .first()
+    if (!settings) {
+      return await next()
+    }
 
-  if (banned) {
-    return c.text("Access Denied", 403)
-  }
+    /* ================= BLOCKED IP ================= */
 
-  /* =========================
-  BOT PROTECTION
-  ========================= */
+    const banned = await DB
+      .prepare("SELECT ip FROM blocked_ips WHERE ip=?")
+      .bind(ip)
+      .first()
 
-  if (settings.core_bot) {
+    if (banned) {
+      return c.text("Access Denied", 403)
+    }
 
-    if (!ua || ua.length < 10) {
+    /* ================= BOT PROTECTION ================= */
+
+    if (settings.core_bot) {
+      if (!ua || ua.length < 10) {
+
+        if (settings.ai_auto_ban) {
+          await autoBan(DB, ip, "Bot detected")
+        }
+
+        return c.text("Bot blocked", 403)
+      }
+    }
+
+    /* ================= SCRAPER ================= */
+
+    if (settings.core_scraper) {
+
+      if (
+        ua.includes("curl") ||
+        ua.includes("wget") ||
+        ua.includes("python") ||
+        ua.includes("scrapy") ||
+        ua.includes("axios")
+      ) {
+
+        if (settings.ai_auto_ban) {
+          await autoBan(DB, ip, "Scraper detected")
+        }
+
+        return c.text("Scraper blocked", 403)
+      }
+    }
+
+    /* ================= RATE LIMIT ================= */
+
+    const level = settings.firewall_level || 3
+
+    const limits = {
+      1: 80,
+      2: 60,
+      3: 40,
+      4: 25,
+      5: 15
+    }
+
+    const limit = limits[level] || 40
+
+    const now = Date.now()
+    const key = "rate_" + ip
+
+    if (!globalThis.RATE) globalThis.RATE = {}
+
+    if (!globalThis.RATE[key]) {
+      globalThis.RATE[key] = []
+    }
+
+    globalThis.RATE[key] =
+      globalThis.RATE[key].filter(t => now - t < 1000)
+
+    globalThis.RATE[key].push(now)
+
+    if (globalThis.RATE[key].length > limit) {
 
       if (settings.ai_auto_ban) {
-        await autoBan(DB, ip, "Bot detected")
+        await autoBan(DB, ip, "Rate limit exceeded")
       }
 
-      return c.text("Bot blocked", 403)
-    }
-  }
-
-  /* =========================
-  SCRAPER SHIELD
-  ========================= */
-
-  if (settings.core_scraper) {
-
-    const badUA = ua.toLowerCase()
-
-    if (
-      badUA.includes("python") ||
-      badUA.includes("curl") ||
-      badUA.includes("wget")
-    ) {
-
-      if (settings.ai_auto_ban) {
-        await autoBan(DB, ip, "Scraper detected")
-      }
-
-      return c.text("Scraper blocked", 403)
-    }
-  }
-
-  /* =========================
-  RATE LIMIT (FIREWALL LEVEL BASED)
-  ========================= */
-
-  const level = settings.firewall_level || 3
-
-  let limit = 40
-
-  if (level === 1) limit = 80
-  if (level === 2) limit = 60
-  if (level === 3) limit = 40
-  if (level === 4) limit = 25
-  if (level === 5) limit = 15
-
-  const key = "rate_" + ip
-  const now = Date.now()
-
-  if (!globalThis.RATE) globalThis.RATE = {}
-
-  if (!globalThis.RATE[key]) {
-    globalThis.RATE[key] = []
-  }
-
-  globalThis.RATE[key] =
-    globalThis.RATE[key].filter(t => now - t < 1000)
-
-  globalThis.RATE[key].push(now)
-
-  if (globalThis.RATE[key].length > limit) {
-
-    if (settings.ai_auto_ban) {
-      await autoBan(DB, ip, "Rate limit exceeded")
+      return c.text("Too many requests", 429)
     }
 
-    return c.text("Too many requests", 429)
+    /* ================= PASS ================= */
+
+    await next()
+
+  } catch (err) {
+    console.error("FIREWALL ERROR:", err)
+    return await next() // fail-safe
   }
-
-  /* =========================
-  PASS REQUEST
-  ========================= */
-
-  await next()
 }
