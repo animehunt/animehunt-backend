@@ -3,180 +3,204 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
+/* ================= SAFE WRAPPER ================= */
+
+function safe(fn){
+  return async (c)=>{
+    try{
+      return await fn(c)
+    }catch(e){
+      console.error("DEPLOY ERROR:", e)
+      return c.json({
+        error:"Internal server error",
+        details:e.message
+      },500)
+    }
+  }
+}
+
 /* =========================
 GET DEPLOY DATA
 ========================= */
 
-app.get("/deploy", verifyAdmin, async (c)=>{
+app.get("/deploy", verifyAdmin, safe(async (c)=>{
 
-const db = c.env.DB
+  const db = c.env.DB
 
-const state = await db
-.prepare("SELECT * FROM deploy_state WHERE id=1")
-.first()
+  const state = await db
+    .prepare("SELECT * FROM deploy_state WHERE id=1")
+    .first()
 
-const backups = (await db
-.prepare("SELECT id,name,date FROM deploy_backups ORDER BY date DESC")
-.all()).results
+  const backups = (await db
+    .prepare("SELECT id,name,date FROM deploy_backups ORDER BY date DESC")
+    .all()).results
 
-return c.json({
-state,
-backups
-})
+  return c.json({
+    state,
+    backups
+  })
 
-})
-
-/* =========================
-DEPLOY
-========================= */
-
-app.post("/deploy", verifyAdmin, async (c)=>{
-
-await c.env.DB.prepare(`
-UPDATE deploy_state
-SET last_deploy=CURRENT_TIMESTAMP
-WHERE id=1
-`).run()
-
-return c.json({success:true})
-
-})
+}))
 
 /* =========================
-BACKUP
+DEPLOY TRIGGER
 ========================= */
 
-app.post("/backup", verifyAdmin, async (c)=>{
+app.post("/deploy", verifyAdmin, safe(async (c)=>{
 
-const db = c.env.DB
+  await c.env.DB.prepare(`
+    UPDATE deploy_state
+    SET last_deploy=CURRENT_TIMESTAMP
+    WHERE id=1
+  `).run()
 
-const anime = (await db.prepare("SELECT * FROM anime").all()).results
-const episodes = (await db.prepare("SELECT * FROM episodes").all()).results
-const categories = (await db.prepare("SELECT * FROM categories").all()).results
-const banners = (await db.prepare("SELECT * FROM banners").all()).results
+  return c.json({ success:true })
 
-const data = { anime, episodes, categories, banners }
+}))
 
-const id = crypto.randomUUID()
+/* =========================
+CREATE BACKUP
+========================= */
 
-await db.prepare(`
-INSERT INTO deploy_backups(id,name,data,date)
-VALUES(?,?,?,CURRENT_TIMESTAMP)
-`)
-.bind(
-id,
-"Backup "+new Date().toISOString(),
-JSON.stringify(data)
-)
-.run()
+app.post("/backup", verifyAdmin, safe(async (c)=>{
 
-return c.json({success:true})
+  const db = c.env.DB
 
-})
+  const anime = (await db.prepare("SELECT * FROM anime").all()).results
+  const episodes = (await db.prepare("SELECT * FROM episodes").all()).results
+  const categories = (await db.prepare("SELECT * FROM categories").all()).results
+  const banners = (await db.prepare("SELECT * FROM banners").all()).results
+
+  const data = {
+    anime,
+    episodes,
+    categories,
+    banners
+  }
+
+  const id = crypto.randomUUID()
+
+  await db.prepare(`
+    INSERT INTO deploy_backups(id,name,data,date)
+    VALUES(?,?,?,CURRENT_TIMESTAMP)
+  `)
+  .bind(
+    id,
+    "Backup " + new Date().toISOString(),
+    JSON.stringify(data)
+  )
+  .run()
+
+  return c.json({ success:true })
+
+}))
 
 /* =========================
 DELETE BACKUP
 ========================= */
 
-app.post("/delete-backup", verifyAdmin, async (c)=>{
+app.post("/delete-backup", verifyAdmin, safe(async (c)=>{
 
-const body = await c.req.json()
+  const body = await c.req.json()
 
-await c.env.DB.prepare(`
-DELETE FROM deploy_backups WHERE id=?
-`)
-.bind(body.id)
-.run()
+  if(!body?.id){
+    return c.json({ error:"Missing backup id" },400)
+  }
 
-return c.json({success:true})
+  await c.env.DB.prepare(`
+    DELETE FROM deploy_backups WHERE id=?
+  `)
+  .bind(body.id)
+  .run()
 
-})
+  return c.json({ success:true })
+
+}))
 
 /* =========================
-RESTORE (FIXED)
+RESTORE BACKUP (SAFE VERSION)
 ========================= */
 
-app.post("/restore", verifyAdmin, async (c)=>{
+app.post("/restore", verifyAdmin, safe(async (c)=>{
 
-try{
+  const body = await c.req.json()
 
-const body = await c.req.json()
+  if(!body?.id){
+    return c.json({ error:"Missing backup id" },400)
+  }
 
-const row = await c.env.DB.prepare(`
-SELECT data FROM deploy_backups WHERE id=?
-`)
-.bind(body.id)
-.first()
+  const row = await c.env.DB.prepare(`
+    SELECT data FROM deploy_backups WHERE id=?
+  `)
+  .bind(body.id)
+  .first()
 
-if(!row) return c.json({error:"Backup not found"},404)
+  if(!row){
+    return c.json({ error:"Backup not found" },404)
+  }
 
-const data = JSON.parse(row.data)
-const db = c.env.DB
+  const data = JSON.parse(row.data)
+  const db = c.env.DB
 
-await db.prepare("DELETE FROM anime").run()
-await db.prepare("DELETE FROM episodes").run()
-await db.prepare("DELETE FROM categories").run()
-await db.prepare("DELETE FROM banners").run()
+  /* CLEAR OLD DATA */
+  await db.prepare("DELETE FROM anime").run()
+  await db.prepare("DELETE FROM episodes").run()
+  await db.prepare("DELETE FROM categories").run()
+  await db.prepare("DELETE FROM banners").run()
 
-/* INSERT SAFE */
+  /* SAFE INSERT FUNCTION */
+  async function insert(table, rows){
+    for(const r of rows){
 
-for(const a of data.anime){
-await db.prepare(`
-INSERT INTO anime VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-`).bind(...Object.values(a)).run()
-}
+      const keys = Object.keys(r)
+      const placeholders = keys.map(()=>"?").join(",")
 
-for(const e of data.episodes){
-await db.prepare(`
-INSERT INTO episodes VALUES(?,?,?,?,?,?,?,?,?,?)
-`).bind(...Object.values(e)).run()
-}
+      await db.prepare(`
+        INSERT INTO ${table} (${keys.join(",")})
+        VALUES (${placeholders})
+      `)
+      .bind(...Object.values(r))
+      .run()
+    }
+  }
 
-for(const c of data.categories){
-await db.prepare(`
-INSERT INTO categories VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-`).bind(...Object.values(c)).run()
-}
+  await insert("anime", data.anime || [])
+  await insert("episodes", data.episodes || [])
+  await insert("categories", data.categories || [])
+  await insert("banners", data.banners || [])
 
-for(const b of data.banners){
-await db.prepare(`
-INSERT INTO banners VALUES(?,?,?,?,?,?,?,?,?,?)
-`).bind(...Object.values(b)).run()
-}
+  return c.json({ success:true })
 
-return c.json({success:true})
-
-}catch(err){
-
-console.error("RESTORE ERROR:",err)
-return c.json({error:"Restore failed"},500)
-
-}
-
-})
+}))
 
 /* =========================
 STATE CONTROL
 ========================= */
 
-app.patch("/state", verifyAdmin, async (c)=>{
+app.patch("/state", verifyAdmin, safe(async (c)=>{
 
-const body = await c.req.json()
+  const body = await c.req.json()
 
-if(body.type==="freeze"){
-await c.env.DB.prepare(`
-UPDATE deploy_state SET frozen=? WHERE id=1
-`).bind(body.value?1:0).run()
-}
+  if(body.type==="freeze"){
 
-if(body.type==="emergency"){
-await c.env.DB.prepare(`
-UPDATE deploy_state SET emergency=? WHERE id=1
-`).bind(body.value?1:0).run()
-}
+    await c.env.DB.prepare(`
+      UPDATE deploy_state SET frozen=? WHERE id=1
+    `)
+    .bind(body.value?1:0)
+    .run()
+  }
 
-return c.json({success:true})
+  if(body.type==="emergency"){
 
-})
+    await c.env.DB.prepare(`
+      UPDATE deploy_state SET emergency=? WHERE id=1
+    `)
+    .bind(body.value?1:0)
+    .run()
+  }
+
+  return c.json({ success:true })
+
+}))
 
 export default app
