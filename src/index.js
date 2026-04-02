@@ -72,8 +72,8 @@ import adsAnalytics from "./routes/adsAnalytics.js"
 import analyticsTrack from "./routes/analyticsTrack.js"
 import analyticsAdmin from "./routes/analyticsAdmin.js"
 
-/* AI ROUTES */
-import ai from "./routes/admin/ai.js"
+/* ✅ FIXED AI ROUTE PATH */
+import ai from "./routes/ai.js"
 
 /* 🔥 REAL AI ENGINE */
 import { runAIEngines } from "./ai/runAIEngines.js"
@@ -81,6 +81,7 @@ import { runAIEngines } from "./ai/runAIEngines.js"
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
 
+/* SIDEBAR */
 import sidebar from "./routes/sidebar.js"
 
 /* ================= HEALTH ================= */
@@ -132,6 +133,7 @@ app.route("/api/admin", deploy)
 /* UPLOAD */
 app.route("/api/admin", upload)
 
+/* SIDEBAR */
 app.route("/api/admin", sidebar)
 
 /* ================= PUBLIC ================= */
