@@ -10,22 +10,22 @@ GET ALL SIDEBAR ITEMS
 app.get("/sidebar", verifyAdmin, async (c) => {
 
   const { results } = await c.env.DB
-    .prepare("SELECT * FROM sidebar_items ORDER BY priority ASC")
+    .prepare("SELECT * FROM sidebar ORDER BY priority ASC")
     .all()
 
-  return c.json(results)
+  return c.json(results || [])
 
 })
 
 /* =========================
-CREATE / UPDATE ITEM
+CREATE / UPDATE
 ========================= */
 
 app.post("/sidebar", verifyAdmin, async (c) => {
 
   const body = await c.req.json()
 
-  let {
+  const {
     _id,
     title,
     icon,
@@ -46,8 +46,9 @@ app.post("/sidebar", verifyAdmin, async (c) => {
   const id = _id || crypto.randomUUID()
 
   await c.env.DB.prepare(`
-    INSERT INTO sidebar_items (
-      id,title,icon,url,device,visibility,highlight,badge,priority,active,newTab
+    INSERT INTO sidebar (
+      id,title,icon,url,device,visibility,
+      highlight,badge,priority,active,newTab
     )
     VALUES (?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id)
@@ -66,12 +67,12 @@ app.post("/sidebar", verifyAdmin, async (c) => {
   .bind(
     id,
     title,
-    icon,
+    icon || "",
     url,
-    device,
-    visibility,
-    highlight,
-    badge,
+    device || "All",
+    visibility || "All",
+    highlight || "None",
+    badge || "",
     priority || 99,
     active ? 1 : 0,
     newTab ? 1 : 0
@@ -83,18 +84,17 @@ app.post("/sidebar", verifyAdmin, async (c) => {
 })
 
 /* =========================
-DELETE ITEM
+DELETE
 ========================= */
 
 app.delete("/sidebar/:id", verifyAdmin, async (c) => {
 
   const id = c.req.param("id")
 
-  await c.env.DB.prepare(`
-    DELETE FROM sidebar_items WHERE id=?
-  `)
-  .bind(id)
-  .run()
+  await c.env.DB
+    .prepare("DELETE FROM sidebar WHERE id=?")
+    .bind(id)
+    .run()
 
   return c.json({ success: true })
 
