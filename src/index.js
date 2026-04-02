@@ -74,9 +74,16 @@ import analyticsTrack from "./routes/analyticsTrack.js"
 import analyticsAdmin from "./routes/analyticsAdmin.js"      
       
 /* AI */      
-import ai from "./routes/ai.js"      
-import { runAIEngines } from "./services/aiScheduler.js"      
-      
+import { runAIEngines } from "./routes/admin/ai.js"
+
+export default {
+  fetch: app.fetch,
+
+  async scheduled(event, env) {
+    await runAIEngines(env)
+  }
+}
+
 /* DEPLOY */      
 import deploy from "./routes/deploy.js"      
       
