@@ -84,6 +84,18 @@ export default {
   }
 }
 
+import { runAIEngines } from "./ai/runAIEngines.js"
+
+export default {
+async fetch(request, env, ctx){
+return app.fetch(request, env, ctx)
+},
+
+async scheduled(event, env, ctx){
+ctx.waitUntil(runAIEngines(env))
+}
+}
+
 /* DEPLOY */      
 import deploy from "./routes/deploy.js"      
       
