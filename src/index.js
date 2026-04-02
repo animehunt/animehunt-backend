@@ -81,6 +81,8 @@ import { runAIEngines } from "./ai/runAIEngines.js"
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
 
+import sidebar from "./routes/sidebar.js"
+
 /* ================= HEALTH ================= */
 
 app.get("/", (c) => {
@@ -129,6 +131,8 @@ app.route("/api/admin", deploy)
 
 /* UPLOAD */
 app.route("/api/admin", upload)
+
+app.route("/api/admin", sidebar)
 
 /* ================= PUBLIC ================= */
 
