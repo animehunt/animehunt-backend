@@ -155,6 +155,8 @@ app.route("/api", seoPublic)
 
 app.route("/api", analyticsTrack)
 
+app.route("/api", footer)
+
 /* ================= GLOBAL SECURITY ================= */
 
 app.use("*", systemGuard)
