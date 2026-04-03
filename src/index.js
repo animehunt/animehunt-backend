@@ -72,26 +72,19 @@ import adsAnalytics from "./routes/adsAnalytics.js"
 import analyticsTrack from "./routes/analyticsTrack.js"
 import analyticsAdmin from "./routes/analyticsAdmin.js"
 
-/* ✅ FIXED AI ROUTE PATH */
+/* AI ROUTE */
 import ai from "./routes/ai.js"
-
-/* 🔥 REAL AI ENGINE */
-import { runAIEngines } from "./ai/runAIEngines.js"
-import { runFooterAI } from "./ai/footerAI.js"
-
-export default {
-  fetch: app.fetch,
-
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(runFooterAI(env))
-  }
-}
 
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
 
 /* SIDEBAR */
 import sidebar from "./routes/sidebar.js"
+
+/* ================= AI ENGINES ================= */
+
+import { runAIEngines } from "./ai/runAIEngines.js"
+import { runFooterAI } from "./ai/footerAI.js"
 
 /* ================= HEALTH ================= */
 
@@ -167,12 +160,16 @@ app.route("/api", analyticsTrack)
 app.use("*", systemGuard)
 app.use("*", firewall)
 
-/* ================= EXPORT ================= */
+/* ================= EXPORT (ONLY ONE) ================= */
 
 export default {
   fetch: app.fetch,
 
   async scheduled(event, env, ctx) {
+
+    // 🔥 ALL AI SYSTEMS RUN HERE
     ctx.waitUntil(runAIEngines(env))
+    ctx.waitUntil(runFooterAI(env))
+
   }
 }
