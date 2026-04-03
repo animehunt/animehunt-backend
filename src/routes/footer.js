@@ -4,106 +4,118 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 const app = new Hono()
 
 /* =========================
-GET FOOTER CONFIG
+GET ADMIN CONFIG
 ========================= */
 
-app.get("/footer", verifyAdmin, async (c)=>{
+app.get("/footer", verifyAdmin, async (c) => {
 
-const row = await c.env.DB
-.prepare("SELECT * FROM footer_config WHERE id=1")
-.first()
+  const row = await c.env.DB
+    .prepare("SELECT * FROM footer_config WHERE id=1")
+    .first()
 
-return c.json(row)
+  return c.json(row || {})
 
 })
 
 /* =========================
-SAVE FOOTER CONFIG
+PUBLIC CONFIG (REAL USE)
 ========================= */
 
-app.post("/footer", verifyAdmin, async (c)=>{
+app.get("/footer/public", async (c) => {
 
-const body = await c.req.json()
+  const row = await c.env.DB
+    .prepare("SELECT * FROM footer_config WHERE id=1")
+    .first()
 
-const db = c.env.DB
-
-const fields = Object.keys(body)
-
-for(const f of fields){
-
-await db.prepare(`
-UPDATE footer_config
-SET ${f}=?
-WHERE id=1
-`)
-.bind(body[f])
-.run()
-
-}
-
-return c.json({success:true})
+  return c.json(row || {})
 
 })
 
 /* =========================
-KILL FOOTER
+SAVE CONFIG (SMART UPDATE)
 ========================= */
 
-app.post("/footer/kill", verifyAdmin, async (c)=>{
+app.post("/footer", verifyAdmin, async (c) => {
 
-await c.env.DB.prepare(`
-UPDATE footer_config
-SET footerOn=0
-WHERE id=1
-`).run()
+  const body = await c.req.json()
+  const db = c.env.DB
 
-return c.json({success:true})
+  const fields = Object.keys(body)
+
+  for (const key of fields) {
+
+    await db.prepare(`
+      UPDATE footer_config
+      SET ${key} = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id=1
+    `)
+    .bind(body[key])
+    .run()
+
+  }
+
+  return c.json({ success: true })
 
 })
 
 /* =========================
-RESET FOOTER
+KILL
 ========================= */
 
-app.post("/footer/reset", verifyAdmin, async (c)=>{
+app.post("/footer/kill", verifyAdmin, async (c) => {
 
-await c.env.DB.prepare(`
-UPDATE footer_config
-SET
+  await c.env.DB.prepare(`
+    UPDATE footer_config SET footerOn=0 WHERE id=1
+  `).run()
 
-footerOn=1,
-footerLazy=0,
-footerBlur=0,
-footerLock=0,
-footerTheme='Dark',
+  return c.json({ success: true })
 
-about=1,
-privacy=1,
-disclaimer=1,
-dmca=1,
-telegram=1,
-linkBadges=0,
+})
 
-azOn=1,
-azAuto=1,
-azSticky=0,
-azCompact=0,
-azMode='Scroll',
+/* =========================
+RESET
+========================= */
 
-mobileNav=1,
-mobileFloat=0,
-mobileBlur=0,
-mobileHideScroll=1,
+app.post("/footer/reset", verifyAdmin, async (c) => {
 
-promoOn=0,
-promoText='',
-promoLink='',
-promoAutoHide=0
+  await c.env.DB.prepare(`
+    UPDATE footer_config SET
 
-WHERE id=1
-`).run()
+    footerOn=1,
+    footerLazy=0,
+    footerBlur=0,
+    footerLock=0,
+    footerTheme='Dark',
 
-return c.json({success:true})
+    about=1,
+    privacy=1,
+    disclaimer=1,
+    dmca=1,
+    telegram=1,
+    linkBadges=0,
+
+    azOn=1,
+    azAuto=1,
+    azSticky=0,
+    azCompact=0,
+    azMode='Scroll',
+
+    mobileNav=1,
+    mobileFloat=0,
+    mobileBlur=0,
+    mobileHideScroll=1,
+
+    promoOn=0,
+    promoText='',
+    promoLink='',
+    promoAutoHide=0,
+
+    updated_at=CURRENT_TIMESTAMP
+
+    WHERE id=1
+  `).run()
+
+  return c.json({ success: true })
 
 })
 
