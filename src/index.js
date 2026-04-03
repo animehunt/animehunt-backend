@@ -77,6 +77,15 @@ import ai from "./routes/ai.js"
 
 /* 🔥 REAL AI ENGINE */
 import { runAIEngines } from "./ai/runAIEngines.js"
+import { runFooterAI } from "./ai/footerAI.js"
+
+export default {
+  fetch: app.fetch,
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runFooterAI(env))
+  }
+}
 
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
