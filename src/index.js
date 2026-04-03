@@ -11,7 +11,14 @@ app.use("*", cors({
   allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 }))
 
-/* 🔥 MIDDLEWARE */
+/* ================= OPTIONS FIX (405 FIX) ================= */
+
+app.options("*", (c) => {
+  return c.text("", 200)
+})
+
+/* ================= MIDDLEWARE ================= */
+
 import { firewall } from "./middleware/firewall.js"
 import { systemGuard } from "./middleware/systemGuard.js"
 
@@ -72,7 +79,7 @@ import adsAnalytics from "./routes/adsAnalytics.js"
 import analyticsTrack from "./routes/analyticsTrack.js"
 import analyticsAdmin from "./routes/analyticsAdmin.js"
 
-/* AI ROUTE */
+/* AI */
 import ai from "./routes/ai.js"
 
 /* DEPLOY */
@@ -94,7 +101,7 @@ app.get("/", (c) => {
   })
 })
 
-/* ================= ADMIN ================= */
+/* ================= ADMIN ROUTES ================= */
 
 app.route("/api/admin", auth)
 app.route("/api/admin", dashboard)
@@ -126,19 +133,15 @@ app.route("/api/admin", adsAnalytics)
 
 app.route("/api/admin", analyticsAdmin)
 
-/* AI */
 app.route("/api/admin", ai)
 
-/* DEPLOY */
 app.route("/api/admin", deploy)
 
-/* UPLOAD */
 app.route("/api/admin", upload)
 
-/* SIDEBAR */
 app.route("/api/admin", sidebar)
 
-/* ================= PUBLIC ================= */
+/* ================= PUBLIC ROUTES ================= */
 
 app.route("/api", publicServers)
 app.route("/api", publicEpisodes)
@@ -155,7 +158,9 @@ app.route("/api", seoPublic)
 
 app.route("/api", analyticsTrack)
 
+/* 🔥 IMPORTANT (FIX FOR YOUR ISSUE) */
 app.route("/api", footer)
+app.route("/api", system)
 
 /* ================= GLOBAL SECURITY ================= */
 
@@ -169,7 +174,6 @@ export default {
 
   async scheduled(event, env, ctx) {
 
-    // 🔥 ALL AI SYSTEMS RUN HERE
     ctx.waitUntil(runAIEngines(env))
     ctx.waitUntil(runFooterAI(env))
 
