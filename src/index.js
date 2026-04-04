@@ -90,7 +90,7 @@ import sidebar from "./routes/sidebar.js"
 
 /* ================= AI ENGINES ================= */
 
-import { runAIEngines } from "./ai/runAIEngines.js"
+import { runSystemAI as runAIEngines } from "./ai/engine.js"
 import { runFooterAI } from "./ai/footerAI.js"
 
 /* ================= HEALTH ================= */
