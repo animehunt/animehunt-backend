@@ -302,3 +302,145 @@ export async function runSystemAI(env){
 
   console.log("✅ AI COMPLETE")
 }
+
+export async function runSystemEngine(env, request){
+
+  const db = env.DB
+
+  const cfg = await db.prepare(
+    "SELECT * FROM system_settings WHERE id=1"
+  ).first()
+
+  if(!cfg){
+    return new Response("System config missing",{status:500})
+  }
+
+  /* =========================
+  🔴 HARD SYSTEM OFF
+  ========================= */
+  if(!cfg.systemOn){
+    return new Response("🚫 System Disabled",{status:503})
+  }
+
+  /* =========================
+  🔴 HARD MAINTENANCE
+  ========================= */
+  if(cfg.maintenanceHard){
+    return new Response(`
+      <h1 style="text-align:center;margin-top:20%">
+      🔴 Maintenance Mode
+      </h1>
+    `,{status:503,headers:{"Content-Type":"text/html"}})
+  }
+
+  /* =========================
+  🟡 SOFT MAINTENANCE (API BLOCK)
+  ========================= */
+  if(cfg.maintenanceSoft){
+    if(request.url.includes("/api")){
+      return new Response(
+        JSON.stringify({error:"Maintenance"}),
+        {status:503}
+      )
+    }
+  }
+
+  /* =========================
+  🔒 READ ONLY MODE
+  ========================= */
+  if(cfg.readOnly){
+    if(request.method === "POST" || request.method === "PUT" || request.method==="DELETE"){
+      return new Response(
+        JSON.stringify({error:"Read Only Mode"}),
+        {status:403}
+      )
+    }
+  }
+
+  /* =========================
+  🔒 CMS LOCK
+  ========================= */
+  if(cfg.lockCMS){
+    if(request.url.includes("/admin")){
+      return new Response(
+        "🔒 CMS Locked",
+        {status:403}
+      )
+    }
+  }
+
+  /* =========================
+  🌍 GEO BLOCK (BASIC)
+  ========================= */
+  if(cfg.geoBlock){
+    const country = request.headers.get("cf-ipcountry")
+
+    if(country === "CN" || country === "KP"){
+      return new Response("Blocked Region",{status:403})
+    }
+  }
+
+  /* =========================
+  🔞 AGE LOCK
+  ========================= */
+  if(cfg.ageLock){
+    const age = request.headers.get("x-user-age")
+
+    if(age && Number(age) < 18){
+      return new Response("🔞 Age Restricted",{status:403})
+    }
+  }
+
+  /* =========================
+  ⏰ SCHEDULE ENGINE
+  ========================= */
+  if(cfg.schedule){
+    const hour = new Date().getHours()
+
+    if(hour >= 3 && hour <= 5){
+      // low traffic auto tasks
+      await autoMaintenance(db)
+    }
+  }
+
+  /* =========================
+  👻 SHADOW MODE
+  ========================= */
+  if(cfg.shadow){
+    // hidden content flag
+    request.shadowMode = true
+  }
+
+  /* =========================
+  ⚡ PERFORMANCE OPT
+  ========================= */
+  if(cfg.animation === "None"){
+    request.noAnimation = true
+  }
+
+  return null
+}
+
+/* =========================
+AUTO MAINTENANCE TASKS
+========================= */
+async function autoMaintenance(db){
+
+  try{
+
+    // Example: cleanup logs
+    await db.prepare(`
+      DELETE FROM logs
+      WHERE created_at < datetime('now','-7 days')
+    `).run()
+
+    // Example: auto optimize
+    await db.prepare(`
+      VACUUM
+    `).run()
+
+  }catch(e){
+    console.log("Maintenance error",e)
+  }
+
+}
