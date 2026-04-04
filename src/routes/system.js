@@ -9,13 +9,8 @@ ALLOWED FIELDS (SECURITY)
 
 const allowedFields = [
 "systemOn","maintenanceSoft","maintenanceHard","lockCMS","readOnly","env",
-"theme","animation","skeleton","imgBlur","mobileUI",
-"autoHome","aiHome","trendBoost","manualPin","homeMode",
-"geoBlock","ageLock","schedule","shadow",
-"autoPlay","resume","autoNext","skipIntro","serverSwitch",
-"downloads","zip","scan","limit",
-"liveSearch","highlight","fuzzy","adult","maxResult",
-"antiInspect","iframe","rateLimit","rightClick"
+"theme","animation",
+"geoBlock","ageLock","schedule","shadow"
 ]
 
 /* =========================
@@ -24,15 +19,14 @@ ENSURE ROW EXISTS
 
 async function ensureRow(db){
 
-  const row = await db
-    .prepare("SELECT id FROM system_settings WHERE id=1")
-    .first()
+  const row = await db.prepare(
+    "SELECT id FROM system_settings WHERE id=1"
+  ).first()
 
   if(!row){
-    await db.prepare(`
-      INSERT INTO system_settings (id, systemOn)
-      VALUES (1,1)
-    `).run()
+    await db.prepare(
+      "INSERT INTO system_settings (id) VALUES (1)"
+    ).run()
   }
 
 }
@@ -47,13 +41,13 @@ app.get("/system", verifyAdmin, async (c)=>{
 
     await ensureRow(c.env.DB)
 
-    const row = await c.env.DB
-      .prepare("SELECT * FROM system_settings WHERE id=1")
-      .first()
+    const row = await c.env.DB.prepare(
+      "SELECT * FROM system_settings WHERE id=1"
+    ).first()
 
     return c.json(row || {})
 
-  }catch{
+  }catch(e){
     return c.json({error:"DB Error"},500)
   }
 
@@ -67,9 +61,9 @@ app.get("/system/public", async (c)=>{
 
   try{
 
-    const row = await c.env.DB
-      .prepare("SELECT * FROM system_settings WHERE id=1")
-      .first()
+    const row = await c.env.DB.prepare(
+      "SELECT * FROM system_settings WHERE id=1"
+    ).first()
 
     if(!row) return c.json({})
 
@@ -104,19 +98,23 @@ app.post("/system", verifyAdmin, async (c)=>{
 
       if(!allowedFields.includes(key)) continue
 
+      const value = typeof body[key] === "boolean"
+        ? (body[key] ? 1 : 0)
+        : body[key]
+
       await db.prepare(`
         UPDATE system_settings
-        SET ${key}=?, updated_at=CURRENT_TIMESTAMP
+        SET ${key} = ?, updated_at=CURRENT_TIMESTAMP
         WHERE id=1
       `)
-      .bind(body[key])
+      .bind(value)
       .run()
 
     }
 
     return c.json({success:true})
 
-  }catch{
+  }catch(e){
     return c.json({error:"Update Failed"},500)
   }
 
@@ -131,57 +129,11 @@ app.post("/system/reset", verifyAdmin, async (c)=>{
   try{
 
     await c.env.DB.prepare(`
-      UPDATE system_settings SET
+      DELETE FROM system_settings
+    `).run()
 
-      systemOn=1,
-      maintenanceSoft=0,
-      maintenanceHard=0,
-      lockCMS=0,
-      readOnly=0,
-      env='Production',
-
-      theme='Dark',
-      animation='Soft',
-      skeleton=1,
-      imgBlur=1,
-      mobileUI=1,
-
-      autoHome=1,
-      aiHome=1,
-      trendBoost=1,
-      manualPin=0,
-      homeMode='Dynamic',
-
-      geoBlock=0,
-      ageLock=0,
-      schedule=1,
-      shadow=0,
-
-      autoPlay=1,
-      resume=1,
-      autoNext=1,
-      skipIntro=1,
-      serverSwitch=1,
-
-      downloads=1,
-      zip=0,
-      scan=1,
-      limit=0,
-
-      liveSearch=1,
-      highlight=1,
-      fuzzy=1,
-      adult=0,
-      maxResult=12,
-
-      antiInspect=0,
-      iframe=1,
-      rateLimit=1,
-      rightClick=0,
-
-      updated_at=CURRENT_TIMESTAMP
-
-      WHERE id=1
+    await c.env.DB.prepare(`
+      INSERT INTO system_settings (id) VALUES (1)
     `).run()
 
     return c.json({success:true})
@@ -215,52 +167,71 @@ app.post("/system/kill", verifyAdmin, async (c)=>{
 })
 
 /* =========================
-WATCH TRACKING (AI INPUT)
+CACHE CLEAR (REAL HOOK)
 ========================= */
 
-app.post("/track", async (c)=>{
+app.post("/system/cache-clear", verifyAdmin, async (c)=>{
 
   try{
 
-    const { user_id, anime_id, category, progress } = await c.req.json()
-
-    await c.env.DB.prepare(`
-      INSERT INTO watch_history (user_id,anime_id,category,progress)
-      VALUES (?,?,?,?)
-    `)
-    .bind(user_id,anime_id,category,progress)
-    .run()
-
-    return c.json({tracked:true})
+    // future: cloudflare cache purge / kv clear
+    return c.json({cleared:true})
 
   }catch{
-    return c.json({error:"Track Failed"},500)
+    return c.json({error:true},500)
   }
 
 })
 
 /* =========================
-RECOMMENDATION API
+EXPORT CONFIG
 ========================= */
 
-app.get("/recommend/:user", async (c)=>{
+app.get("/system/export", verifyAdmin, async (c)=>{
 
   try{
 
-    const user = c.req.param("user")
+    const row = await c.env.DB.prepare(
+      "SELECT * FROM system_settings WHERE id=1"
+    ).first()
 
-    const data = await c.env.DB.prepare(`
-      SELECT a.*
-      FROM recommendations r
-      JOIN anime a ON a.id=r.anime_id
-      WHERE r.user_id=?
-      LIMIT 20
-    `).bind(user).all()
-
-    return c.json(data.results || [])
+    return c.json(row || {})
 
   }catch{
-    return c.json([])
+    return c.json({error:true},500)
+  }
+
+})
+
+/* =========================
+IMPORT CONFIG
+========================= */
+
+app.post("/system/import", verifyAdmin, async (c)=>{
+
+  try{
+
+    const data = await c.req.json()
+    const db = c.env.DB
+
+    for(const key of Object.keys(data)){
+
+      if(!allowedFields.includes(key)) continue
+
+      await db.prepare(`
+        UPDATE system_settings
+        SET ${key}=?
+        WHERE id=1
+      `)
+      .bind(data[key])
+      .run()
+
+    }
+
+    return c.json({imported:true})
+
+  }catch{
+    return c.json({error:true},500)
   }
 
 })
