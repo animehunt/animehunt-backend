@@ -4,118 +4,44 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 const app = new Hono()
 
 /* =========================
-ALLOWED FIELDS (SECURITY)
+GET SYSTEM SETTINGS
 ========================= */
+app.get("/system", async (c) => {
 
-const allowedFields = [
-"systemOn","maintenanceSoft","maintenanceHard","lockCMS","readOnly","env",
-"theme","animation",
-"geoBlock","ageLock","schedule","shadow"
-]
+  const data = await c.env.DB
+    .prepare("SELECT * FROM system_settings WHERE id=1")
+    .first()
 
-/* =========================
-ENSURE ROW EXISTS
-========================= */
-
-async function ensureRow(db){
-
-  const row = await db.prepare(
-    "SELECT id FROM system_settings WHERE id=1"
-  ).first()
-
-  if(!row){
-    await db.prepare(
-      "INSERT INTO system_settings (id) VALUES (1)"
-    ).run()
-  }
-
-}
-
-/* =========================
-GET ADMIN CONFIG
-========================= */
-
-app.get("/system", verifyAdmin, async (c)=>{
-
-  try{
-
-    await ensureRow(c.env.DB)
-
-    const row = await c.env.DB.prepare(
-      "SELECT * FROM system_settings WHERE id=1"
-    ).first()
-
-    return c.json(row || {})
-
-  }catch(e){
-    return c.json({error:"DB Error"},500)
-  }
+  return c.json(data || {})
 
 })
 
 /* =========================
-GET PUBLIC CONFIG
+UPDATE SETTINGS
 ========================= */
+app.post("/system", verifyAdmin, async (c) => {
 
-app.get("/system/public", async (c)=>{
+  const body = await c.req.json()
+  const db = c.env.DB
 
   try{
 
-    const row = await c.env.DB.prepare(
-      "SELECT * FROM system_settings WHERE id=1"
-    ).first()
-
-    if(!row) return c.json({})
-
-    const safe = {}
-
-    allowedFields.forEach(f=>{
-      safe[f] = row[f]
-    })
-
-    return c.json(safe)
-
-  }catch{
-    return c.json({})
-  }
-
-})
-
-/* =========================
-UPDATE SYSTEM
-========================= */
-
-app.post("/system", verifyAdmin, async (c)=>{
-
-  try{
-
-    const body = await c.req.json()
-    const db = c.env.DB
-
-    await ensureRow(db)
-
-    for(const key of Object.keys(body)){
-
-      if(!allowedFields.includes(key)) continue
-
-      const value = typeof body[key] === "boolean"
-        ? (body[key] ? 1 : 0)
-        : body[key]
+    for(const key in body){
 
       await db.prepare(`
         UPDATE system_settings
-        SET ${key} = ?, updated_at=CURRENT_TIMESTAMP
-        WHERE id=1
+        SET ${key} = ?
+        WHERE id = 1
       `)
-      .bind(value)
+      .bind(body[key])
       .run()
 
     }
 
-    return c.json({success:true})
+    return c.json({ success:true })
 
   }catch(e){
-    return c.json({error:"Update Failed"},500)
+    return c.json({ success:false, error:e.message })
   }
 
 })
@@ -123,116 +49,62 @@ app.post("/system", verifyAdmin, async (c)=>{
 /* =========================
 RESET SYSTEM
 ========================= */
+app.post("/system/reset", verifyAdmin, async (c) => {
 
-app.post("/system/reset", verifyAdmin, async (c)=>{
+  await c.env.DB.prepare(`
+    UPDATE system_settings SET
+    systemOn=1,
+    maintenanceSoft=0,
+    maintenanceHard=0,
+    lockCMS=0,
+    readOnly=0,
+    env='Production',
+    theme='Dark',
+    animation='Soft',
+    geoBlock=0,
+    ageLock=0,
+    schedule=0,
+    shadow=0,
+    updated_at=CURRENT_TIMESTAMP
+    WHERE id=1
+  `).run()
 
-  try{
-
-    await c.env.DB.prepare(`
-      DELETE FROM system_settings
-    `).run()
-
-    await c.env.DB.prepare(`
-      INSERT INTO system_settings (id) VALUES (1)
-    `).run()
-
-    return c.json({success:true})
-
-  }catch{
-    return c.json({error:"Reset Failed"},500)
-  }
+  return c.json({ success:true })
 
 })
 
 /* =========================
 KILL SWITCH
 ========================= */
+app.post("/system/kill", verifyAdmin, async (c) => {
 
-app.post("/system/kill", verifyAdmin, async (c)=>{
+  await c.env.DB.prepare(`
+    UPDATE system_settings
+    SET systemOn=0,
+        maintenanceHard=1,
+        updated_at=CURRENT_TIMESTAMP
+    WHERE id=1
+  `).run()
+
+  return c.json({ halted:true })
+
+})
+
+/* =========================
+CACHE CLEAR
+========================= */
+app.post("/system/cache-clear", verifyAdmin, async (c) => {
 
   try{
 
+    // Example cache clear (customize later)
     await c.env.DB.prepare(`
-      UPDATE system_settings
-      SET systemOn=0
-      WHERE id=1
+      DELETE FROM cache_store
     `).run()
 
-    return c.json({halted:true})
+  }catch{}
 
-  }catch{
-    return c.json({error:"Kill Failed"},500)
-  }
-
-})
-
-/* =========================
-CACHE CLEAR (REAL HOOK)
-========================= */
-
-app.post("/system/cache-clear", verifyAdmin, async (c)=>{
-
-  try{
-
-    // future: cloudflare cache purge / kv clear
-    return c.json({cleared:true})
-
-  }catch{
-    return c.json({error:true},500)
-  }
-
-})
-
-/* =========================
-EXPORT CONFIG
-========================= */
-
-app.get("/system/export", verifyAdmin, async (c)=>{
-
-  try{
-
-    const row = await c.env.DB.prepare(
-      "SELECT * FROM system_settings WHERE id=1"
-    ).first()
-
-    return c.json(row || {})
-
-  }catch{
-    return c.json({error:true},500)
-  }
-
-})
-
-/* =========================
-IMPORT CONFIG
-========================= */
-
-app.post("/system/import", verifyAdmin, async (c)=>{
-
-  try{
-
-    const data = await c.req.json()
-    const db = c.env.DB
-
-    for(const key of Object.keys(data)){
-
-      if(!allowedFields.includes(key)) continue
-
-      await db.prepare(`
-        UPDATE system_settings
-        SET ${key}=?
-        WHERE id=1
-      `)
-      .bind(data[key])
-      .run()
-
-    }
-
-    return c.json({imported:true})
-
-  }catch{
-    return c.json({error:true},500)
-  }
+  return c.json({ success:true })
 
 })
 
