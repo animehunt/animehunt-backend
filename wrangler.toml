@@ -34,4 +34,4 @@ IMAGEKIT_PRIVATE_KEY = "private_5RhpDsMuLtxnkYONYmJtS9EiPlI="
 # ================= CRON =================
 
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/5 * * * *"]
