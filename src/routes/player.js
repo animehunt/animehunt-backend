@@ -3,97 +3,260 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* ========================
-GET PLAYER SETTINGS
-======================== */
+/* =========================
+UTIL: ENSURE DEFAULT ROW
+========================= */
+async function ensureRow(db){
 
-app.get("/player", verifyAdmin, async (c)=>{
+  const row = await db
+    .prepare("SELECT id FROM player_settings WHERE id=1")
+    .first()
 
-const row = await c.env.DB
-.prepare("SELECT * FROM player_settings WHERE id=1")
-.first()
-
-return c.json({
-
-defaultServer:row.default_server,
-
-autoplay:!!row.autoplay,
-resume:!!row.resume,
-autoswitch:!!row.autoswitch,
-
-mode:row.mode,
-
-ui:{
-servers:!!row.ui_servers,
-download:!!row.ui_download,
-subscribe:!!row.ui_subscribe,
-related:!!row.ui_related
-},
-
-security:{
-embedOnly:!!row.sec_embed_only,
-cloudflare:!!row.sec_cloudflare,
-sandbox:!!row.sec_sandbox,
-referrer:row.sec_referrer
+  if(!row){
+    await db.prepare(`
+      INSERT INTO player_settings (id)
+      VALUES (1)
+    `).run()
+  }
 }
 
-})
+/* =========================
+UTIL: SAFE BOOLEAN
+========================= */
+function toBool(v){
+  return v === true || v === 1 || v === "true"
+}
+
+/* =========================
+UTIL: VALIDATE INPUT
+========================= */
+function validate(body){
+
+  if(!body) return "Empty body"
+
+  if(!body.defaultServer) return "defaultServer required"
+
+  if(!body.mode) return "mode required"
+
+  if(!body.ui || !body.security)
+    return "ui & security required"
+
+  return null
+}
+
+/* =========================
+GET PLAYER SETTINGS
+========================= */
+app.get("/player", verifyAdmin, async (c)=>{
+
+  try{
+
+    const db = c.env.DB
+
+    await ensureRow(db)
+
+    const r = await db
+      .prepare("SELECT * FROM player_settings WHERE id=1")
+      .first()
+
+    if(!r){
+      return c.json({error:"Config missing"},500)
+    }
+
+    return c.json({
+
+      defaultServer: r.default_server || "Server 1",
+
+      autoplay: !!r.autoplay,
+      resume: !!r.resume,
+      autoswitch: !!r.autoswitch,
+
+      mode: r.mode || "responsive",
+
+      ui:{
+        servers: !!r.ui_servers,
+        download: !!r.ui_download,
+        subscribe: !!r.ui_subscribe,
+        related: !!r.ui_related
+      },
+
+      security:{
+        embedOnly: !!r.sec_embed_only,
+        cloudflare: !!r.sec_cloudflare,
+        sandbox: !!r.sec_sandbox,
+        referrer: r.sec_referrer || "strict"
+      }
+
+    })
+
+  }catch(e){
+
+    console.error("GET PLAYER ERROR:", e)
+
+    return c.json({
+      error: "Failed to load player settings"
+    },500)
+
+  }
 
 })
 
-/* ========================
-SAVE SETTINGS
-======================== */
-
+/* =========================
+UPDATE PLAYER SETTINGS
+========================= */
 app.post("/player", verifyAdmin, async (c)=>{
 
-const body = await c.req.json()
+  try{
 
-await c.env.DB.prepare(`
-UPDATE player_settings SET
+    const body = await c.req.json()
+    const db = c.env.DB
 
-default_server=?,
+    const error = validate(body)
+    if(error){
+      return c.json({success:false,error},400)
+    }
 
-autoplay=?,
-resume=?,
-autoswitch=?,
+    await ensureRow(db)
 
-mode=?,
+    await db.prepare(`
+      UPDATE player_settings SET
 
-ui_servers=?,
-ui_download=?,
-ui_subscribe=?,
-ui_related=?,
+        default_server = ?,
 
-sec_embed_only=?,
-sec_cloudflare=?,
-sec_sandbox=?,
-sec_referrer=?
+        autoplay = ?,
+        resume = ?,
+        autoswitch = ?,
 
-WHERE id=1
-`).bind(
+        mode = ?,
 
-body.defaultServer,
+        ui_servers = ?,
+        ui_download = ?,
+        ui_subscribe = ?,
+        ui_related = ?,
 
-body.autoplay,
-body.resume,
-body.autoswitch,
+        sec_embed_only = ?,
+        sec_cloudflare = ?,
+        sec_sandbox = ?,
+        sec_referrer = ?,
 
-body.mode,
+        updated_at = CURRENT_TIMESTAMP
 
-body.ui.servers,
-body.ui.download,
-body.ui.subscribe,
-body.ui.related,
+      WHERE id = 1
+    `).bind(
 
-body.security.embedOnly,
-body.security.cloudflare,
-body.security.sandbox,
-body.security.referrer
+      body.defaultServer,
 
-).run()
+      toBool(body.autoplay) ? 1 : 0,
+      toBool(body.resume) ? 1 : 0,
+      toBool(body.autoswitch) ? 1 : 0,
 
-return c.json({success:true})
+      body.mode,
+
+      toBool(body.ui.servers) ? 1 : 0,
+      toBool(body.ui.download) ? 1 : 0,
+      toBool(body.ui.subscribe) ? 1 : 0,
+      toBool(body.ui.related) ? 1 : 0,
+
+      toBool(body.security.embedOnly) ? 1 : 0,
+      toBool(body.security.cloudflare) ? 1 : 0,
+      toBool(body.security.sandbox) ? 1 : 0,
+      body.security.referrer
+
+    ).run()
+
+    return c.json({success:true})
+
+  }catch(e){
+
+    console.error("SAVE PLAYER ERROR:", e)
+
+    return c.json({
+      success:false,
+      error:"Failed to save player settings"
+    },500)
+
+  }
+
+})
+
+/* =========================
+RESET PLAYER SETTINGS
+========================= */
+app.post("/player/reset", verifyAdmin, async (c)=>{
+
+  try{
+
+    const db = c.env.DB
+
+    await ensureRow(db)
+
+    await db.prepare(`
+      UPDATE player_settings SET
+
+        default_server = 'Server 1',
+
+        autoplay = 1,
+        resume = 1,
+        autoswitch = 1,
+
+        mode = 'responsive',
+
+        ui_servers = 1,
+        ui_download = 1,
+        ui_subscribe = 1,
+        ui_related = 1,
+
+        sec_embed_only = 0,
+        sec_cloudflare = 0,
+        sec_sandbox = 1,
+        sec_referrer = 'strict',
+
+        updated_at = CURRENT_TIMESTAMP
+
+      WHERE id = 1
+    `).run()
+
+    return c.json({success:true})
+
+  }catch(e){
+
+    console.error("RESET PLAYER ERROR:", e)
+
+    return c.json({
+      success:false,
+      error:"Reset failed"
+    },500)
+
+  }
+
+})
+
+/* =========================
+HEALTH CHECK (DEBUG)
+========================= */
+app.get("/player/health", async (c)=>{
+
+  try{
+
+    const db = c.env.DB
+
+    const row = await db
+      .prepare("SELECT COUNT(*) as total FROM player_settings")
+      .first()
+
+    return c.json({
+      ok:true,
+      total:row.total
+    })
+
+  }catch(e){
+
+    return c.json({
+      ok:false,
+      error:e.message
+    })
+
+  }
 
 })
 
