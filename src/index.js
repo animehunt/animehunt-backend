@@ -1,7 +1,29 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 
+/* ================= APP ================= */
+
 const app = new Hono()
+
+/* ================= GLOBAL ERROR HANDLER ================= */
+
+app.onError((err, c) => {
+  console.error("🔥 GLOBAL ERROR:", err)
+
+  return c.json({
+    success: false,
+    error: "Internal Server Error"
+  }, 500)
+})
+
+/* ================= NOT FOUND ================= */
+
+app.notFound((c) => {
+  return c.json({
+    success: false,
+    error: "Route Not Found"
+  }, 404)
+})
 
 /* ================= CORS ================= */
 
@@ -11,10 +33,19 @@ app.use("*", cors({
   allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 }))
 
-/* ================= OPTIONS FIX (405 FIX) ================= */
+/* ================= OPTIONS FIX ================= */
 
-app.options("*", (c) => {
-  return c.text("", 200)
+app.options("*", (c) => c.text("", 200))
+
+/* ================= BASIC LOGGER ================= */
+
+app.use("*", async (c, next) => {
+  const start = Date.now()
+
+  await next()
+
+  const ms = Date.now() - start
+  console.log(`${c.req.method} ${c.req.url} - ${ms}ms`)
 })
 
 /* ================= MIDDLEWARE ================= */
@@ -22,7 +53,11 @@ app.options("*", (c) => {
 import { firewall } from "./middleware/firewall.js"
 import { systemGuard } from "./middleware/systemGuard.js"
 
-/* ================= ROUTES ================= */
+/* 🔥 ORDER IMPORTANT */
+app.use("*", systemGuard)
+app.use("*", firewall)
+
+/* ================= ROUTES IMPORT ================= */
 
 /* AUTH */
 import auth from "./routes/auth.js"
@@ -41,6 +76,10 @@ import publicBanners from "./routes/publicBanners.js"
 /* SERVERS */
 import adminServers from "./routes/adminServers.js"
 import publicServers from "./routes/publicServers.js"
+
+/* PLAYER */
+import player from "./routes/player.js"
+import publicPlayer from "./routes/publicPlayer.js"
 
 /* DOWNLOADS */
 import downloads from "./routes/downloads.js"
@@ -97,6 +136,7 @@ import { runFooterAI } from "./ai/footerAI.js"
 
 app.get("/", (c) => {
   return c.json({
+    success: true,
     status: "AnimeHunt Backend Running 🚀"
   })
 })
@@ -112,6 +152,8 @@ app.route("/api/admin", categories)
 app.route("/api/admin", banners)
 
 app.route("/api/admin", adminServers)
+
+app.route("/api/admin", player)
 
 app.route("/api/admin", downloads)
 
@@ -149,6 +191,8 @@ app.route("/api", publicCategories)
 app.route("/api", publicBanners)
 app.route("/api", publicAnime)
 
+app.route("/api", publicPlayer)
+
 app.route("/api", publicAds)
 app.route("/api", adClick)
 
@@ -158,24 +202,25 @@ app.route("/api", seoPublic)
 
 app.route("/api", analyticsTrack)
 
-/* 🔥 IMPORTANT (FIX FOR YOUR ISSUE) */
-app.route("/api", footer)
-app.route("/api", system)
+/* ================= ENV VALIDATION ================= */
 
-/* ================= GLOBAL SECURITY ================= */
+app.use("*", async (c, next) => {
+  if (!c.env.DB) {
+    return c.json({
+      success: false,
+      error: "Database not configured"
+    }, 500)
+  }
+  await next()
+})
 
-app.use("*", systemGuard)
-app.use("*", firewall)
-
-/* ================= EXPORT (ONLY ONE) ================= */
+/* ================= EXPORT ================= */
 
 export default {
   fetch: app.fetch,
 
   async scheduled(event, env, ctx) {
-
     ctx.waitUntil(runAIEngines(env))
     ctx.waitUntil(runFooterAI(env))
-
   }
 }
