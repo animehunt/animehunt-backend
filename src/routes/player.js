@@ -8,16 +8,23 @@ UTIL: ENSURE DEFAULT ROW
 ========================= */
 async function ensureRow(db){
 
-  const row = await db
-    .prepare("SELECT id FROM player_settings WHERE id=1")
-    .first()
+  try{
 
-  if(!row){
-    await db.prepare(`
-      INSERT INTO player_settings (id)
-      VALUES (1)
-    `).run()
+    const row = await db
+      .prepare("SELECT id FROM player_settings WHERE id=1")
+      .first()
+
+    if(!row){
+      await db.prepare(`
+        INSERT INTO player_settings (id)
+        VALUES (1)
+      `).run()
+    }
+
+  }catch(e){
+    console.error("ENSURE ROW ERROR:", e)
   }
+
 }
 
 /* =========================
@@ -28,18 +35,24 @@ function toBool(v){
 }
 
 /* =========================
-UTIL: VALIDATE INPUT
+UTIL: VALIDATE INPUT (STRICT)
 ========================= */
 function validate(body){
 
-  if(!body) return "Empty body"
+  if(!body || typeof body !== "object")
+    return "Invalid body"
 
-  if(!body.defaultServer) return "defaultServer required"
+  if(typeof body.defaultServer !== "string")
+    return "defaultServer required"
 
-  if(!body.mode) return "mode required"
+  if(typeof body.mode !== "string")
+    return "mode required"
 
-  if(!body.ui || !body.security)
-    return "ui & security required"
+  if(!body.ui || typeof body.ui !== "object")
+    return "ui object required"
+
+  if(!body.security || typeof body.security !== "object")
+    return "security object required"
 
   return null
 }
@@ -60,10 +73,12 @@ app.get("/player", verifyAdmin, async (c)=>{
       .first()
 
     if(!r){
-      return c.json({error:"Config missing"},500)
+      return c.json({ success:false, error:"Config missing" },500)
     }
 
     return c.json({
+
+      success:true,
 
       defaultServer: r.default_server || "Server 1",
 
@@ -84,7 +99,7 @@ app.get("/player", verifyAdmin, async (c)=>{
         embedOnly: !!r.sec_embed_only,
         cloudflare: !!r.sec_cloudflare,
         sandbox: !!r.sec_sandbox,
-        referrer: r.sec_referrer || "strict"
+        referrer: r.sec_referrer || "strict-origin"
       }
 
     })
@@ -94,7 +109,8 @@ app.get("/player", verifyAdmin, async (c)=>{
     console.error("GET PLAYER ERROR:", e)
 
     return c.json({
-      error: "Failed to load player settings"
+      success:false,
+      error:"Failed to load player settings"
     },500)
 
   }
@@ -108,12 +124,19 @@ app.post("/player", verifyAdmin, async (c)=>{
 
   try{
 
-    const body = await c.req.json()
+    let body
+
+    try{
+      body = await c.req.json()
+    }catch{
+      return c.json({ success:false, error:"Invalid JSON" },400)
+    }
+
     const db = c.env.DB
 
-    const error = validate(body)
-    if(error){
-      return c.json({success:false,error},400)
+    const err = validate(body)
+    if(err){
+      return c.json({ success:false, error:err },400)
     }
 
     await ensureRow(db)
@@ -152,19 +175,19 @@ app.post("/player", verifyAdmin, async (c)=>{
 
       body.mode,
 
-      toBool(body.ui.servers) ? 1 : 0,
-      toBool(body.ui.download) ? 1 : 0,
-      toBool(body.ui.subscribe) ? 1 : 0,
-      toBool(body.ui.related) ? 1 : 0,
+      toBool(body.ui?.servers) ? 1 : 0,
+      toBool(body.ui?.download) ? 1 : 0,
+      toBool(body.ui?.subscribe) ? 1 : 0,
+      toBool(body.ui?.related) ? 1 : 0,
 
-      toBool(body.security.embedOnly) ? 1 : 0,
-      toBool(body.security.cloudflare) ? 1 : 0,
-      toBool(body.security.sandbox) ? 1 : 0,
-      body.security.referrer
+      toBool(body.security?.embedOnly) ? 1 : 0,
+      toBool(body.security?.cloudflare) ? 1 : 0,
+      toBool(body.security?.sandbox) ? 1 : 0,
+      body.security?.referrer || "strict-origin"
 
     ).run()
 
-    return c.json({success:true})
+    return c.json({ success:true })
 
   }catch(e){
 
@@ -209,14 +232,14 @@ app.post("/player/reset", verifyAdmin, async (c)=>{
         sec_embed_only = 0,
         sec_cloudflare = 0,
         sec_sandbox = 1,
-        sec_referrer = 'strict',
+        sec_referrer = 'strict-origin',
 
         updated_at = CURRENT_TIMESTAMP
 
       WHERE id = 1
     `).run()
 
-    return c.json({success:true})
+    return c.json({ success:true })
 
   }catch(e){
 
@@ -232,7 +255,7 @@ app.post("/player/reset", verifyAdmin, async (c)=>{
 })
 
 /* =========================
-HEALTH CHECK (DEBUG)
+HEALTH CHECK
 ========================= */
 app.get("/player/health", async (c)=>{
 
@@ -245,16 +268,16 @@ app.get("/player/health", async (c)=>{
       .first()
 
     return c.json({
-      ok:true,
-      total:row.total
+      success:true,
+      total: row?.total || 0
     })
 
   }catch(e){
 
     return c.json({
-      ok:false,
+      success:false,
       error:e.message
-    })
+    },500)
 
   }
 
