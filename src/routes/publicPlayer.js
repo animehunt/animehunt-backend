@@ -10,13 +10,13 @@ function buildSafeConfig(row){
 
   return {
 
-    defaultServer: row.default_server,
+    defaultServer: row.default_server || "Server 1",
 
     autoplay: !!row.autoplay,
     resume: !!row.resume,
     autoswitch: !!row.autoswitch,
 
-    mode: row.mode,
+    mode: row.mode || "responsive",
 
     ui:{
       servers: !!row.ui_servers,
@@ -25,10 +25,10 @@ function buildSafeConfig(row){
       related: !!row.ui_related
     },
 
-    /* 🔥 SECURITY HIDE */
+    /* 🔒 SECURITY (LIMITED PUBLIC) */
     security:{
       sandbox: !!row.sec_sandbox,
-      referrer: row.sec_referrer
+      referrer: row.sec_referrer || "strict-origin"
     }
 
   }
@@ -50,16 +50,20 @@ app.get("/player", async (c)=>{
       .first()
 
     if(!row){
-      return c.json({})
+      return c.json({ success:true, config:{} })
     }
 
-    return c.json(buildSafeConfig(row))
+    return c.json({
+      success:true,
+      config: buildSafeConfig(row)
+    })
 
   }catch(e){
 
     console.error("PUBLIC PLAYER ERROR:",e)
 
     return c.json({
+      success:false,
       error:"Failed to load player"
     },500)
 
@@ -80,8 +84,15 @@ app.get("/player/stream", async (c)=>{
     const anime = c.req.query("anime")
     const ep = c.req.query("ep")
 
+    /* ================= VALIDATION ================= */
+
     if(!anime || !ep){
-      return c.json({error:"Missing params"},400)
+      return c.json({ success:false, error:"Missing params" },400)
+    }
+
+    // 🔒 sanitize (IMPORTANT)
+    if(!/^\d+$/.test(anime) || !/^\d+$/.test(ep)){
+      return c.json({ success:false, error:"Invalid params" },400)
     }
 
     /* ================= CONFIG ================= */
@@ -91,62 +102,77 @@ app.get("/player/stream", async (c)=>{
       .first()
 
     if(!cfg){
-      return c.json({error:"Config missing"},500)
+      return c.json({ success:false, error:"Config missing" },500)
     }
 
     /* ================= SERVER ================= */
 
-    let server = await db.prepare(`
-      SELECT * FROM servers
-      WHERE name=? AND active=1
-    `).bind(cfg.default_server).first()
+    let server = null
 
+    if(cfg.default_server){
+
+      server = await db.prepare(`
+        SELECT * FROM servers
+        WHERE name=? AND active=1
+      `).bind(cfg.default_server).first()
+
+    }
+
+    /* FALLBACK */
     if(!server){
 
       server = await db.prepare(`
         SELECT * FROM servers
         WHERE active=1
-        ORDER BY priority DESC
+        ORDER BY priority DESC, last_used ASC
         LIMIT 1
       `).first()
 
     }
 
     if(!server){
-      return c.json({error:"No server"},503)
+      return c.json({ success:false, error:"No server available" },503)
     }
 
-    /* ================= URL ================= */
+    /* ================= HEALTH CHECK ================= */
+
+    const alive = await checkServer(server.url)
+
+    if(!alive && cfg.autoswitch){
+
+      const fallback = await db.prepare(`
+        SELECT * FROM servers
+        WHERE active=1 AND id != ?
+        ORDER BY priority DESC
+        LIMIT 1
+      `).bind(server.id).first()
+
+      if(fallback){
+        server = fallback
+      }else{
+        return c.json({ success:false, error:"All servers down" },503)
+      }
+
+    }
+
+    /* ================= STREAM URL ================= */
 
     const stream = `${server.url}/stream/${anime}/${ep}`
+
+    /* ================= TRACK (ASYNC) ================= */
+
+    trackSession(env, c.req, server.id).catch(()=>{})
 
     /* ================= RESPONSE ================= */
 
     return c.json({
 
-      stream,
+      success:true,
 
+      stream,
       server: server.name,
 
-      config:{
-        autoplay: !!cfg.autoplay,
-        resume: !!cfg.resume,
-        autoswitch: !!cfg.autoswitch,
-        mode: cfg.mode,
-
-        ui:{
-          servers: !!cfg.ui_servers,
-          download: !!cfg.ui_download,
-          subscribe: !!cfg.ui_subscribe,
-          related: !!cfg.ui_related
-        },
-
-        security:{
-          sandbox: !!cfg.sec_sandbox,
-          referrer: cfg.sec_referrer
-        }
-
-      }
+      config: buildSafeConfig(cfg)
 
     })
 
@@ -154,10 +180,65 @@ app.get("/player/stream", async (c)=>{
 
     console.error("STREAM ERROR:",e)
 
-    return c.json({error:"Stream failed"},500)
+    return c.json({
+      success:false,
+      error:"Stream failed"
+    },500)
 
   }
 
 })
+
+/* =========================
+SERVER HEALTH CHECK
+========================= */
+
+async function checkServer(url){
+
+  try{
+
+    const controller = new AbortController()
+    const timeout = setTimeout(()=>controller.abort(), 3000)
+
+    const res = await fetch(url,{
+      method:"HEAD",
+      signal: controller.signal,
+      cf:{ cacheTtl:0 }
+    })
+
+    clearTimeout(timeout)
+
+    return res.ok
+
+  }catch{
+    return false
+  }
+
+}
+
+/* =========================
+TRACK SESSION (SAFE)
+========================= */
+
+async function trackSession(env, req, serverId){
+
+  try{
+
+    const db = env.DB
+
+    const ip = req.headers.get("cf-connecting-ip") || "unknown"
+
+    await db.prepare(`
+      INSERT INTO player_sessions(ip,server_id,created_at)
+      VALUES (?,?,CURRENT_TIMESTAMP)
+    `)
+    .bind(ip, serverId)
+    .run()
+
+  }catch(e){
+    console.log("TRACK ERROR:", e)
+  }
+
+}
 
 export default app
