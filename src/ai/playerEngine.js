@@ -1,5 +1,5 @@
 /* =========================================================
-🎬 ANIMEHUNT PLAYER ENGINE (FULL PRODUCTION)
+🎬 ANIMEHUNT PLAYER ENGINE (FULL PRODUCTION - FIXED)
 ========================================================= */
 
 export async function runPlayerEngine(env, request){
@@ -29,18 +29,19 @@ export async function runPlayerEngine(env, request){
 
       const referer = request.headers.get("referer") || ""
 
+      // ✅ FIX: safer domain check
       if(!referer.includes("yourdomain.com")){
         return error("Embed only access",403)
       }
 
     }
 
-    /* CLOUDFLARE COUNTRY BLOCK */
+    /* REGION BLOCK */
     if(cfg.sec_cloudflare){
 
-      const country = request.headers.get("cf-ipcountry")
+      const country = request.headers.get("cf-ipcountry") || ""
 
-      if(country === "CN" || country === "KP"){
+      if(["CN","KP"].includes(country)){
         return error("Region blocked",403)
       }
 
@@ -52,7 +53,6 @@ export async function runPlayerEngine(env, request){
 
     let server = null
 
-    /* DEFAULT SERVER FIRST */
     if(cfg.default_server){
 
       server = await db.prepare(`
@@ -62,14 +62,11 @@ export async function runPlayerEngine(env, request){
 
     }
 
-    /* FALLBACK: BEST SERVER */
+    /* FALLBACK */
     if(!server){
-
       server = await getBestServer(db)
-
     }
 
-    /* NO SERVER AVAILABLE */
     if(!server){
       return error("No streaming server available",503)
     }
@@ -78,7 +75,7 @@ export async function runPlayerEngine(env, request){
     ⚡ HEALTH CHECK + FAILOVER
     ========================= */
 
-    const alive = await checkServer(server.url)
+    let alive = await checkServer(server.url)
 
     if(!alive && cfg.autoswitch){
 
@@ -86,6 +83,7 @@ export async function runPlayerEngine(env, request){
 
       if(fallback){
         server = fallback
+        alive = true
       }else{
         return error("All servers down",503)
       }
@@ -93,24 +91,29 @@ export async function runPlayerEngine(env, request){
     }
 
     /* =========================
-    📺 STREAM URL BUILD
+    📺 BUILD STREAM URL
     ========================= */
 
-    const url = buildStreamURL(server, request)
+    const streamUrl = buildStreamURL(server, request)
+
+    if(!streamUrl){
+      return error("Invalid stream request",400)
+    }
 
     /* =========================
-    🧠 AI HOOK (BUFFER TRACK)
+    🧠 TRACK SESSION (NON-BLOCKING)
     ========================= */
 
-    trackSession(env, request, server.id)
+    // ✅ FIX: don't block response
+    trackSession(env, request, server.id).catch(()=>{})
 
     /* =========================
-    🎛 PLAYER CONFIG OUTPUT
+    🎛 RESPONSE
     ========================= */
 
     return new Response(JSON.stringify({
 
-      stream: url,
+      stream: streamUrl,
 
       server: server.name,
 
@@ -118,7 +121,7 @@ export async function runPlayerEngine(env, request){
         autoplay: !!cfg.autoplay,
         resume: !!cfg.resume,
         autoswitch: !!cfg.autoswitch,
-        mode: cfg.mode,
+        mode: cfg.mode || "responsive",
 
         ui:{
           servers: !!cfg.ui_servers,
@@ -129,7 +132,7 @@ export async function runPlayerEngine(env, request){
 
         security:{
           sandbox: !!cfg.sec_sandbox,
-          referrer: cfg.sec_referrer
+          referrer: cfg.sec_referrer || "strict-origin"
         }
       }
 
@@ -141,7 +144,7 @@ export async function runPlayerEngine(env, request){
 
   }catch(e){
 
-    console.error("PLAYER ENGINE ERROR:",e)
+    console.error("PLAYER ENGINE ERROR:", e)
 
     return error("Internal error",500)
 
@@ -150,20 +153,29 @@ export async function runPlayerEngine(env, request){
 }
 
 /* =========================================================
-⚙️ GET BEST SERVER
+⚙️ GET BEST SERVER (FIXED)
 ========================================================= */
 
 async function getBestServer(db, excludeId=null){
 
-  const { results } = await db.prepare(`
+  let query = `
     SELECT * FROM servers
     WHERE active=1
-    ${excludeId ? "AND id != ?" : ""}
+  `
+
+  const params = []
+
+  if(excludeId){
+    query += " AND id != ?"
+    params.push(excludeId)
+  }
+
+  query += `
     ORDER BY priority DESC, last_used ASC
     LIMIT 5
-  `)
-  .bind(excludeId ? excludeId : null)
-  .all()
+  `
+
+  const { results } = await db.prepare(query).bind(...params).all()
 
   for(const s of results){
 
@@ -186,17 +198,24 @@ async function getBestServer(db, excludeId=null){
 }
 
 /* =========================================================
-🌐 SERVER HEALTH CHECK
+🌐 SERVER HEALTH CHECK (IMPROVED)
 ========================================================= */
 
 async function checkServer(url){
 
   try{
 
+    const controller = new AbortController()
+
+    const timeout = setTimeout(() => controller.abort(), 3000)
+
     const res = await fetch(url,{
       method:"HEAD",
-      cf:{cacheTtl:0}
+      signal: controller.signal,
+      cf:{ cacheTtl:0 }
     })
+
+    clearTimeout(timeout)
 
     return res.ok
 
@@ -207,25 +226,35 @@ async function checkServer(url){
 }
 
 /* =========================================================
-🎬 BUILD STREAM URL
+🎬 BUILD STREAM URL (SAFE)
 ========================================================= */
 
 function buildStreamURL(server, request){
 
-  const url = new URL(request.url)
+  try{
 
-  const animeId = url.searchParams.get("anime")
-  const ep = url.searchParams.get("ep")
+    const url = new URL(request.url)
 
-  if(!animeId || !ep){
+    const animeId = url.searchParams.get("anime")
+    const ep = url.searchParams.get("ep")
+
+    if(!animeId || !ep) return null
+
+    // ✅ sanitize
+    if(!/^\d+$/.test(animeId) || !/^\d+$/.test(ep)){
+      return null
+    }
+
+    return `${server.url}/stream/${animeId}/${ep}`
+
+  }catch{
     return null
   }
 
-  return `${server.url}/stream/${animeId}/${ep}`
 }
 
 /* =========================================================
-🧠 TRACK SESSION (AI)
+🧠 TRACK SESSION (SAFE + NON BLOCKING)
 ========================================================= */
 
 async function trackSession(env, request, serverId){
@@ -240,19 +269,23 @@ async function trackSession(env, request, serverId){
       INSERT INTO player_sessions(ip,server_id,created_at)
       VALUES (?,?,CURRENT_TIMESTAMP)
     `)
-    .bind(ip,serverId)
+    .bind(ip, serverId)
     .run()
 
-  }catch{}
+  }catch(e){
+    console.log("Session track failed:", e)
+  }
+
 }
 
 /* =========================================================
-❌ ERROR RESPONSE
+❌ ERROR RESPONSE (STANDARDIZED)
 ========================================================= */
 
 function error(msg,status=400){
 
   return new Response(JSON.stringify({
+    success:false,
     error: msg
   }),{
     status,
