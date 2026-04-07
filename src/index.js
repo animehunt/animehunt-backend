@@ -59,12 +59,7 @@ app.notFound((c) => {
 
 /* ================= MIDDLEWARE ================= */
 
-import { firewall } from "./middleware/firewall.js"
-import { systemGuard } from "./middleware/systemGuard.js"
 
-/* ✅ APPLY ONLY ADMIN ROUTES */
-app.use("/api/admin/*", systemGuard)
-app.use("/api/admin/*", firewall)
 
 /* ================= ROUTES ================= */
 
