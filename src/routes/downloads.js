@@ -4,206 +4,189 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 const app = new Hono()
 
 /* =========================
-GET ALL DOWNLOADS (ADMIN)
+GET ALL DOWNLOADS
 ========================= */
-
 app.get("/downloads", verifyAdmin, async (c)=>{
 
-  const data = await c.env.DB
-  .prepare(`
-    SELECT *
-    FROM downloads
-    ORDER BY created_at DESC
-  `)
-  .all()
+const { results } = await c.env.DB
+.prepare(`
+SELECT *
+FROM downloads
+ORDER BY created_at DESC
+`)
+.all()
 
-  return c.json(data.results)
-
-})
-
-/* =========================
-GET ALL DOWNLOADS BY ANIME
-(🔥 NEW - PUBLIC PAGE USE)
-========================= */
-
-app.get("/downloads/:anime", async (c)=>{
-
-  const anime = c.req.param("anime")
-
-  const data = await c.env.DB
-  .prepare(`
-    SELECT season, episode, host, quality, link
-    FROM downloads
-    WHERE anime=?
-    ORDER BY season ASC, episode ASC
-  `)
-  .bind(anime)
-  .all()
-
-  return c.json(data.results)
+return c.json(results)
 
 })
 
 /* =========================
-GET DOWNLOADS BY EPISODE
+GET BY EPISODE
 ========================= */
-
 app.get("/downloads/:anime/:season/:episode", async (c)=>{
 
-  const {anime,season,episode} = c.req.param()
+const {anime,season,episode} = c.req.param()
 
-  const data = await c.env.DB
-  .prepare(`
-    SELECT host,quality,link
-    FROM downloads
-    WHERE anime=? AND season=? AND episode=?
-  `)
-  .bind(anime,season,episode)
-  .all()
+const { results } = await c.env.DB
+.prepare(`
+SELECT host,quality,link,type,route
+FROM downloads
+WHERE anime=? AND season=? AND episode=?
+`)
+.bind(anime,season,episode)
+.all()
 
-  return c.json(data.results)
+return c.json(results)
 
 })
 
 /* =========================
-CREATE SINGLE DOWNLOAD
+CREATE SINGLE
 ========================= */
-
 app.post("/downloads", verifyAdmin, async (c)=>{
 
-  const body = await c.req.json()
+const body = await c.req.json()
+const id = crypto.randomUUID()
 
-  if(!body.anime || !body.episode || !body.host || !body.quality || !body.link){
-    return c.json({error:"Missing fields"},400)
-  }
+await c.env.DB.prepare(`
+INSERT INTO downloads
+(id,anime,season,episode,host,quality,link,type,route,clicks)
+VALUES(?,?,?,?,?,?,?,?,?,0)
+`)
+.bind(
+id,
+body.anime,
+body.season,
+body.episode,
+body.host,
+body.quality,
+body.link,
+body.type || "internal",
+body.route || "go"
+)
+.run()
 
-  const id = crypto.randomUUID()
-
-  await c.env.DB.prepare(`
-    INSERT INTO downloads
-    (id,anime,season,episode,host,quality,link,created_at)
-    VALUES(?,?,?,?,?,?,?,datetime('now'))
-  `)
-  .bind(
-    id,
-    body.anime,
-    body.season || "1",
-    body.episode,
-    body.host,
-    body.quality,
-    body.link
-  )
-  .run()
-
-  return c.json({success:true,id})
+return c.json({success:true})
 
 })
 
 /* =========================
 BULK INSERT
 ========================= */
-
 app.post("/downloads/bulk", verifyAdmin, async (c)=>{
 
-  const rows = await c.req.json()
-  const db = c.env.DB
+const rows = await c.req.json()
+const db = c.env.DB
 
-  if(!Array.isArray(rows)){
-    return c.json({error:"Invalid data"},400)
-  }
+for(const d of rows){
 
-  for(const d of rows){
+await db.prepare(`
+INSERT INTO downloads
+(id,anime,season,episode,host,quality,link,type,route,clicks)
+VALUES(?,?,?,?,?,?,?,?,?,0)
+`)
+.bind(
+crypto.randomUUID(),
+d.anime,
+d.season,
+d.episode,
+d.host,
+d.quality,
+d.link,
+d.type || "internal",
+d.route || "go"
+)
+.run()
 
-    if(!d.anime || !d.episode || !d.host || !d.quality || !d.link){
-      continue
-    }
+}
 
-    await db.prepare(`
-      INSERT INTO downloads
-      (id,anime,season,episode,host,quality,link,created_at)
-      VALUES(?,?,?,?,?,?,?,datetime('now'))
-    `)
-    .bind(
-      crypto.randomUUID(),
-      d.anime,
-      d.season || "1",
-      d.episode,
-      d.host,
-      d.quality,
-      d.link
-    )
-    .run()
-
-  }
-
-  return c.json({success:true})
+return c.json({success:true})
 
 })
 
 /* =========================
 UPDATE DOWNLOAD (🔥 NEW)
 ========================= */
+app.put("/downloads/update/:id", verifyAdmin, async (c)=>{
 
-app.put("/downloads/:id", verifyAdmin, async (c)=>{
+const id = c.req.param("id")
+const body = await c.req.json()
 
-  const {id} = c.req.param()
-  const body = await c.req.json()
+await c.env.DB.prepare(`
+UPDATE downloads
+SET
+anime=?,
+season=?,
+episode=?,
+host=?,
+quality=?,
+link=?,
+type=?,
+route=?
+WHERE id=?
+`)
+.bind(
+body.anime,
+body.season,
+body.episode,
+body.host,
+body.quality,
+body.link,
+body.type || "internal",
+body.route || "go",
+id
+)
+.run()
 
-  await c.env.DB.prepare(`
-    UPDATE downloads
-    SET anime=?, season=?, episode=?, host=?, quality=?, link=?
-    WHERE id=?
-  `)
-  .bind(
-    body.anime,
-    body.season,
-    body.episode,
-    body.host,
-    body.quality,
-    body.link,
-    id
-  )
-  .run()
-
-  return c.json({success:true})
+return c.json({success:true})
 
 })
 
 /* =========================
-DELETE DOWNLOAD
+DELETE
 ========================= */
-
 app.delete("/downloads/:id", verifyAdmin, async (c)=>{
 
-  const {id} = c.req.param()
+await c.env.DB.prepare(`
+DELETE FROM downloads
+WHERE id=?
+`)
+.bind(c.req.param("id"))
+.run()
 
-  await c.env.DB.prepare(`
-    DELETE FROM downloads
-    WHERE id=?
-  `)
-  .bind(id)
-  .run()
-
-  return c.json({success:true})
+return c.json({success:true})
 
 })
 
 /* =========================
-DELETE BY EPISODE (🔥 NEW)
+GO ROUTE (🔥 MONEY ROUTE)
 ========================= */
+app.get("/go/:id", async (c)=>{
 
-app.delete("/downloads/episode/:anime/:season/:episode", verifyAdmin, async (c)=>{
+const id = c.req.param("id")
+const db = c.env.DB
 
-  const {anime,season,episode} = c.req.param()
+// 1. get link
+const data = await db
+.prepare("SELECT link FROM downloads WHERE id=?")
+.bind(id)
+.first()
 
-  await c.env.DB.prepare(`
-    DELETE FROM downloads
-    WHERE anime=? AND season=? AND episode=?
-  `)
-  .bind(anime,season,episode)
-  .run()
+if(!data){
+return c.text("Link not found",404)
+}
 
-  return c.json({success:true})
+// 2. increment click
+await db.prepare(`
+UPDATE downloads
+SET clicks = clicks + 1
+WHERE id=?
+`)
+.bind(id)
+.run()
+
+// 3. redirect
+return c.redirect(data.link)
 
 })
 
