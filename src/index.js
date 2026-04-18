@@ -110,8 +110,6 @@ import system from "./routes/system.js"
 
 /* ADS */
 import ads from "./routes/ads.js"
-import publicAds from "./routes/publicAds.js"
-import adClick from "./routes/adClick.js"
 import adsAnalytics from "./routes/adsAnalytics.js"
 
 /* ANALYTICS */
@@ -193,8 +191,7 @@ app.route("/api", publicAnime)
 
 app.route("/api", publicPlayer)
 
-app.route("/api", publicAds)
-app.route("/api", adClick)
+
 
 app.route("/api", searchPublic)
 
