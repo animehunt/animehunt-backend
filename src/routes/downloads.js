@@ -4,189 +4,194 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 const app = new Hono()
 
 /* =========================
-GET ALL DOWNLOADS
+GET ALL DOWNLOADS (ADMIN)
 ========================= */
-app.get("/downloads", verifyAdmin, async (c)=>{
+app.get("/admin/downloads", verifyAdmin, async (c)=>{
 
-const { results } = await c.env.DB
-.prepare(`
-SELECT *
-FROM downloads
-ORDER BY created_at DESC
-`)
-.all()
+  const { results } = await c.env.DB
+  .prepare(`
+    SELECT *
+    FROM downloads
+    ORDER BY created_at DESC
+  `)
+  .all()
 
-return c.json(results)
+  return c.json(results)
 
 })
 
 /* =========================
-GET BY EPISODE
+GET DOWNLOADS BY EPISODE (PUBLIC)
 ========================= */
-app.get("/downloads/:anime/:season/:episode", async (c)=>{
+app.get("/downloads", async (c)=>{
 
-const {anime,season,episode} = c.req.param()
+  const anime = c.req.query("anime")
+  const season = c.req.query("season")
+  const episode = c.req.query("episode")
 
-const { results } = await c.env.DB
-.prepare(`
-SELECT host,quality,link,type,route
-FROM downloads
-WHERE anime=? AND season=? AND episode=?
-`)
-.bind(anime,season,episode)
-.all()
+  if(!anime || !episode){
+    return c.json({error:"Missing params"},400)
+  }
 
-return c.json(results)
+  const { results } = await c.env.DB
+  .prepare(`
+    SELECT host,type,quality,link
+    FROM downloads
+    WHERE anime=? AND season=? AND episode=?
+    ORDER BY host ASC
+  `)
+  .bind(anime, season || "1", episode)
+  .all()
+
+  return c.json(results)
 
 })
 
 /* =========================
 CREATE SINGLE
 ========================= */
-app.post("/downloads", verifyAdmin, async (c)=>{
+app.post("/admin/downloads", verifyAdmin, async (c)=>{
 
-const body = await c.req.json()
-const id = crypto.randomUUID()
+  const body = await c.req.json()
 
-await c.env.DB.prepare(`
-INSERT INTO downloads
-(id,anime,season,episode,host,quality,link,type,route,clicks)
-VALUES(?,?,?,?,?,?,?,?,?,0)
-`)
-.bind(
-id,
-body.anime,
-body.season,
-body.episode,
-body.host,
-body.quality,
-body.link,
-body.type || "internal",
-body.route || "go"
-)
-.run()
+  if(!body.anime || !body.episode || !body.link){
+    return c.json({error:"Missing fields"},400)
+  }
 
-return c.json({success:true})
+  const id = crypto.randomUUID()
 
-})
+  await c.env.DB.prepare(`
+    INSERT INTO downloads
+    (id,anime,season,episode,host,type,quality,link,clicks,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,datetime('now'))
+  `)
+  .bind(
+    id,
+    body.anime,
+    body.season || "1",
+    body.episode,
+    body.host || "default",
+    body.type || "direct",
+    body.quality || "720p",
+    body.link,
+    0
+  )
+  .run()
 
-/* =========================
-BULK INSERT
-========================= */
-app.post("/downloads/bulk", verifyAdmin, async (c)=>{
-
-const rows = await c.req.json()
-const db = c.env.DB
-
-for(const d of rows){
-
-await db.prepare(`
-INSERT INTO downloads
-(id,anime,season,episode,host,quality,link,type,route,clicks)
-VALUES(?,?,?,?,?,?,?,?,?,0)
-`)
-.bind(
-crypto.randomUUID(),
-d.anime,
-d.season,
-d.episode,
-d.host,
-d.quality,
-d.link,
-d.type || "internal",
-d.route || "go"
-)
-.run()
-
-}
-
-return c.json({success:true})
+  return c.json({success:true,id})
 
 })
 
 /* =========================
-UPDATE DOWNLOAD (🔥 NEW)
+BULK INSERT (CMS)
 ========================= */
-app.put("/downloads/update/:id", verifyAdmin, async (c)=>{
+app.post("/admin/downloads/bulk", verifyAdmin, async (c)=>{
 
-const id = c.req.param("id")
-const body = await c.req.json()
+  const rows = await c.req.json()
 
-await c.env.DB.prepare(`
-UPDATE downloads
-SET
-anime=?,
-season=?,
-episode=?,
-host=?,
-quality=?,
-link=?,
-type=?,
-route=?
-WHERE id=?
-`)
-.bind(
-body.anime,
-body.season,
-body.episode,
-body.host,
-body.quality,
-body.link,
-body.type || "internal",
-body.route || "go",
-id
-)
-.run()
+  const db = c.env.DB
 
-return c.json({success:true})
+  for(const d of rows){
+
+    if(!d.link) continue
+
+    await db.prepare(`
+      INSERT INTO downloads
+      (id,anime,season,episode,host,type,quality,link,clicks,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,datetime('now'))
+    `)
+    .bind(
+      crypto.randomUUID(),
+      d.anime,
+      d.season || "1",
+      d.episode,
+      d.host || "default",
+      d.type || "direct",
+      d.quality || "720p",
+      d.link,
+      0
+    )
+    .run()
+
+  }
+
+  return c.json({success:true})
 
 })
 
 /* =========================
-DELETE
+UPDATE (EDIT SUPPORT)
 ========================= */
-app.delete("/downloads/:id", verifyAdmin, async (c)=>{
+app.put("/admin/downloads/:id", verifyAdmin, async (c)=>{
 
-await c.env.DB.prepare(`
-DELETE FROM downloads
-WHERE id=?
-`)
-.bind(c.req.param("id"))
-.run()
+  const id = c.req.param("id")
+  const body = await c.req.json()
 
-return c.json({success:true})
+  await c.env.DB.prepare(`
+    UPDATE downloads
+    SET anime=?, season=?, episode=?, host=?, type=?, quality=?, link=?
+    WHERE id=?
+  `)
+  .bind(
+    body.anime,
+    body.season,
+    body.episode,
+    body.host,
+    body.type,
+    body.quality,
+    body.link,
+    id
+  )
+  .run()
+
+  return c.json({success:true})
 
 })
 
 /* =========================
-GO ROUTE (🔥 MONEY ROUTE)
+DELETE SINGLE
 ========================= */
-app.get("/go/:id", async (c)=>{
+app.delete("/admin/downloads/:id", verifyAdmin, async (c)=>{
 
-const id = c.req.param("id")
-const db = c.env.DB
+  const id = c.req.param("id")
 
-// 1. get link
-const data = await db
-.prepare("SELECT link FROM downloads WHERE id=?")
-.bind(id)
-.first()
+  await c.env.DB.prepare(`
+    DELETE FROM downloads WHERE id=?
+  `)
+  .bind(id)
+  .run()
 
-if(!data){
-return c.text("Link not found",404)
-}
+  return c.json({success:true})
 
-// 2. increment click
-await db.prepare(`
-UPDATE downloads
-SET clicks = clicks + 1
-WHERE id=?
-`)
-.bind(id)
-.run()
+})
 
-// 3. redirect
-return c.redirect(data.link)
+/* =========================
+DELETE BULK (NEW)
+========================= */
+app.delete("/admin/downloads", verifyAdmin, async (c)=>{
+
+  await c.env.DB.prepare(`DELETE FROM downloads`).run()
+
+  return c.json({success:true})
+
+})
+
+/* =========================
+CLICK TRACKING
+========================= */
+app.post("/downloads/click/:id", async (c)=>{
+
+  const id = c.req.param("id")
+
+  await c.env.DB.prepare(`
+    UPDATE downloads
+    SET clicks = clicks + 1
+    WHERE id=?
+  `)
+  .bind(id)
+  .run()
+
+  return c.json({success:true})
 
 })
 
