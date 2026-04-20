@@ -174,4 +174,26 @@ app.put("/admin/downloads/:id", verifyAdmin, async (c)=>{
 
 })
 
+/* =========================
+GET FULL DATA BY ANIME (STRUCTURED USE)
+========================= */
+
+app.get("/downloads-full/:anime", async (c)=>{
+
+const anime = c.req.param("anime")
+
+const { results } = await c.env.DB
+.prepare(`
+SELECT anime,season,episode,host,storage,quality,link
+FROM downloads
+WHERE anime=?
+ORDER BY season ASC, episode ASC
+`)
+.bind(anime)
+.all()
+
+return c.json(results)
+
+})
+
 export default app
