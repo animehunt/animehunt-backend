@@ -4,89 +4,43 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 const app = new Hono()
 
 /* =========================
-GET ALL DOWNLOADS (ADMIN)
+ADMIN: GET ALL DOWNLOADS
 ========================= */
-app.get("/admin/downloads", verifyAdmin, async (c)=>{
+app.get("/downloads", verifyAdmin, async (c)=>{
 
-  const { results } = await c.env.DB
-  .prepare(`
+  const { results } = await c.env.DB.prepare(`
     SELECT *
     FROM downloads
     ORDER BY anime ASC, season ASC, episode ASC
-  `)
-  .all()
+  `).all()
 
   return c.json(results)
 
 })
 
 /* =========================
-GET BY EPISODE (PUBLIC)
+ADMIN: BULK INSERT
 ========================= */
-app.get("/downloads/:anime/:season/:episode", async (c)=>{
-
-  const { anime, season, episode } = c.req.param()
-
-  const { results } = await c.env.DB
-  .prepare(`
-    SELECT host, storage, quality, link
-    FROM downloads
-    WHERE anime=? AND season=? AND episode=?
-    ORDER BY host ASC
-  `)
-  .bind(anime, season, episode)
-  .all()
-
-  return c.json(results)
-
-})
-
-/* =========================
-GET ALL EPISODES OF ANIME
-(for episode list UI)
-========================= */
-app.get("/downloads/:anime", async (c)=>{
-
-  const anime = c.req.param("anime")
-
-  const { results } = await c.env.DB
-  .prepare(`
-    SELECT DISTINCT season, episode
-    FROM downloads
-    WHERE anime=?
-    ORDER BY season ASC, episode ASC
-  `)
-  .bind(anime)
-  .all()
-
-  return c.json(results)
-
-})
-
-/* =========================
-BULK INSERT (MAIN SYSTEM)
-========================= */
-app.post("/admin/downloads/bulk", verifyAdmin, async (c)=>{
+app.post("/downloads/bulk", verifyAdmin, async (c)=>{
 
   const rows = await c.req.json()
   const db = c.env.DB
 
-  if(!rows || !rows.length){
+  if(!Array.isArray(rows) || !rows.length){
     return c.json({error:"No data"},400)
   }
 
+  const stmt = db.prepare(`
+    INSERT INTO downloads
+    (id, anime, season, episode, host, storage, quality, link, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `)
+
   for(const d of rows){
 
-    if(!d.anime || !d.episode || !d.link){
-      continue
-    }
+    if(!d.anime || !d.episode || !d.link) continue
 
-    await db.prepare(`
-      INSERT INTO downloads
-      (id, anime, season, episode, host, storage, quality, link, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `)
-    .bind(
+    await stmt.bind(
       crypto.randomUUID(),
       d.anime,
       d.season || "1",
@@ -95,9 +49,7 @@ app.post("/admin/downloads/bulk", verifyAdmin, async (c)=>{
       d.storage || null,
       d.quality || "unknown",
       d.link
-    )
-    .run()
-
+    ).run()
   }
 
   return c.json({success:true})
@@ -105,17 +57,14 @@ app.post("/admin/downloads/bulk", verifyAdmin, async (c)=>{
 })
 
 /* =========================
-DELETE SINGLE DOWNLOAD
+ADMIN: DELETE SINGLE
 ========================= */
-app.delete("/admin/downloads/:id", verifyAdmin, async (c)=>{
-
-  const id = c.req.param("id")
+app.delete("/downloads/:id", verifyAdmin, async (c)=>{
 
   await c.env.DB.prepare(`
-    DELETE FROM downloads
-    WHERE id=?
+    DELETE FROM downloads WHERE id=?
   `)
-  .bind(id)
+  .bind(c.req.param("id"))
   .run()
 
   return c.json({success:true})
@@ -123,17 +72,16 @@ app.delete("/admin/downloads/:id", verifyAdmin, async (c)=>{
 })
 
 /* =========================
-DELETE BULK (OPTIONAL)
+ADMIN: DELETE BULK
 ========================= */
-app.post("/admin/downloads/delete-bulk", verifyAdmin, async (c)=>{
+app.post("/downloads/delete-bulk", verifyAdmin, async (c)=>{
 
   const ids = await c.req.json()
+  const db = c.env.DB
 
   if(!Array.isArray(ids)){
     return c.json({error:"Invalid ids"},400)
   }
-
-  const db = c.env.DB
 
   for(const id of ids){
     await db.prepare("DELETE FROM downloads WHERE id=?")
@@ -146,9 +94,9 @@ app.post("/admin/downloads/delete-bulk", verifyAdmin, async (c)=>{
 })
 
 /* =========================
-UPDATE (EDIT SUPPORT)
+ADMIN: UPDATE
 ========================= */
-app.put("/admin/downloads/:id", verifyAdmin, async (c)=>{
+app.put("/downloads/:id", verifyAdmin, async (c)=>{
 
   const id = c.req.param("id")
   const body = await c.req.json()
@@ -175,24 +123,84 @@ app.put("/admin/downloads/:id", verifyAdmin, async (c)=>{
 })
 
 /* =========================
-GET FULL DATA BY ANIME (STRUCTURED USE)
+PUBLIC: GET FULL ANIME DATA
+(Frontend Render Engine)
 ========================= */
-
 app.get("/downloads-full/:anime", async (c)=>{
 
-const anime = c.req.param("anime")
+  const anime = c.req.param("anime")
 
-const { results } = await c.env.DB
-.prepare(`
-SELECT anime,season,episode,host,storage,quality,link
-FROM downloads
-WHERE anime=?
-ORDER BY season ASC, episode ASC
-`)
-.bind(anime)
-.all()
+  const { results } = await c.env.DB.prepare(`
+    SELECT anime, season, episode, host, storage, quality, link
+    FROM downloads
+    WHERE anime=?
+    ORDER BY season ASC, episode ASC
+  `)
+  .bind(anime)
+  .all()
 
-return c.json(results)
+  /* 🔥 STRUCTURE BUILD */
+  const structured = {}
+
+  results.forEach(d=>{
+
+    if(!structured[d.season]){
+      structured[d.season] = {}
+    }
+
+    if(!structured[d.season][d.episode]){
+      structured[d.season][d.episode] = []
+    }
+
+    structured[d.season][d.episode].push({
+      host: d.host,
+      storage: d.storage,
+      quality: d.quality,
+      link: d.link
+    })
+
+  })
+
+  return c.json(structured)
+
+})
+
+/* =========================
+PUBLIC: GET EPISODES LIST
+========================= */
+app.get("/downloads-list/:anime", async (c)=>{
+
+  const anime = c.req.param("anime")
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT DISTINCT season, episode
+    FROM downloads
+    WHERE anime=?
+    ORDER BY season ASC, episode ASC
+  `)
+  .bind(anime)
+  .all()
+
+  return c.json(results)
+
+})
+
+/* =========================
+PUBLIC: GET SINGLE EPISODE
+========================= */
+app.get("/downloads/:anime/:season/:episode", async (c)=>{
+
+  const { anime, season, episode } = c.req.param()
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT host, storage, quality, link
+    FROM downloads
+    WHERE anime=? AND season=? AND episode=?
+  `)
+  .bind(anime, season, episode)
+  .all()
+
+  return c.json(results)
 
 })
 
