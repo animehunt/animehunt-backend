@@ -101,3 +101,20 @@ app.delete("/sidebar/:id", verifyAdmin, async (c) => {
 })
 
 export default app
+
+/* =========================
+PUBLIC SIDEBAR
+========================= */
+app.get("/sidebar/public", async (c) => {
+
+  const { results } = await c.env.DB
+    .prepare(`
+      SELECT *
+      FROM sidebar
+      WHERE active = 1
+      ORDER BY priority ASC
+    `)
+    .all()
+
+  return c.json(results || [])
+})
