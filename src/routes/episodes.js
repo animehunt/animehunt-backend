@@ -190,3 +190,55 @@ app.delete("/episodes/:id", verifyAdmin, async (c) => {
 })
 
 export default app
+
+/* =========================
+PUBLIC: GET EPISODES BY ANIME
+========================= */
+app.get("/public/episodes/:anime", async (c)=>{
+
+  const anime = c.req.param("anime")
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT id, season, episode, title, servers
+    FROM episodes
+    WHERE anime=?
+    ORDER BY season ASC, episode ASC
+  `)
+  .bind(anime)
+  .all()
+
+  const data = results.map(e => ({
+    ...e,
+    servers: safeJSON(e.servers)
+  }))
+
+  return c.json(data)
+})
+
+/* =========================
+PUBLIC: GET SERVERS
+========================= */
+app.get("/public/servers/:id", async (c)=>{
+
+  const id = c.req.param("id")
+
+  const row = await c.env.DB.prepare(`
+    SELECT servers FROM episodes WHERE id=?
+  `)
+  .bind(id)
+  .first()
+
+  if(!row){
+    return c.json([])
+  }
+
+  const servers = safeJSON(row.servers)
+
+  // 🔥 FIX FORMAT
+  const formatted = servers.map(url => ({
+    url
+  }))
+
+  return c.json(formatted)
+
+})
