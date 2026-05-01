@@ -17,7 +17,6 @@ app.get("/downloads", verifyAdmin, async (c)=>{
   return c.json(results)
 })
 
-
 /* =====================================================
 ADMIN: BULK INSERT (SMART INSERT)
 ===================================================== */
@@ -40,7 +39,6 @@ app.post("/downloads/bulk", verifyAdmin, async (c)=>{
 
     if(!d.anime || !d.episode || !d.link) continue
 
-    // 🔥 DUPLICATE CHECK
     const exists = await db.prepare(`
       SELECT id FROM downloads
       WHERE anime=? AND season=? AND episode=? AND host=? AND quality=?
@@ -66,45 +64,19 @@ app.post("/downloads/bulk", verifyAdmin, async (c)=>{
   return c.json({success:true})
 })
 
-
 /* =====================================================
-ADMIN: DELETE SINGLE
+ADMIN: DELETE
 ===================================================== */
 app.delete("/downloads/:id", verifyAdmin, async (c)=>{
-
-  const id = c.req.param("id")
 
   await c.env.DB.prepare(`
     DELETE FROM downloads WHERE id=?
   `)
-  .bind(id)
+  .bind(c.req.param("id"))
   .run()
 
   return c.json({success:true})
 })
-
-
-/* =====================================================
-ADMIN: DELETE BULK
-===================================================== */
-app.post("/downloads/delete-bulk", verifyAdmin, async (c)=>{
-
-  const ids = await c.req.json()
-  const db = c.env.DB
-
-  if(!Array.isArray(ids)){
-    return c.json({error:"Invalid ids"},400)
-  }
-
-  for(const id of ids){
-    await db.prepare("DELETE FROM downloads WHERE id=?")
-    .bind(id)
-    .run()
-  }
-
-  return c.json({success:true})
-})
-
 
 /* =====================================================
 ADMIN: UPDATE
@@ -134,9 +106,8 @@ app.put("/downloads/:id", verifyAdmin, async (c)=>{
   return c.json({success:true})
 })
 
-
 /* =====================================================
-PUBLIC: FULL STRUCTURE (MAIN DOWNLOAD PAGE)
+PUBLIC: FULL STRUCTURE (DOWNLOAD PAGE)
 ===================================================== */
 app.get("/downloads-full/:anime", async (c)=>{
 
@@ -151,22 +122,13 @@ app.get("/downloads-full/:anime", async (c)=>{
   .bind(anime)
   .all()
 
-  /* 🔥 STRUCTURE FOR FAST FRONTEND */
   const structured = {}
 
   results.forEach(d=>{
 
-    if(!structured[d.season]){
-      structured[d.season] = {}
-    }
-
-    if(!structured[d.season][d.episode]){
-      structured[d.season][d.episode] = {}
-    }
-
-    if(!structured[d.season][d.episode][d.host]){
-      structured[d.season][d.episode][d.host] = []
-    }
+    if(!structured[d.season]) structured[d.season] = {}
+    if(!structured[d.season][d.episode]) structured[d.season][d.episode] = {}
+    if(!structured[d.season][d.episode][d.host]) structured[d.season][d.episode][d.host] = []
 
     structured[d.season][d.episode][d.host].push({
       quality: d.quality
@@ -177,19 +139,17 @@ app.get("/downloads-full/:anime", async (c)=>{
   return c.json(structured)
 })
 
-
 /* =====================================================
-PUBLIC: SINGLE EPISODE (KNIGHT PAGE)
+PUBLIC: KNIGHT PAGE DATA (IMPORTANT FIX)
 ===================================================== */
 app.get("/downloads/:anime/:season/:episode", async (c)=>{
 
   const { anime, season, episode } = c.req.param()
 
   const { results } = await c.env.DB.prepare(`
-    SELECT host, quality
+    SELECT host, quality, link
     FROM downloads
     WHERE anime=? AND season=? AND episode=?
-    ORDER BY host ASC
   `)
   .bind(anime, season, episode)
   .all()
@@ -197,24 +157,28 @@ app.get("/downloads/:anime/:season/:episode", async (c)=>{
   return c.json(results)
 })
 
-
 /* =====================================================
-PUBLIC: EPISODE LIST (OPTIONAL)
+PUBLIC: FINAL LINK (OPTIONAL SAFE API)
 ===================================================== */
-app.get("/downloads-list/:anime", async (c)=>{
+app.get("/download-final", async (c)=>{
 
-  const anime = c.req.param("anime")
+  const anime = c.req.query("anime")
+  const season = c.req.query("season")
+  const episode = c.req.query("episode")
+  const host = c.req.query("host")
+  const quality = c.req.query("quality")
 
-  const { results } = await c.env.DB.prepare(`
-    SELECT DISTINCT season, episode
-    FROM downloads
-    WHERE anime=?
-    ORDER BY season ASC, episode ASC
+  const data = await c.env.DB.prepare(`
+    SELECT link FROM downloads
+    WHERE anime=? AND season=? AND episode=? AND host=? AND quality=?
+    LIMIT 1
   `)
-  .bind(anime)
-  .all()
+  .bind(anime, season, episode, host, quality)
+  .first()
 
-  return c.json(results)
+  if(!data) return c.text("Link not found")
+
+  return c.redirect(data.link)
 })
 
 export default app
