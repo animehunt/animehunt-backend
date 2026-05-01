@@ -7,13 +7,11 @@ const app = new Hono()
 ADMIN: GET ADS
 ========================= */
 app.get("/ads", verifyAdmin, async (c)=>{
+  const { results } = await c.env.DB
+  .prepare("SELECT * FROM ads ORDER BY weight DESC, created_at DESC")
+  .all()
 
-const { results } = await c.env.DB
-.prepare("SELECT * FROM ads ORDER BY weight DESC, created_at DESC")
-.all()
-
-return c.json(results)
-
+  return c.json(results)
 })
 
 /* =========================
@@ -21,153 +19,154 @@ CREATE
 ========================= */
 app.post("/ads", verifyAdmin, async (c)=>{
 
-const body = await c.req.json()
+  const body = await c.req.json()
 
-await c.env.DB.prepare(`
-INSERT INTO ads
-(id,name,type,ad_code,weight,step,source,delay,shortlinks,auto_short,anti_bypass,status,clicks,impressions,created_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-`)
-.bind(
-crypto.randomUUID(),
-body.name,
-body.type,
-body.adCode,
-body.weight || 1,
-body.step || 1,
-body.source || null,
-body.delay || 2000,
-JSON.stringify(body.shortlinks || []),
-body.autoShort ? 1 : 0,
-body.antiBypass ? 1 : 0,
-"ON",
-0,
-0
-)
-.run()
+  await c.env.DB.prepare(`
+    INSERT INTO ads
+    (id,name,type,ad_code,weight,step,source,delay,shortlinks,auto_short,anti_bypass,status,clicks,impressions,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+  `)
+  .bind(
+    crypto.randomUUID(),
+    body.name,
+    body.type,
+    body.adCode,
+    body.weight || 1,
+    body.step || 1,
+    body.source || null,
+    body.delay || 2000,
+    JSON.stringify(body.shortlinks || []),
+    body.autoShort ? 1 : 0,
+    body.antiBypass ? 1 : 0,
+    "ON",
+    0,
+    0
+  )
+  .run()
 
-return c.json({success:true})
-
+  return c.json({success:true})
 })
 
 /* =========================
 TOGGLE
 ========================= */
 app.patch("/ads/:id/toggle", verifyAdmin, async (c)=>{
+  const id = c.req.param("id")
 
-const id = c.req.param("id")
+  await c.env.DB.prepare(`
+    UPDATE ads
+    SET status = CASE WHEN status='ON' THEN 'OFF' ELSE 'ON' END
+    WHERE id=?
+  `).bind(id).run()
 
-await c.env.DB.prepare(`
-UPDATE ads 
-SET status = CASE WHEN status='ON' THEN 'OFF' ELSE 'ON' END
-WHERE id=?
-`).bind(id).run()
-
-return c.json({success:true})
-
+  return c.json({success:true})
 })
 
 /* =========================
 DELETE
 ========================= */
 app.delete("/ads/:id", verifyAdmin, async (c)=>{
+  await c.env.DB.prepare("DELETE FROM ads WHERE id=?")
+  .bind(c.req.param("id"))
+  .run()
 
-await c.env.DB.prepare("DELETE FROM ads WHERE id=?")
-.bind(c.req.param("id"))
-.run()
-
-return c.json({success:true})
-
+  return c.json({success:true})
 })
 
 /* =========================
-GO ENGINE (MAIN MONEY SYSTEM)
+GO ENGINE (FINAL SYSTEM)
 ========================= */
 
 app.get("/go", async (c)=>{
 
-const db = c.env.DB
+  const db = c.env.DB
 
-const anime = c.req.query("anime")
-const season = c.req.query("season")
-const episode = c.req.query("episode")
-const host = c.req.query("host")
-const quality = c.req.query("quality")
-const step = Number(c.req.query("step") || 1)
+  const anime = c.req.query("anime")
+  const season = c.req.query("season")
+  const episode = c.req.query("episode")
+  const host = c.req.query("host")
+  const quality = c.req.query("quality")
+  const step = Number(c.req.query("step") || 1)
 
-/* FINAL */
-if(step === 99){
+  /* ================= FINAL DOWNLOAD ================= */
+  if(step === 99){
 
-const data = await db.prepare(`
-SELECT link FROM downloads
-WHERE anime=? AND season=? AND episode=? AND host=? AND quality=?
-LIMIT 1
-`)
-.bind(anime,season,episode,host,quality)
-.first()
+    const data = await db.prepare(`
+      SELECT link FROM downloads
+      WHERE anime=? AND season=? AND episode=? AND host=? AND quality=?
+      LIMIT 1
+    `)
+    .bind(anime,season,episode,host,quality)
+    .first()
 
-if(!data) return c.text("Link not found")
+    if(!data) return c.text("Link not found")
 
-return c.redirect(data.link)
-}
+    return c.redirect(data.link)
+  }
 
-/* GET ADS */
-const { results } = await db.prepare(`
-SELECT * FROM ads 
-WHERE status='ON' 
-AND (source=? OR source IS NULL)
-AND step=?
-`)
-.bind(host,step)
-.all()
+  /* ================= KNIGHT STEP ================= */
+  if(step === 2 && host.toLowerCase() === "knightwolf"){
+    return c.redirect(`/knight.html?anime=${anime}&season=${season}&episode=${episode}&host=${host}`)
+  }
 
-/* NO ADS */
-if(!results.length){
-return c.redirect(`/api/go?anime=${anime}&season=${season}&episode=${episode}&host=${host}&quality=${quality}&step=${step+1}`)
-}
+  /* ================= LOAD ADS ================= */
+  const { results } = await db.prepare(`
+    SELECT * FROM ads
+    WHERE status='ON'
+    AND (source=? OR source IS NULL)
+    AND step=?
+    ORDER BY weight DESC
+  `)
+  .bind(host,step)
+  .all()
 
-/* PICK */
-const ad = results[Math.floor(Math.random()*results.length)]
+  /* ================= NO ADS → NEXT ================= */
+  if(!results.length){
+    return c.redirect(`/go?anime=${anime}&season=${season}&episode=${episode}&host=${host}&quality=${quality}&step=${step+1}`)
+  }
 
-/* TRACK */
-await db.prepare(`UPDATE ads SET clicks=clicks+1 WHERE id=?`)
-.bind(ad.id)
-.run()
+  /* ================= PICK RANDOM ================= */
+  const ad = results[Math.floor(Math.random()*results.length)]
 
-/* SHORTLINK */
-let shortlinks = []
-try{
-shortlinks = JSON.parse(ad.shortlinks || "[]")
-}catch{}
+  /* ================= TRACK ================= */
+  await db.prepare(`UPDATE ads SET clicks=clicks+1 WHERE id=?`)
+  .bind(ad.id)
+  .run()
 
-if(ad.auto_short && shortlinks.length){
-const short = shortlinks[Math.floor(Math.random()*shortlinks.length)]
-return c.redirect(short)
-}
+  /* ================= SHORTLINK ================= */
+  let shortlinks = []
+  try{
+    shortlinks = JSON.parse(ad.shortlinks || "[]")
+  }catch{}
 
-/* REDIRECT */
-if(ad.type==="redirect"){
-return c.redirect(ad.ad_code)
-}
+  if(ad.auto_short && shortlinks.length){
+    const short = shortlinks[Math.floor(Math.random()*shortlinks.length)]
+    return c.redirect(short)
+  }
 
-/* SCRIPT PAGE */
-return c.html(`
-<html>
-<body style="background:#000;color:#fff;text-align:center;padding-top:100px">
+  /* ================= REDIRECT ================= */
+  if(ad.type === "redirect"){
+    return c.redirect(ad.ad_code)
+  }
 
-<h2>Please wait...</h2>
+  /* ================= SCRIPT PAGE ================= */
+  return c.html(`
+  <html>
+  <body style="background:#000;color:#fff;text-align:center;padding-top:100px">
 
-<script>
-${ad.type==="script" ? ad.ad_code : ""}
+  <h2>Please wait...</h2>
 
-setTimeout(()=>{
-location.href="/api/go?anime=${anime}&season=${season}&episode=${episode}&host=${host}&quality=${quality}&step=${step+1}"
-}, ${ad.delay || 2000})
-</script>
+  <script>
+  ${ad.type==="script" ? ad.ad_code : ""}
 
-</body>
-</html>
-`)
+  setTimeout(()=>{
+    location.href="/go?anime=${anime}&season=${season}&episode=${episode}&host=${host}&quality=${quality}&step=${step+1}"
+  }, ${ad.delay || 2000})
+  </script>
+
+  </body>
+  </html>
+  `)
 
 })
 
