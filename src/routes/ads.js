@@ -74,7 +74,7 @@ app.delete("/ads/:id", verifyAdmin, async (c)=>{
 })
 
 /* =========================
-GO ENGINE (FINAL SYSTEM)
+GO ENGINE (FINAL PRODUCTION)
 ========================= */
 
 app.get("/go", async (c)=>{
@@ -88,24 +88,8 @@ app.get("/go", async (c)=>{
   const quality = c.req.query("quality")
   const step = Number(c.req.query("step") || 1)
 
-  /* ================= FINAL DOWNLOAD ================= */
-  if(step === 99){
-
-    const data = await db.prepare(`
-      SELECT link FROM downloads
-      WHERE anime=? AND season=? AND episode=? AND host=? AND quality=?
-      LIMIT 1
-    `)
-    .bind(anime,season,episode,host,quality)
-    .first()
-
-    if(!data) return c.text("Link not found")
-
-    return c.redirect(data.link)
-  }
-
-  /* ================= KNIGHT STEP ================= */
-  if(step === 2 && host.toLowerCase() === "knightwolf"){
+  /* ================= FINAL → KNIGHT ================= */
+  if(step === 4){
     return c.redirect(`/knight.html?anime=${anime}&season=${season}&episode=${episode}&host=${host}`)
   }
 
@@ -117,12 +101,12 @@ app.get("/go", async (c)=>{
     AND step=?
     ORDER BY weight DESC
   `)
-  .bind(host,step)
+  .bind(host, step)
   .all()
 
   /* ================= NO ADS → NEXT ================= */
   if(!results.length){
-    return c.redirect(`/go?anime=${anime}&season=${season}&episode=${episode}&host=${host}&quality=${quality}&step=${step+1}`)
+    return c.redirect(`/api/go?anime=${anime}&season=${season}&episode=${episode}&host=${host}&quality=${quality}&step=${step+1}`)
   }
 
   /* ================= PICK RANDOM ================= */
@@ -133,15 +117,18 @@ app.get("/go", async (c)=>{
   .bind(ad.id)
   .run()
 
-  /* ================= SHORTLINK ================= */
-  let shortlinks = []
-  try{
-    shortlinks = JSON.parse(ad.shortlinks || "[]")
-  }catch{}
+  /* ================= SHORTLINK (STEP 2 ONLY) ================= */
+  if(step === 2 && ad.auto_short){
 
-  if(ad.auto_short && shortlinks.length){
-    const short = shortlinks[Math.floor(Math.random()*shortlinks.length)]
-    return c.redirect(short)
+    let links = []
+    try{
+      links = JSON.parse(ad.shortlinks || "[]")
+    }catch{}
+
+    if(links.length){
+      const short = links[Math.floor(Math.random()*links.length)]
+      return c.redirect(short)
+    }
   }
 
   /* ================= REDIRECT ================= */
@@ -160,7 +147,7 @@ app.get("/go", async (c)=>{
   ${ad.type==="script" ? ad.ad_code : ""}
 
   setTimeout(()=>{
-    location.href="/go?anime=${anime}&season=${season}&episode=${episode}&host=${host}&quality=${quality}&step=${step+1}"
+    location.href="/api/go?anime=${anime}&season=${season}&episode=${episode}&host=${host}&quality=${quality}&step=${step+1}"
   }, ${ad.delay || 2000})
   </script>
 
