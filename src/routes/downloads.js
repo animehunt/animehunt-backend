@@ -3,9 +3,9 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* =========================
+/* =====================================================
 ADMIN: GET ALL DOWNLOADS
-========================= */
+===================================================== */
 app.get("/downloads", verifyAdmin, async (c)=>{
 
   const { results } = await c.env.DB.prepare(`
@@ -15,12 +15,12 @@ app.get("/downloads", verifyAdmin, async (c)=>{
   `).all()
 
   return c.json(results)
-
 })
 
-/* =========================
-ADMIN: BULK INSERT
-========================= */
+
+/* =====================================================
+ADMIN: BULK INSERT (SMART INSERT)
+===================================================== */
 app.post("/downloads/bulk", verifyAdmin, async (c)=>{
 
   const rows = await c.req.json()
@@ -40,6 +40,17 @@ app.post("/downloads/bulk", verifyAdmin, async (c)=>{
 
     if(!d.anime || !d.episode || !d.link) continue
 
+    // 🔥 DUPLICATE CHECK
+    const exists = await db.prepare(`
+      SELECT id FROM downloads
+      WHERE anime=? AND season=? AND episode=? AND host=? AND quality=?
+      LIMIT 1
+    `)
+    .bind(d.anime, d.season || "1", d.episode, d.host, d.quality)
+    .first()
+
+    if(exists) continue
+
     await stmt.bind(
       crypto.randomUUID(),
       d.anime,
@@ -53,27 +64,29 @@ app.post("/downloads/bulk", verifyAdmin, async (c)=>{
   }
 
   return c.json({success:true})
-
 })
 
-/* =========================
+
+/* =====================================================
 ADMIN: DELETE SINGLE
-========================= */
+===================================================== */
 app.delete("/downloads/:id", verifyAdmin, async (c)=>{
+
+  const id = c.req.param("id")
 
   await c.env.DB.prepare(`
     DELETE FROM downloads WHERE id=?
   `)
-  .bind(c.req.param("id"))
+  .bind(id)
   .run()
 
   return c.json({success:true})
-
 })
 
-/* =========================
+
+/* =====================================================
 ADMIN: DELETE BULK
-========================= */
+===================================================== */
 app.post("/downloads/delete-bulk", verifyAdmin, async (c)=>{
 
   const ids = await c.req.json()
@@ -90,12 +103,12 @@ app.post("/downloads/delete-bulk", verifyAdmin, async (c)=>{
   }
 
   return c.json({success:true})
-
 })
 
-/* =========================
+
+/* =====================================================
 ADMIN: UPDATE
-========================= */
+===================================================== */
 app.put("/downloads/:id", verifyAdmin, async (c)=>{
 
   const id = c.req.param("id")
@@ -119,19 +132,18 @@ app.put("/downloads/:id", verifyAdmin, async (c)=>{
   .run()
 
   return c.json({success:true})
-
 })
 
-/* =========================
-PUBLIC: GET FULL ANIME DATA
-(Frontend Render Engine)
-========================= */
+
+/* =====================================================
+PUBLIC: FULL STRUCTURE (MAIN DOWNLOAD PAGE)
+===================================================== */
 app.get("/downloads-full/:anime", async (c)=>{
 
   const anime = c.req.param("anime")
 
   const { results } = await c.env.DB.prepare(`
-    SELECT anime, season, episode, host, storage, quality, link
+    SELECT season, episode, host, quality
     FROM downloads
     WHERE anime=?
     ORDER BY season ASC, episode ASC
@@ -139,7 +151,7 @@ app.get("/downloads-full/:anime", async (c)=>{
   .bind(anime)
   .all()
 
-  /* 🔥 STRUCTURE BUILD */
+  /* 🔥 STRUCTURE FOR FAST FRONTEND */
   const structured = {}
 
   results.forEach(d=>{
@@ -149,25 +161,46 @@ app.get("/downloads-full/:anime", async (c)=>{
     }
 
     if(!structured[d.season][d.episode]){
-      structured[d.season][d.episode] = []
+      structured[d.season][d.episode] = {}
     }
 
-    structured[d.season][d.episode].push({
-      host: d.host,
-      storage: d.storage,
-      quality: d.quality,
-      link: d.link
+    if(!structured[d.season][d.episode][d.host]){
+      structured[d.season][d.episode][d.host] = []
+    }
+
+    structured[d.season][d.episode][d.host].push({
+      quality: d.quality
     })
 
   })
 
   return c.json(structured)
-
 })
 
-/* =========================
-PUBLIC: GET EPISODES LIST
-========================= */
+
+/* =====================================================
+PUBLIC: SINGLE EPISODE (KNIGHT PAGE)
+===================================================== */
+app.get("/downloads/:anime/:season/:episode", async (c)=>{
+
+  const { anime, season, episode } = c.req.param()
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT host, quality
+    FROM downloads
+    WHERE anime=? AND season=? AND episode=?
+    ORDER BY host ASC
+  `)
+  .bind(anime, season, episode)
+  .all()
+
+  return c.json(results)
+})
+
+
+/* =====================================================
+PUBLIC: EPISODE LIST (OPTIONAL)
+===================================================== */
 app.get("/downloads-list/:anime", async (c)=>{
 
   const anime = c.req.param("anime")
@@ -182,26 +215,6 @@ app.get("/downloads-list/:anime", async (c)=>{
   .all()
 
   return c.json(results)
-
-})
-
-/* =========================
-PUBLIC: GET SINGLE EPISODE
-========================= */
-app.get("/downloads/:anime/:season/:episode", async (c)=>{
-
-  const { anime, season, episode } = c.req.param()
-
-  const { results } = await c.env.DB.prepare(`
-    SELECT host, storage, quality, link
-    FROM downloads
-    WHERE anime=? AND season=? AND episode=?
-  `)
-  .bind(anime, season, episode)
-  .all()
-
-  return c.json(results)
-
 })
 
 export default app
