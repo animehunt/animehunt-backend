@@ -12,7 +12,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "animehunt"
-database_id = "eecb37c1-cdc3-403e-87c3-74504872b62d"
+database_id = "67cb7fff-a69c-4f86-bd86-9b91dd3d2a79"
 
 # ================= ENV VARIABLES =================
 
