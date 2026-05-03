@@ -1,244 +1,242 @@
-import { Hono } from "hono"
-import { verifyAdmin } from "../middleware/adminAuth.js"
+import { Hono } from "hono";
+import { verifyAdmin } from "../middleware/adminAuth.js";
 
-const app = new Hono()
+const app = new Hono();
 
-/* ==========================
-UTILS
-========================== */
+/* ================= HELPERS ================= */
 
-function safeJSON(data, fallback = []) {
-  try {
-    return JSON.parse(data || JSON.stringify(fallback))
-  } catch {
-    return fallback
-  }
+const success = (data) => ({ success: true, data });
+const failure = (msg) => ({ success: false, message: msg });
+
+const now = () => new Date().toISOString();
+
+const safeJSON = (val) => {
+  try { return JSON.parse(val || "[]"); }
+  catch { return []; }
+};
+
+const toJSON = (val) =>
+  JSON.stringify(Array.isArray(val) ? val : []);
+
+/* ================= VALIDATION ================= */
+
+function validate(body) {
+  if (!body.anime_id) return "anime_id required";
+  if (!body.episode) return "episode required";
+  return null;
 }
 
-/* ==========================
-GET ALL EPISODES
-========================== */
+/* ================= CREATE ================= */
+
+app.post("/episodes", verifyAdmin, async (c) => {
+  try {
+    const db = c.env.DB;
+    const body = await c.req.json();
+
+    const err = validate(body);
+    if (err) return c.json(failure(err), 400);
+
+    const id = crypto.randomUUID();
+
+    await db.prepare(`
+      INSERT INTO episodes (
+        id, anime_id, anime_title,
+        season, episode, title, description,
+        thumbnail, servers,
+        ongoing, featured,
+        created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id,
+      body.anime_id,
+      body.anime_title || "",
+      body.season || "1",
+      Number(body.episode),
+      body.title || "",
+      body.description || "",
+      body.thumbnail || "",
+      toJSON(body.servers),
+      body.ongoing ? 1 : 0,
+      body.featured ? 1 : 0,
+      now(),
+      now()
+    ).run();
+
+    return c.json(success({ id }));
+
+  } catch (err) {
+    return c.json(failure(err.message), 500);
+  }
+});
+
+/* ================= GET ALL (ADMIN) ================= */
 
 app.get("/episodes", verifyAdmin, async (c) => {
-
   try {
+    const db = c.env.DB;
 
-    const { results } = await c.env.DB
-      .prepare(`
-        SELECT * FROM episodes
-        ORDER BY created_at DESC
-      `)
-      .all()
+    const { results } = await db.prepare(`
+      SELECT * FROM episodes
+      ORDER BY created_at DESC
+    `).all();
 
     const data = results.map(e => ({
       ...e,
       servers: safeJSON(e.servers),
       ongoing: !!e.ongoing,
       featured: !!e.featured
-    }))
+    }));
 
-    return c.json(data)
+    return c.json(success(data));
 
   } catch (err) {
-    console.error(err)
-    return c.json({ error: "Failed to load episodes" }, 500)
+    return c.json(failure(err.message), 500);
   }
+});
 
-})
-
-/* ==========================
-GET SINGLE EPISODE
-========================== */
+/* ================= GET ONE ================= */
 
 app.get("/episodes/:id", verifyAdmin, async (c) => {
-
   try {
+    const db = c.env.DB;
+    const id = c.req.param("id");
 
-    const row = await c.env.DB
-      .prepare("SELECT * FROM episodes WHERE id=?")
-      .bind(c.req.param("id"))
-      .first()
+    const row = await db.prepare(`
+      SELECT * FROM episodes WHERE id=?
+    `).bind(id).first();
 
-    if (!row) {
-      return c.json({ error: "Not found" }, 404)
-    }
+    if (!row) return c.json(failure("Not found"), 404);
 
-    return c.json({
+    return c.json(success({
       ...row,
       servers: safeJSON(row.servers),
       ongoing: !!row.ongoing,
       featured: !!row.featured
-    })
+    }));
 
   } catch (err) {
-    console.error(err)
-    return c.json({ error: "Failed to fetch episode" }, 500)
+    return c.json(failure(err.message), 500);
   }
+});
 
-})
+/* ================= UPDATE ================= */
 
-/* ==========================
-CREATE EPISODE
-========================== */
-
-app.post("/episodes", verifyAdmin, async (c) => {
-
+app.put("/episodes/:id", verifyAdmin, async (c) => {
   try {
+    const db = c.env.DB;
+    const id = c.req.param("id");
+    const body = await c.req.json();
 
-    const body = await c.req.json()
+    const err = validate(body);
+    if (err) return c.json(failure(err), 400);
 
-    if (!body.anime || !body.episode) {
-      return c.json({ error: "Anime and episode required" }, 400)
-    }
-
-    const id = crypto.randomUUID()
-
-    await c.env.DB.prepare(`
-      INSERT INTO episodes
-      (id, anime, season, episode, title, description, servers, ongoing, featured, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `)
-    .bind(
-      id,
-      body.anime,
-      body.season || "1",
-      body.episode,
-      body.title || null,
-      body.description || null,
-      JSON.stringify(body.servers || []),
-      body.ongoing ? 1 : 0,
-      body.featured ? 1 : 0
-    )
-    .run()
-
-    return c.json({ success: true, id })
-
-  } catch (err) {
-    console.error(err)
-    return c.json({ error: "Failed to create episode" }, 500)
-  }
-
-})
-
-/* ==========================
-UPDATE EPISODE
-========================== */
-
-app.patch("/episodes/:id", verifyAdmin, async (c) => {
-
-  try {
-
-    const body = await c.req.json()
-    const id = c.req.param("id")
-
-    await c.env.DB.prepare(`
+    await db.prepare(`
       UPDATE episodes SET
-        anime=?,
+        anime_id=?,
+        anime_title=?,
         season=?,
         episode=?,
         title=?,
         description=?,
+        thumbnail=?,
         servers=?,
         ongoing=?,
-        featured=?
+        featured=?,
+        updated_at=?
       WHERE id=?
-    `)
-    .bind(
-      body.anime,
+    `).bind(
+      body.anime_id,
+      body.anime_title || "",
       body.season || "1",
-      body.episode,
-      body.title || null,
-      body.description || null,
-      JSON.stringify(body.servers || []),
+      Number(body.episode),
+      body.title || "",
+      body.description || "",
+      body.thumbnail || "",
+      toJSON(body.servers),
       body.ongoing ? 1 : 0,
       body.featured ? 1 : 0,
+      now(),
       id
-    )
-    .run()
+    ).run();
 
-    return c.json({ success: true })
+    return c.json(success({ id }));
 
   } catch (err) {
-    console.error(err)
-    return c.json({ error: "Failed to update episode" }, 500)
+    return c.json(failure(err.message), 500);
   }
+});
 
-})
-
-/* ==========================
-DELETE EPISODE
-========================== */
+/* ================= DELETE ================= */
 
 app.delete("/episodes/:id", verifyAdmin, async (c) => {
-
   try {
+    const db = c.env.DB;
+    const id = c.req.param("id");
 
-    const id = c.req.param("id")
+    await db.prepare(`
+      DELETE FROM episodes WHERE id=?
+    `).bind(id).run();
 
-    await c.env.DB
-      .prepare("DELETE FROM episodes WHERE id=?")
-      .bind(id)
-      .run()
-
-    return c.json({ success: true })
+    return c.json(success({ id }));
 
   } catch (err) {
-    console.error(err)
-    return c.json({ error: "Failed to delete episode" }, 500)
+    return c.json(failure(err.message), 500);
   }
+});
 
-})
+/* ================= PUBLIC: EPISODES ================= */
 
-export default app
+app.get("/public/episodes/:animeId", async (c) => {
+  try {
+    const db = c.env.DB;
+    const animeId = c.req.param("animeId");
 
-/* =========================
-PUBLIC: GET EPISODES BY ANIME
-========================= */
-app.get("/public/episodes/:anime", async (c)=>{
+    const { results } = await db.prepare(`
+      SELECT id, season, episode, title, thumbnail, servers
+      FROM episodes
+      WHERE anime_id=?
+      ORDER BY CAST(season AS INTEGER), episode ASC
+    `).bind(animeId).all();
 
-  const anime = c.req.param("anime")
+    const data = results.map(e => ({
+      id: e.id,
+      season: e.season,
+      episode: e.episode,
+      title: e.title,
+      thumbnail: e.thumbnail,
+      servers: safeJSON(e.servers)
+    }));
 
-  const { results } = await c.env.DB.prepare(`
-    SELECT id, season, episode, title, servers
-    FROM episodes
-    WHERE anime=?
-    ORDER BY season ASC, episode ASC
-  `)
-  .bind(anime)
-  .all()
+    return c.json(success(data));
 
-  const data = results.map(e => ({
-    ...e,
-    servers: safeJSON(e.servers)
-  }))
-
-  return c.json(data)
-})
-
-/* =========================
-PUBLIC: GET SERVERS
-========================= */
-app.get("/public/servers/:id", async (c)=>{
-
-  const id = c.req.param("id")
-
-  const row = await c.env.DB.prepare(`
-    SELECT servers FROM episodes WHERE id=?
-  `)
-  .bind(id)
-  .first()
-
-  if(!row){
-    return c.json([])
+  } catch (err) {
+    return c.json(failure(err.message), 500);
   }
+});
 
-  const servers = safeJSON(row.servers)
+/* ================= PUBLIC: SERVERS ================= */
 
-  // 🔥 FIX FORMAT
-  const formatted = servers.map(url => ({
-    url
-  }))
+app.get("/public/servers/:id", async (c) => {
+  try {
+    const db = c.env.DB;
+    const id = c.req.param("id");
 
-  return c.json(formatted)
+    const row = await db.prepare(`
+      SELECT servers FROM episodes WHERE id=?
+    `).bind(id).first();
 
-})
+    if (!row) return c.json(success([]));
+
+    const servers = safeJSON(row.servers);
+
+    return c.json(success(
+      servers.map(url => ({ url }))
+    ));
+
+  } catch (err) {
+    return c.json(failure(err.message), 500);
+  }
+});
+
+export default app;
