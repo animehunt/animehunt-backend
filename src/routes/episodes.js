@@ -3,159 +3,242 @@ import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* ================= HELPERS ================= */
+/* ==========================
+UTILS
+========================== */
 
-const success = (data) => ({ success: true, data })
-const failure = (msg) => ({ success: false, message: msg })
-
-const now = () => new Date().toISOString()
-
-const safeJSON = (v) => {
-  try { return JSON.parse(v || "[]") }
-  catch { return [] }
+function safeJSON(data, fallback = []) {
+  try {
+    return JSON.parse(data || JSON.stringify(fallback))
+  } catch {
+    return fallback
+  }
 }
 
-/* ================= ADMIN ================= */
+/* ==========================
+GET ALL EPISODES
+========================== */
 
-/* GET ALL */
 app.get("/episodes", verifyAdmin, async (c) => {
 
-  const { results } = await c.env.DB.prepare(`
-    SELECT * FROM episodes
-    ORDER BY created_at DESC
-  `).all()
+  try {
 
-  const data = results.map(e => ({
-    ...e,
-    servers: safeJSON(e.servers),
-    ongoing: !!e.ongoing,
-    featured: !!e.featured
-  }))
+    const { results } = await c.env.DB
+      .prepare(`
+        SELECT * FROM episodes
+        ORDER BY created_at DESC
+      `)
+      .all()
 
-  return c.json(success(data))
-})
+    const data = results.map(e => ({
+      ...e,
+      servers: safeJSON(e.servers),
+      ongoing: !!e.ongoing,
+      featured: !!e.featured
+    }))
 
-/* CREATE */
-app.post("/episodes", verifyAdmin, async (c) => {
+    return c.json(data)
 
-  const body = await c.req.json()
-
-  if (!body.anime_id || !body.episode) {
-    return c.json(failure("anime_id + episode required"), 400)
+  } catch (err) {
+    console.error(err)
+    return c.json({ error: "Failed to load episodes" }, 500)
   }
 
-  const id = crypto.randomUUID()
-
-  await c.env.DB.prepare(`
-    INSERT INTO episodes (
-      id, anime_id, season, episode,
-      title, description, thumbnail,
-      servers, ongoing, featured,
-      created_at, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    id,
-    body.anime_id,
-    Number(body.season) || 1,
-    Number(body.episode),
-    body.title || "",
-    body.description || "",
-    body.thumbnail || "",
-    JSON.stringify(body.servers || []),
-    body.ongoing ? 1 : 0,
-    body.featured ? 1 : 0,
-    now(),
-    now()
-  ).run()
-
-  return c.json(success({ id }))
 })
 
-/* UPDATE */
+/* ==========================
+GET SINGLE EPISODE
+========================== */
+
+app.get("/episodes/:id", verifyAdmin, async (c) => {
+
+  try {
+
+    const row = await c.env.DB
+      .prepare("SELECT * FROM episodes WHERE id=?")
+      .bind(c.req.param("id"))
+      .first()
+
+    if (!row) {
+      return c.json({ error: "Not found" }, 404)
+    }
+
+    return c.json({
+      ...row,
+      servers: safeJSON(row.servers),
+      ongoing: !!row.ongoing,
+      featured: !!row.featured
+    })
+
+  } catch (err) {
+    console.error(err)
+    return c.json({ error: "Failed to fetch episode" }, 500)
+  }
+
+})
+
+/* ==========================
+CREATE EPISODE
+========================== */
+
+app.post("/episodes", verifyAdmin, async (c) => {
+
+  try {
+
+    const body = await c.req.json()
+
+    if (!body.anime || !body.episode) {
+      return c.json({ error: "Anime and episode required" }, 400)
+    }
+
+    const id = crypto.randomUUID()
+
+    await c.env.DB.prepare(`
+      INSERT INTO episodes
+      (id, anime, season, episode, title, description, servers, ongoing, featured, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `)
+    .bind(
+      id,
+      body.anime,
+      body.season || "1",
+      body.episode,
+      body.title || null,
+      body.description || null,
+      JSON.stringify(body.servers || []),
+      body.ongoing ? 1 : 0,
+      body.featured ? 1 : 0
+    )
+    .run()
+
+    return c.json({ success: true, id })
+
+  } catch (err) {
+    console.error(err)
+    return c.json({ error: "Failed to create episode" }, 500)
+  }
+
+})
+
+/* ==========================
+UPDATE EPISODE
+========================== */
+
 app.patch("/episodes/:id", verifyAdmin, async (c) => {
 
-  const body = await c.req.json()
-  const id = c.req.param("id")
+  try {
 
-  await c.env.DB.prepare(`
-    UPDATE episodes SET
-      season=?,
-      episode=?,
-      title=?,
-      description=?,
-      thumbnail=?,
-      servers=?,
-      ongoing=?,
-      featured=?,
-      updated_at=?
-    WHERE id=?
-  `).bind(
-    Number(body.season) || 1,
-    Number(body.episode),
-    body.title || "",
-    body.description || "",
-    body.thumbnail || "",
-    JSON.stringify(body.servers || []),
-    body.ongoing ? 1 : 0,
-    body.featured ? 1 : 0,
-    now(),
-    id
-  ).run()
+    const body = await c.req.json()
+    const id = c.req.param("id")
 
-  return c.json(success({ id }))
+    await c.env.DB.prepare(`
+      UPDATE episodes SET
+        anime=?,
+        season=?,
+        episode=?,
+        title=?,
+        description=?,
+        servers=?,
+        ongoing=?,
+        featured=?
+      WHERE id=?
+    `)
+    .bind(
+      body.anime,
+      body.season || "1",
+      body.episode,
+      body.title || null,
+      body.description || null,
+      JSON.stringify(body.servers || []),
+      body.ongoing ? 1 : 0,
+      body.featured ? 1 : 0,
+      id
+    )
+    .run()
+
+    return c.json({ success: true })
+
+  } catch (err) {
+    console.error(err)
+    return c.json({ error: "Failed to update episode" }, 500)
+  }
+
 })
 
-/* DELETE */
+/* ==========================
+DELETE EPISODE
+========================== */
+
 app.delete("/episodes/:id", verifyAdmin, async (c) => {
 
-  const id = c.req.param("id")
+  try {
 
-  await c.env.DB.prepare(`
-    DELETE FROM episodes WHERE id=?
-  `).bind(id).run()
+    const id = c.req.param("id")
 
-  return c.json(success({ id }))
+    await c.env.DB
+      .prepare("DELETE FROM episodes WHERE id=?")
+      .bind(id)
+      .run()
+
+    return c.json({ success: true })
+
+  } catch (err) {
+    console.error(err)
+    return c.json({ error: "Failed to delete episode" }, 500)
+  }
+
 })
 
-/* ================= PUBLIC ================= */
+export default app
 
-/* GET EPISODES BY ANIME */
-app.get("/public/episodes/:anime_id", async (c) => {
+/* =========================
+PUBLIC: GET EPISODES BY ANIME
+========================= */
+app.get("/public/episodes/:anime", async (c)=>{
 
-  const anime_id = c.req.param("anime_id")
+  const anime = c.req.param("anime")
 
   const { results } = await c.env.DB.prepare(`
-    SELECT id, season, episode, title, thumbnail, servers
+    SELECT id, season, episode, title, servers
     FROM episodes
-    WHERE anime_id=?
+    WHERE anime=?
     ORDER BY season ASC, episode ASC
-  `).bind(anime_id).all()
+  `)
+  .bind(anime)
+  .all()
 
   const data = results.map(e => ({
     ...e,
     servers: safeJSON(e.servers)
   }))
 
-  return c.json(success(data))
+  return c.json(data)
 })
 
-/* GET SERVERS */
-app.get("/public/servers/:id", async (c) => {
+/* =========================
+PUBLIC: GET SERVERS
+========================= */
+app.get("/public/servers/:id", async (c)=>{
 
   const id = c.req.param("id")
 
   const row = await c.env.DB.prepare(`
     SELECT servers FROM episodes WHERE id=?
-  `).bind(id).first()
+  `)
+  .bind(id)
+  .first()
 
-  if (!row) return c.json(success([]))
+  if(!row){
+    return c.json([])
+  }
 
   const servers = safeJSON(row.servers)
 
-  return c.json(success(
-    servers.map(url => ({ url }))
-  ))
-})
+  // 🔥 FIX FORMAT
+  const formatted = servers.map(url => ({
+    url
+  }))
 
-export default app
+  return c.json(formatted)
+
+})
