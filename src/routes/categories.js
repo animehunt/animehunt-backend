@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { verifyAdmin } from "../middleware/adminAuth.js";
 
 const app = new Hono();
 
@@ -8,7 +9,6 @@ const success = (data) => ({ success: true, data });
 const failure = (msg) => ({ success: false, message: msg });
 
 const now = () => new Date().toISOString();
-
 const bool = (v) => (v ? 1 : 0);
 
 /* ================= VALIDATION ================= */
@@ -19,7 +19,7 @@ function validate(body) {
   return null;
 }
 
-/* ================= SLUG NORMALIZE ================= */
+/* ================= SLUG ================= */
 
 function normalizeSlug(slug) {
   return slug
@@ -31,7 +31,7 @@ function normalizeSlug(slug) {
 
 /* ================= CREATE ================= */
 
-app.post("/categories", async (c) => {
+app.post("/categories", verifyAdmin, async (c) => {
   try {
     const db = c.env.DB;
     const body = await c.req.json();
@@ -41,25 +41,25 @@ app.post("/categories", async (c) => {
 
     const slug = normalizeSlug(body.slug);
 
-    // UNIQUE SLUG CHECK
+    // UNIQUE CHECK
     const exists = await db
       .prepare("SELECT id FROM categories WHERE slug=?")
       .bind(slug)
       .first();
 
-    if (exists) {
-      return c.json(failure("Slug already exists"), 400);
-    }
+    if (exists) return c.json(failure("Slug exists"), 400);
 
     let order = Number(body.order);
 
+    // AUTO ORDER
     if (!order || order < 0) {
       const last = await db
-        .prepare(`SELECT MAX(category_order) as max FROM categories`)
+        .prepare("SELECT MAX(category_order) as max FROM categories")
         .first();
 
       order = (last?.max || 0) + 1;
     } else {
+      // SHIFT DOWN
       await db.prepare(`
         UPDATE categories
         SET category_order = category_order + 1
@@ -101,13 +101,14 @@ app.post("/categories", async (c) => {
     return c.json(success({ id }));
 
   } catch (err) {
-    return c.json(failure(err.message), 500);
+    console.error(err);
+    return c.json(failure("Create failed"), 500);
   }
 });
 
-/* ================= GET ALL ================= */
+/* ================= GET ALL (ADMIN) ================= */
 
-app.get("/categories", async (c) => {
+app.get("/categories", verifyAdmin, async (c) => {
   try {
     const db = c.env.DB;
 
@@ -117,37 +118,19 @@ app.get("/categories", async (c) => {
       ORDER BY priority ASC, category_order ASC
     `).all();
 
-    const data = results.map(c => ({
-      id: c.id,
-      name: c.name,
-      slug: c.slug,
-      type: c.type,
-
-      category_order: c.category_order,
-      priority: c.priority,
-
-      show_home: !!c.show_home,
-      active: !!c.active,
-      featured: !!c.featured,
-
-      ai_trending: !!c.ai_trending,
-      ai_popular: !!c.ai_popular,
-      ai_assign: !!c.ai_assign,
-
-      created_at: c.created_at,
-      updated_at: c.updated_at
-    }));
+    const data = results.map(format);
 
     return c.json(success(data));
 
   } catch (err) {
-    return c.json(failure(err.message), 500);
+    console.error(err);
+    return c.json(failure("Load failed"), 500);
   }
 });
 
 /* ================= GET ONE ================= */
 
-app.get("/categories/:id", async (c) => {
+app.get("/categories/:id", verifyAdmin, async (c) => {
   try {
     const db = c.env.DB;
     const id = c.req.param("id");
@@ -158,32 +141,17 @@ app.get("/categories/:id", async (c) => {
 
     if (!row) return c.json(failure("Not found"), 404);
 
-    return c.json(success({
-      id: row.id,
-      name: row.name,
-      slug: row.slug,
-      type: row.type,
-
-      category_order: row.category_order,
-      priority: row.priority,
-
-      show_home: !!row.show_home,
-      active: !!row.active,
-      featured: !!row.featured,
-
-      ai_trending: !!row.ai_trending,
-      ai_popular: !!row.ai_popular,
-      ai_assign: !!row.ai_assign
-    }));
+    return c.json(success(format(row)));
 
   } catch (err) {
-    return c.json(failure(err.message), 500);
+    console.error(err);
+    return c.json(failure("Fetch failed"), 500);
   }
 });
 
 /* ================= UPDATE ================= */
 
-app.put("/categories/:id", async (c) => {
+app.put("/categories/:id", verifyAdmin, async (c) => {
   try {
     const db = c.env.DB;
     const id = c.req.param("id");
@@ -194,15 +162,12 @@ app.put("/categories/:id", async (c) => {
 
     const slug = normalizeSlug(body.slug);
 
-    // UNIQUE SLUG CHECK (exclude self)
     const exists = await db.prepare(`
       SELECT id FROM categories
       WHERE slug=? AND id!=?
     `).bind(slug, id).first();
 
-    if (exists) {
-      return c.json(failure("Slug already exists"), 400);
-    }
+    if (exists) return c.json(failure("Slug exists"), 400);
 
     await db.prepare(`
       UPDATE categories SET
@@ -246,13 +211,14 @@ app.put("/categories/:id", async (c) => {
     return c.json(success({ id }));
 
   } catch (err) {
-    return c.json(failure(err.message), 500);
+    console.error(err);
+    return c.json(failure("Update failed"), 500);
   }
 });
 
 /* ================= DELETE ================= */
 
-app.delete("/categories/:id", async (c) => {
+app.delete("/categories/:id", verifyAdmin, async (c) => {
   try {
     const db = c.env.DB;
     const id = c.req.param("id");
@@ -264,13 +230,13 @@ app.delete("/categories/:id", async (c) => {
     return c.json(success({ id }));
 
   } catch (err) {
-    return c.json(failure(err.message), 500);
+    console.error(err);
+    return c.json(failure("Delete failed"), 500);
   }
 });
 
 /* ================= PUBLIC ================= */
 
-/* 🔥 only active categories */
 app.get("/categories/public", async (c) => {
   try {
     const db = c.env.DB;
@@ -282,14 +248,13 @@ app.get("/categories/public", async (c) => {
       ORDER BY priority ASC, category_order ASC
     `).all();
 
-    return c.json(success(results));
+    return c.json(results.map(format));
 
-  } catch (err) {
-    return c.json(failure(err.message), 500);
+  } catch {
+    return c.json([]);
   }
 });
 
-/* 🔥 homepage categories */
 app.get("/categories/home", async (c) => {
   try {
     const db = c.env.DB;
@@ -301,11 +266,36 @@ app.get("/categories/home", async (c) => {
       ORDER BY priority ASC, category_order ASC
     `).all();
 
-    return c.json(success(results));
+    return c.json(results.map(format));
 
-  } catch (err) {
-    return c.json(failure(err.message), 500);
+  } catch {
+    return c.json([]);
   }
 });
+
+/* ================= FORMAT ================= */
+
+function format(c) {
+  return {
+    id: c.id,
+    name: c.name,
+    slug: c.slug,
+    type: c.type,
+
+    category_order: c.category_order,
+    priority: c.priority,
+
+    show_home: !!c.show_home,
+    active: !!c.active,
+    featured: !!c.featured,
+
+    ai_trending: !!c.ai_trending,
+    ai_popular: !!c.ai_popular,
+    ai_assign: !!c.ai_assign,
+
+    created_at: c.created_at,
+    updated_at: c.updated_at
+  };
+}
 
 export default app;
