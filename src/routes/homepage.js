@@ -1,134 +1,195 @@
-import { Hono } from "hono"
-import { verifyAdmin } from "../middleware/adminAuth.js"
+import { Hono } from "hono";
+import { verifyAdmin } from "../middleware/adminAuth.js";
 
-const app = new Hono()
+const app = new Hono();
 
-/* =========================
-GET ALL ROWS (ADMIN)
-========================= */
+/* ================= HELPERS ================= */
 
-app.get("/homepage", verifyAdmin, async (c)=>{
+const success = (data) => ({ success: true, data });
+const now = () => new Date().toISOString();
 
-const rows = await c.env.DB.prepare(`
-SELECT *
-FROM homepage_rows
-ORDER BY row_order ASC
-`).all()
+/* ================= ADMIN: GET ALL ================= */
 
-return c.json(rows.results)
+app.get("/homepage", verifyAdmin, async (c) => {
 
-})
+  const { results } = await c.env.DB.prepare(`
+    SELECT *
+    FROM homepage_rows
+    ORDER BY row_order ASC
+  `).all();
 
-/* =========================
-GET SINGLE ROW
-========================= */
+  return c.json(success(results));
+});
 
-app.get("/homepage/:id", verifyAdmin, async (c)=>{
+/* ================= ADMIN: GET ONE ================= */
 
-const row = await c.env.DB.prepare(`
-SELECT *
-FROM homepage_rows
-WHERE id=?
-`)
-.bind(c.req.param("id"))
-.first()
+app.get("/homepage/:id", verifyAdmin, async (c) => {
 
-return c.json(row)
+  const row = await c.env.DB.prepare(`
+    SELECT *
+    FROM homepage_rows
+    WHERE id=?
+  `)
+  .bind(c.req.param("id"))
+  .first();
 
-})
+  return c.json(success(row));
+});
 
-/* =========================
-CREATE ROW
-========================= */
+/* ================= CREATE ================= */
 
-app.post("/homepage", verifyAdmin, async (c)=>{
+app.post("/homepage", verifyAdmin, async (c) => {
 
-const body = await c.req.json()
+  const body = await c.req.json();
 
-const id = crypto.randomUUID()
+  if (!body.title) {
+    return c.json({ success:false, message:"Title required" }, 400);
+  }
 
-await c.env.DB.prepare(`
-INSERT INTO homepage_rows
-(id,title,type,source,layout,row_limit,row_order,active,autoUpdate)
-VALUES(?,?,?,?,?,?,?,?,?)
-`)
-.bind(
+  const id = crypto.randomUUID();
 
-id,
-body.title,
-body.type,
-body.source,
-body.layout,
-body.limit,
-body.order,
-body.active ? 1 : 0,
-body.autoUpdate ? 1 : 0
+  await c.env.DB.prepare(`
+    INSERT INTO homepage_rows
+    (id,title,type,source,layout,row_limit,row_order,active,autoUpdate,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?)
+  `)
+  .bind(
+    id,
+    body.title,
+    body.type || "auto",
+    body.source || "",
+    body.layout || "scroll",
+    body.limit || 10,
+    body.order || 0,
+    body.active ? 1 : 0,
+    body.autoUpdate ? 1 : 0,
+    now()
+  )
+  .run();
 
-)
-.run()
+  return c.json(success({ id }));
+});
 
-return c.json({success:true})
+/* ================= UPDATE ================= */
 
-})
+app.patch("/homepage/:id", verifyAdmin, async (c) => {
 
-/* =========================
-UPDATE ROW
-========================= */
+  const body = await c.req.json();
 
-app.patch("/homepage/:id", verifyAdmin, async (c)=>{
+  await c.env.DB.prepare(`
+    UPDATE homepage_rows SET
+      title=?,
+      type=?,
+      source=?,
+      layout=?,
+      row_limit=?,
+      row_order=?,
+      active=?,
+      autoUpdate=?
+    WHERE id=?
+  `)
+  .bind(
+    body.title,
+    body.type,
+    body.source,
+    body.layout,
+    body.limit,
+    body.order,
+    body.active ? 1 : 0,
+    body.autoUpdate ? 1 : 0,
+    c.req.param("id")
+  )
+  .run();
 
-const body = await c.req.json()
+  return c.json(success(true));
+});
 
-await c.env.DB.prepare(`
-UPDATE homepage_rows
-SET
+/* ================= DELETE ================= */
 
-title=?,
-type=?,
-source=?,
-layout=?,
-row_limit=?,
-row_order=?,
-active=?,
-autoUpdate=?
+app.delete("/homepage/:id", verifyAdmin, async (c) => {
 
-WHERE id=?
+  await c.env.DB.prepare(`
+    DELETE FROM homepage_rows WHERE id=?
+  `)
+  .bind(c.req.param("id"))
+  .run();
 
-`)
-.bind(
+  return c.json(success(true));
+});
 
-body.title,
-body.type,
-body.source,
-body.layout,
-body.limit,
-body.order,
-body.active ? 1 : 0,
-body.autoUpdate ? 1 : 0,
-c.req.param("id")
+/* =====================================================
+🔥 PUBLIC API (MAIN ENGINE)
+===================================================== */
 
-)
-.run()
+app.get("/homepage/public", async (c) => {
 
-return c.json({success:true})
+  const db = c.env.DB;
 
-})
+  try {
 
-/* =========================
-DELETE ROW
-========================= */
+    const { results: rows } = await db.prepare(`
+      SELECT *
+      FROM homepage_rows
+      WHERE active = 1
+      ORDER BY row_order ASC
+    `).all();
 
-app.delete("/homepage/:id", verifyAdmin, async (c)=>{
+    const final = [];
 
-await c.env.DB.prepare(`
-DELETE FROM homepage_rows
-WHERE id=?
-`)
-.bind(c.req.param("id"))
-.run()
+    for (const row of rows) {
 
-return c.json({success:true})
+      let items = [];
 
-})
+      /* ===== AUTO (LATEST) ===== */
+      if (row.type === "auto") {
 
-export default app
+        const { results } = await db.prepare(`
+          SELECT id,title,poster,slug,rating,year
+          FROM anime
+          ORDER BY created_at DESC
+          LIMIT ?
+        `)
+        .bind(row.row_limit || 10)
+        .all();
+
+        items = results;
+      }
+
+      /* ===== CATEGORY ===== */
+      else if (row.type === "category" && row.source) {
+
+        const { results } = await db.prepare(`
+          SELECT id,title,poster,slug,rating,year
+          FROM anime
+          WHERE category=?
+          ORDER BY created_at DESC
+          LIMIT ?
+        `)
+        .bind(row.source, row.row_limit || 10)
+        .all();
+
+        items = results;
+      }
+
+      /* ===== SKIP EMPTY ===== */
+      if (!items.length) continue;
+
+      final.push({
+        id: row.id,
+        title: row.title,
+        type: row.type,
+        source: row.source,
+        layout: row.layout,
+        items
+      });
+    }
+
+    return c.json(final);
+
+  } catch (err) {
+    console.error(err);
+    return c.json([]);
+  }
+});
+
+export default app;
