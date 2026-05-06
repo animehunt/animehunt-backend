@@ -1,105 +1,236 @@
-import { Hono } from "hono"
+import { Hono } from "hono";
+import { verifyAdmin } from "../middleware/adminAuth.js";
 
-const app = new Hono()
+const app = new Hono();
 
 /* =========================
 GET SERVERS
 ========================= */
 
-app.get("/servers", async (c)=>{
+app.get("/servers", verifyAdmin, async (c)=>{
 
-const q = c.req.query("q")
+  try{
 
-let rows
+    const q = c.req.query("q") || "";
 
-if(q){
+    let query = `
+      SELECT *
+      FROM servers
+    `;
 
-rows = await c.env.DB.prepare(`
-SELECT *
-FROM servers
-WHERE anime LIKE ?
-ORDER BY priority ASC
-LIMIT 200
-`)
-.bind("%"+q+"%")
-.all()
+    let bind = [];
 
-}else{
+    if(q){
 
-rows = await c.env.DB.prepare(`
-SELECT *
-FROM servers
-ORDER BY priority ASC
-LIMIT 200
-`).all()
+      query += `
+        WHERE
+        anime LIKE ?
+        OR name LIKE ?
+      `;
 
-}
+      bind = [
+        `%${q}%`,
+        `%${q}%`
+      ];
 
-return c.json(rows.results)
+    }
 
-})
+    query += `
+      ORDER BY priority ASC,
+      created_at DESC
+      LIMIT 500
+    `;
+
+    const { results } = await c.env.DB
+      .prepare(query)
+      .bind(...bind)
+      .all();
+
+    return c.json(results || []);
+
+  }catch(err){
+
+    console.error(err);
+
+    return c.json([],500);
+
+  }
+
+});
 
 /* =========================
 CREATE / UPDATE
 ========================= */
 
-app.post("/servers", async (c)=>{
+app.post("/servers", verifyAdmin, async (c)=>{
 
-const body = await c.req.json()
+  try{
 
-const id = body.id || crypto.randomUUID()
+    const body = await c.req.json();
 
-await c.env.DB.prepare(`
-INSERT OR REPLACE INTO servers(
+    if(
+      !body.name ||
+      !body.anime ||
+      !body.embed
+    ){
 
-id,
-name,
-anime,
-season,
-episode,
-embed,
-priority,
-active,
-created_at
+      return c.json({
+        success:false,
+        error:"Missing fields"
+      },400);
 
-) VALUES(?,?,?,?,?,?,?,?,?)
-`)
-.bind(
+    }
 
-id,
-body.name,
-body.anime,
-body.season,
-body.episode,
-body.embed,
-body.priority,
-body.active ? 1 : 0,
-Date.now()
+    const id = body.id || crypto.randomUUID();
 
-)
-.run()
+    await c.env.DB.prepare(`
+      INSERT INTO servers (
 
-return c.json({success:true,id})
+        id,
+        name,
+        anime,
 
-})
+        season,
+        episode,
+
+        embed,
+
+        priority,
+        active,
+
+        updated_at
+
+      )
+
+      VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+
+      ON CONFLICT(id)
+      DO UPDATE SET
+
+        name=excluded.name,
+        anime=excluded.anime,
+
+        season=excluded.season,
+        episode=excluded.episode,
+
+        embed=excluded.embed,
+
+        priority=excluded.priority,
+        active=excluded.active,
+
+        updated_at=CURRENT_TIMESTAMP
+
+    `)
+    .bind(
+
+      id,
+
+      body.name,
+      body.anime,
+
+      Number(body.season || 1),
+      Number(body.episode || 1),
+
+      body.embed,
+
+      Number(body.priority || 99),
+      body.active ? 1 : 0
+
+    )
+    .run();
+
+    return c.json({
+      success:true,
+      id
+    });
+
+  }catch(err){
+
+    console.error(err);
+
+    return c.json({
+      success:false
+    },500);
+
+  }
+
+});
 
 /* =========================
-DELETE SERVER
+DELETE
 ========================= */
 
-app.delete("/servers/:id", async (c)=>{
+app.delete("/servers/:id", verifyAdmin, async (c)=>{
 
-const id = c.req.param("id")
+  try{
 
-await c.env.DB.prepare(`
-DELETE FROM servers
-WHERE id=?
-`)
-.bind(id)
-.run()
+    const id = c.req.param("id");
 
-return c.json({success:true})
+    await c.env.DB.prepare(`
+      DELETE FROM servers
+      WHERE id=?
+    `)
+    .bind(id)
+    .run();
 
-})
+    return c.json({
+      success:true
+    });
 
-export default app
+  }catch(err){
+
+    console.error(err);
+
+    return c.json({
+      success:false
+    },500);
+
+  }
+
+});
+
+/* =========================
+PUBLIC SERVERS
+========================= */
+
+app.get("/servers/public/:anime/:ep", async (c)=>{
+
+  try{
+
+    const anime = c.req.param("anime");
+    const ep = c.req.param("ep");
+
+    const { results } = await c.env.DB.prepare(`
+
+      SELECT
+      id,
+      name,
+      embed,
+      priority
+
+      FROM servers
+
+      WHERE
+      anime=? AND
+      episode=? AND
+      active=1
+
+      ORDER BY priority ASC
+
+    `)
+    .bind(anime, ep)
+    .all();
+
+    return c.json(results || []);
+
+  }catch(err){
+
+    console.error(err);
+
+    return c.json([]);
+
+  }
+
+});
+
+export default app;
