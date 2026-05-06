@@ -1,102 +1,243 @@
-import { Hono } from "hono"
-import { verifyAdmin } from "../middleware/adminAuth.js"
+import { Hono } from "hono";
+import { verifyAdmin } from "../middleware/adminAuth.js";
 
-const app = new Hono()
+const app = new Hono();
+
+/* =========================
+FIELDS
+========================= */
+
+const fields = [
+  "lazyLoad",
+  "smartPreload",
+  "assetMinify",
+  "imgOptimize",
+
+  "jsOptimize",
+  "cssOptimize",
+
+  "smartCache",
+  "mobilePriority",
+
+  "cdnMode",
+  "adaptiveLoad",
+
+  "preconnect",
+  "bandwidth"
+];
+
+/* =========================
+HELPER
+========================= */
+
+const bool = (v) => (v ? 1 : 0);
 
 /* =========================
 ENSURE ROW EXISTS
 ========================= */
 
 async function ensureRow(db){
-  await db.prepare(`
-    INSERT OR IGNORE INTO performance_settings (id) VALUES (1)
-  `).run()
+
+  const row = await db
+    .prepare("SELECT id FROM performance_settings WHERE id=1")
+    .first();
+
+  if(!row){
+
+    await db.prepare(`
+      INSERT INTO performance_settings (
+        id,
+        lazyLoad,
+        smartPreload,
+        assetMinify,
+        imgOptimize,
+        jsOptimize,
+        cssOptimize,
+        smartCache,
+        mobilePriority,
+        cdnMode,
+        adaptiveLoad,
+        preconnect,
+        bandwidth
+      )
+      VALUES (1,1,1,1,1,1,1,1,1,0,1,1,0)
+    `).run();
+
+  }
+
 }
 
 /* =========================
-GET
+ADMIN GET
 ========================= */
 
-app.get("/performance", verifyAdmin, async (c)=>{
+app.get("/performance", verifyAdmin, async (c) => {
 
-  const db = c.env.DB
+  try{
 
-  await ensureRow(db)
+    const db = c.env.DB;
 
-  const row = await db
-    .prepare("SELECT * FROM performance_settings WHERE id=1")
-    .first()
+    await ensureRow(db);
 
-  return c.json({
-    lazyLoad: !!row.lazyLoad,
-    smartPreload: !!row.smartPreload,
-    assetMinify: !!row.assetMinify,
-    imgOptimize: !!row.imgOptimize,
+    const row = await db
+      .prepare(`
+        SELECT *
+        FROM performance_settings
+        WHERE id=1
+      `)
+      .first();
 
-    jsOptimize: !!row.jsOptimize,
-    cssOptimize: !!row.cssOptimize,
+    const data = {};
 
-    smartCache: !!row.smartCache,
-    mobilePriority: !!row.mobilePriority,
+    fields.forEach(f=>{
+      data[f] = !!row[f];
+    });
 
-    cdnMode: !!row.cdnMode,
-    adaptiveLoad: !!row.adaptiveLoad,
+    return c.json(data);
 
-    preconnect: !!row.preconnect,
-    bandwidth: !!row.bandwidth
-  })
+  }catch(err){
 
-})
+    console.error(err);
+
+    return c.json({
+      error: "Failed to load settings"
+    },500);
+
+  }
+
+});
 
 /* =========================
-POST
+ADMIN SAVE
 ========================= */
 
-app.post("/performance", verifyAdmin, async (c)=>{
+app.post("/performance", verifyAdmin, async (c) => {
 
-  const db = c.env.DB
-  const body = await c.req.json()
+  try{
 
-  await ensureRow(db)
+    const db = c.env.DB;
 
-  await db.prepare(`
-    UPDATE performance_settings SET
-    lazyLoad=?,
-    smartPreload=?,
-    assetMinify=?,
-    imgOptimize=?,
-    jsOptimize=?,
-    cssOptimize=?,
-    smartCache=?,
-    mobilePriority=?,
-    cdnMode=?,
-    adaptiveLoad=?,
-    preconnect=?,
-    bandwidth=?
-    WHERE id=1
-  `).bind(
+    const body = await c.req.json();
 
-    body.lazyLoad ? 1 : 0,
-    body.smartPreload ? 1 : 0,
-    body.assetMinify ? 1 : 0,
-    body.imgOptimize ? 1 : 0,
+    await ensureRow(db);
 
-    body.jsOptimize ? 1 : 0,
-    body.cssOptimize ? 1 : 0,
+    await db.prepare(`
+      UPDATE performance_settings
+      SET
 
-    body.smartCache ? 1 : 0,
-    body.mobilePriority ? 1 : 0,
+      lazyLoad=?,
+      smartPreload=?,
+      assetMinify=?,
+      imgOptimize=?,
 
-    body.cdnMode ? 1 : 0,
-    body.adaptiveLoad ? 1 : 0,
+      jsOptimize=?,
+      cssOptimize=?,
 
-    body.preconnect ? 1 : 0,
-    body.bandwidth ? 1 : 0
+      smartCache=?,
+      mobilePriority=?,
 
-  ).run()
+      cdnMode=?,
+      adaptiveLoad=?,
 
-  return c.json({ success: true })
+      preconnect=?,
+      bandwidth=?,
 
-})
+      updated_at=CURRENT_TIMESTAMP
 
-export default app
+      WHERE id=1
+    `)
+    .bind(
+
+      bool(body.lazyLoad),
+      bool(body.smartPreload),
+      bool(body.assetMinify),
+      bool(body.imgOptimize),
+
+      bool(body.jsOptimize),
+      bool(body.cssOptimize),
+
+      bool(body.smartCache),
+      bool(body.mobilePriority),
+
+      bool(body.cdnMode),
+      bool(body.adaptiveLoad),
+
+      bool(body.preconnect),
+      bool(body.bandwidth)
+
+    )
+    .run();
+
+    return c.json({
+      success:true
+    });
+
+  }catch(err){
+
+    console.error(err);
+
+    return c.json({
+      error:"Failed to save"
+    },500);
+
+  }
+
+});
+
+/* =========================
+PUBLIC API
+========================= */
+
+app.get("/performance/public", async (c)=>{
+
+  try{
+
+    const row = await c.env.DB
+      .prepare(`
+        SELECT
+
+        lazyLoad,
+        smartPreload,
+        assetMinify,
+        imgOptimize,
+
+        jsOptimize,
+        cssOptimize,
+
+        smartCache,
+        mobilePriority,
+
+        cdnMode,
+        adaptiveLoad,
+
+        preconnect,
+        bandwidth
+
+        FROM performance_settings
+        WHERE id=1
+      `)
+      .first();
+
+    if(!row){
+      return c.json({});
+    }
+
+    const data = {};
+
+    fields.forEach(f=>{
+      data[f] = !!row[f];
+    });
+
+    return c.json(data);
+
+  }catch(err){
+
+    console.error(err);
+
+    return c.json({});
+
+  }
+
+});
+
+export default app;
