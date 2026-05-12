@@ -1,6 +1,6 @@
 /* =========================================================
-   src/routes/downloadsV2.js
-   FINAL DOWNLOAD SYSTEM
+   src/routes/downloads.js
+   FINAL DOWNLOAD SYSTEM V3
 ========================================================= */
 
 import { Hono } from "hono"
@@ -99,9 +99,10 @@ app.get(
       ON a.id = de.anime_id
 
       ORDER BY
-      a.title ASC,
-      de.season ASC,
-      de.episode ASC
+
+        a.title ASC,
+        de.season ASC,
+        de.episode ASC
 
     `).all()
 
@@ -114,7 +115,13 @@ app.get(
 
       SELECT
 
-        dh.*,
+        dh.id,
+        dh.entry_id,
+        dh.host,
+        dh.storage,
+        dh.knight,
+        dh.direct_download,
+        dh.monetization_id,
 
         hm.mode,
 
@@ -125,7 +132,7 @@ app.get(
       FROM download_hosts dh
 
       LEFT JOIN host_monetization hm
-      ON LOWER(hm.host)=LOWER(dh.host)
+      ON hm.id = dh.monetization_id
 
     `).all()
 
@@ -137,12 +144,13 @@ app.get(
     await db.prepare(`
 
       SELECT *
+
       FROM download_links
 
     `).all()
 
     /* =========================
-       BUILD
+       MAPS
     ========================= */
 
     const hostMap =
@@ -151,7 +159,12 @@ app.get(
     const linkMap =
     groupBy(links,"host_id")
 
-    const final = entries.map(entry=>{
+    /* =========================
+       BUILD
+    ========================= */
+
+    const final =
+    entries.map(entry=>{
 
       const entryHosts =
       hostMap[entry.id] || []
@@ -160,18 +173,40 @@ app.get(
 
         ...entry,
 
-        hosts: entryHosts.map(host=>({
+        hosts:
+        entryHosts.map(host=>({
 
-          ...host,
+          id:host.id,
+
+          host:host.host,
+
+          storage:host.storage,
+
+          knight:!!host.knight,
+
+          direct_download:
+          !!host.direct_download,
+
+          monetization_id:
+          host.monetization_id,
+
+          mode:
+          host.mode || "random",
 
           ads:
-          JSON.parse(host.ads || "[]"),
+          JSON.parse(
+            host.ads || "[]"
+          ),
 
           shortlinks:
-          JSON.parse(host.shortlinks || "[]"),
+          JSON.parse(
+            host.shortlinks || "[]"
+          ),
 
           popups:
-          JSON.parse(host.popups || "[]"),
+          JSON.parse(
+            host.popups || "[]"
+          ),
 
           links:
           linkMap[host.id] || []
@@ -403,7 +438,8 @@ app.get(
     const animeId =
     c.req.param("animeId")
 
-    const db = c.env.DB
+    const db =
+    c.env.DB
 
     /* =========================
        ENTRIES
@@ -419,8 +455,9 @@ app.get(
       WHERE anime_id=?
 
       ORDER BY
-      season ASC,
-      episode ASC
+
+        season ASC,
+        episode ASC
 
     `)
     .bind(animeId)
@@ -449,11 +486,24 @@ app.get(
     const { results:hosts } =
     await db.prepare(`
 
-      SELECT *
+      SELECT
 
-      FROM download_hosts
+        dh.id,
+        dh.entry_id,
+        dh.host,
+        dh.storage,
+        dh.knight,
+        dh.direct_download,
+        dh.monetization_id,
 
-      WHERE entry_id IN (${placeholders})
+        hm.mode
+
+      FROM download_hosts dh
+
+      LEFT JOIN host_monetization hm
+      ON hm.id = dh.monetization_id
+
+      WHERE dh.entry_id IN (${placeholders})
 
     `)
     .bind(...ids)
@@ -485,7 +535,19 @@ app.get(
       (hostMap[entry.id] || [])
       .map(host=>({
 
-        host:host.host
+        id:host.id,
+
+        host:host.host,
+
+        storage:host.storage,
+
+        knight:!!host.knight,
+
+        direct_download:
+        !!host.direct_download,
+
+        mode:
+        host.mode || "random"
 
       }))
 
@@ -504,52 +566,17 @@ app.get(
   "/knight-data",
   async(c)=>{
 
-    const anime =
-    c.req.query("anime")
+    const hostId =
+    c.req.query("host_id")
 
-    const season =
-    c.req.query("season")
-
-    const episode =
-    c.req.query("episode")
-
-    const host =
-    c.req.query("host")
-
-    const db = c.env.DB
-
-    /* =========================
-       ENTRY
-    ========================= */
-
-    const entry =
-    await db.prepare(`
-
-      SELECT id
-
-      FROM download_entries
-
-      WHERE
-
-        anime_id=?
-        AND season=?
-        AND episode=?
-
-      LIMIT 1
-
-    `)
-    .bind(
-      anime,
-      season,
-      episode
-    )
-    .first()
-
-    if(!entry){
+    if(!hostId){
 
       return c.json([])
 
     }
+
+    const db =
+    c.env.DB
 
     /* =========================
        HOST
@@ -562,18 +589,12 @@ app.get(
 
       FROM download_hosts
 
-      WHERE
-
-        entry_id=?
-        AND LOWER(host)=LOWER(?)
+      WHERE id=?
 
       LIMIT 1
 
     `)
-    .bind(
-      entry.id,
-      host
-    )
+    .bind(hostId)
     .first()
 
     if(!hostData){
@@ -590,6 +611,7 @@ app.get(
     await db.prepare(`
 
       SELECT
+
         quality,
         link
 
@@ -598,7 +620,7 @@ app.get(
       WHERE host_id=?
 
     `)
-    .bind(hostData.id)
+    .bind(hostId)
     .all()
 
     return c.json(results)
@@ -620,12 +642,13 @@ app.get(
     const quality =
     c.req.query("quality")
 
-    const db = c.env.DB
+    const db =
+    c.env.DB
 
     let row = null
 
     /* =========================
-       KNIGHT
+       QUALITY
     ========================= */
 
     if(quality){
@@ -646,8 +669,10 @@ app.get(
 
       `)
       .bind(
+
         hostId,
         quality
+
       )
       .first()
 
@@ -684,7 +709,9 @@ app.get(
 
     }
 
-    return c.redirect(row.link)
+    return c.redirect(
+      row.link
+    )
 
 })
 
