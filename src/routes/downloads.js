@@ -1,184 +1,691 @@
+/* =========================================================
+   src/routes/downloadsV2.js
+   FINAL DOWNLOAD SYSTEM
+========================================================= */
+
 import { Hono } from "hono"
 import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* =====================================================
-ADMIN: GET ALL DOWNLOADS
-===================================================== */
-app.get("/downloads", verifyAdmin, async (c)=>{
+/* =========================================================
+   HELPERS
+========================================================= */
 
-  const { results } = await c.env.DB.prepare(`
-    SELECT *
-    FROM downloads
-    ORDER BY anime ASC, season ASC, episode ASC
-  `).all()
+function groupBy(arr,key){
 
-  return c.json(results)
+  return arr.reduce((acc,item)=>{
+
+    const value = item[key]
+
+    if(!acc[value]){
+      acc[value] = []
+    }
+
+    acc[value].push(item)
+
+    return acc
+
+  },{})
+
+}
+
+/* =========================================================
+   ADMIN
+   ANIME LIST
+========================================================= */
+
+app.get(
+  "/anime-list",
+  verifyAdmin,
+  async(c)=>{
+
+    const { results } =
+    await c.env.DB.prepare(`
+
+      SELECT
+
+        id,
+        title,
+        poster,
+        type
+
+      FROM anime
+
+      ORDER BY title ASC
+
+    `).all()
+
+    return c.json(results)
+
 })
 
-/* =====================================================
-ADMIN: BULK INSERT (SMART INSERT)
-===================================================== */
-app.post("/downloads/bulk", verifyAdmin, async (c)=>{
+/* =========================================================
+   ADMIN
+   GET DOWNLOADS
+========================================================= */
 
-  const rows = await c.req.json()
-  const db = c.env.DB
+app.get(
+  "/downloads-v2",
+  verifyAdmin,
+  async(c)=>{
 
-  if(!Array.isArray(rows) || !rows.length){
-    return c.json({error:"No data"},400)
-  }
+    const db = c.env.DB
 
-  const stmt = db.prepare(`
-    INSERT INTO downloads
-    (id, anime, season, episode, host, storage, quality, link, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `)
+    /* =========================
+       ENTRIES
+    ========================= */
 
-  for(const d of rows){
+    const { results:entries } =
+    await db.prepare(`
 
-    if(!d.anime || !d.episode || !d.link) continue
+      SELECT
 
-    const exists = await db.prepare(`
-      SELECT id FROM downloads
-      WHERE anime=? AND season=? AND episode=? AND host=? AND quality=?
-      LIMIT 1
-    `)
-    .bind(d.anime, d.season || "1", d.episode, d.host, d.quality)
-    .first()
+        de.id,
+        de.anime_id,
+        de.content_type,
+        de.season,
+        de.episode,
+        de.episode_title,
+        de.created_at,
 
-    if(exists) continue
+        a.title as anime_title,
+        a.poster as anime_poster,
+        a.type as anime_type
 
-    await stmt.bind(
-      crypto.randomUUID(),
-      d.anime,
-      d.season || "1",
-      d.episode,
-      d.host || "unknown",
-      d.storage || null,
-      d.quality || "unknown",
-      d.link
-    ).run()
-  }
+      FROM download_entries de
 
-  return c.json({success:true})
-})
+      LEFT JOIN anime a
+      ON a.id = de.anime_id
 
-/* =====================================================
-ADMIN: DELETE
-===================================================== */
-app.delete("/downloads/:id", verifyAdmin, async (c)=>{
+      ORDER BY
+      a.title ASC,
+      de.season ASC,
+      de.episode ASC
 
-  await c.env.DB.prepare(`
-    DELETE FROM downloads WHERE id=?
-  `)
-  .bind(c.req.param("id"))
-  .run()
+    `).all()
 
-  return c.json({success:true})
-})
+    /* =========================
+       HOSTS
+    ========================= */
 
-/* =====================================================
-ADMIN: UPDATE
-===================================================== */
-app.put("/downloads/:id", verifyAdmin, async (c)=>{
+    const { results:hosts } =
+    await db.prepare(`
 
-  const id = c.req.param("id")
-  const body = await c.req.json()
+      SELECT
 
-  await c.env.DB.prepare(`
-    UPDATE downloads
-    SET anime=?, season=?, episode=?, host=?, storage=?, quality=?, link=?
-    WHERE id=?
-  `)
-  .bind(
-    body.anime,
-    body.season,
-    body.episode,
-    body.host,
-    body.storage,
-    body.quality,
-    body.link,
-    id
-  )
-  .run()
+        dh.*,
 
-  return c.json({success:true})
-})
+        hm.mode,
 
-/* =====================================================
-PUBLIC: FULL STRUCTURE (DOWNLOAD PAGE)
-===================================================== */
-app.get("/downloads-full/:anime", async (c)=>{
+        hm.ads,
+        hm.shortlinks,
+        hm.popups
 
-  const anime = c.req.param("anime")
+      FROM download_hosts dh
 
-  const { results } = await c.env.DB.prepare(`
-    SELECT season, episode, host, quality
-    FROM downloads
-    WHERE anime=?
-    ORDER BY season ASC, episode ASC
-  `)
-  .bind(anime)
-  .all()
+      LEFT JOIN host_monetization hm
+      ON LOWER(hm.host)=LOWER(dh.host)
 
-  const structured = {}
+    `).all()
 
-  results.forEach(d=>{
+    /* =========================
+       LINKS
+    ========================= */
 
-    if(!structured[d.season]) structured[d.season] = {}
-    if(!structured[d.season][d.episode]) structured[d.season][d.episode] = {}
-    if(!structured[d.season][d.episode][d.host]) structured[d.season][d.episode][d.host] = []
+    const { results:links } =
+    await db.prepare(`
 
-    structured[d.season][d.episode][d.host].push({
-      quality: d.quality
+      SELECT *
+      FROM download_links
+
+    `).all()
+
+    /* =========================
+       BUILD
+    ========================= */
+
+    const hostMap =
+    groupBy(hosts,"entry_id")
+
+    const linkMap =
+    groupBy(links,"host_id")
+
+    const final = entries.map(entry=>{
+
+      const entryHosts =
+      hostMap[entry.id] || []
+
+      return {
+
+        ...entry,
+
+        hosts: entryHosts.map(host=>({
+
+          ...host,
+
+          ads:
+          JSON.parse(host.ads || "[]"),
+
+          shortlinks:
+          JSON.parse(host.shortlinks || "[]"),
+
+          popups:
+          JSON.parse(host.popups || "[]"),
+
+          links:
+          linkMap[host.id] || []
+
+        }))
+
+      }
+
     })
 
-  })
+    return c.json(final)
 
-  return c.json(structured)
 })
 
-/* =====================================================
-PUBLIC: KNIGHT PAGE DATA (IMPORTANT FIX)
-===================================================== */
-app.get("/downloads/:anime/:season/:episode", async (c)=>{
+/* =========================================================
+   ADMIN
+   CREATE DOWNLOAD
+========================================================= */
 
-  const { anime, season, episode } = c.req.param()
+app.post(
+  "/downloads-v2",
+  verifyAdmin,
+  async(c)=>{
 
-  const { results } = await c.env.DB.prepare(`
-    SELECT host, quality, link
-    FROM downloads
-    WHERE anime=? AND season=? AND episode=?
-  `)
-  .bind(anime, season, episode)
-  .all()
+    const db = c.env.DB
 
-  return c.json(results)
+    const body =
+    await c.req.json()
+
+    /* =========================
+       VALIDATION
+    ========================= */
+
+    if(
+      !body.anime_id ||
+      !body.hosts?.length
+    ){
+
+      return c.json({
+
+        success:false,
+        error:"Missing data"
+
+      },400)
+
+    }
+
+    /* =====================================================
+       ENTRY
+    ===================================================== */
+
+    const entryId =
+    crypto.randomUUID()
+
+    await db.prepare(`
+
+      INSERT INTO download_entries (
+
+        id,
+        anime_id,
+        content_type,
+        season,
+        episode,
+        episode_title,
+        created_at
+
+      )
+
+      VALUES (
+
+        ?,?,?,?,?,?,
+        datetime('now')
+
+      )
+
+    `)
+    .bind(
+
+      entryId,
+
+      body.anime_id,
+
+      body.content_type || "episode",
+
+      body.season || null,
+
+      body.episode || null,
+
+      body.episode_title || null
+
+    )
+    .run()
+
+    /* =====================================================
+       HOSTS
+    ===================================================== */
+
+    for(const host of body.hosts){
+
+      const hostId =
+      crypto.randomUUID()
+
+      /* =========================
+         HOST CONFIG
+      ========================= */
+
+      const hostConfig =
+      await db.prepare(`
+
+        SELECT *
+
+        FROM host_monetization
+
+        WHERE LOWER(host)=LOWER(?)
+
+        LIMIT 1
+
+      `)
+      .bind(host.host)
+      .first()
+
+      /* =========================
+         INSERT HOST
+      ========================= */
+
+      await db.prepare(`
+
+        INSERT INTO download_hosts (
+
+          id,
+          entry_id,
+          host,
+          storage,
+          knight,
+          direct_download,
+          monetization_id,
+          created_at
+
+        )
+
+        VALUES (
+
+          ?,?,?,?,?,?,?,datetime('now')
+
+        )
+
+      `)
+      .bind(
+
+        hostId,
+
+        entryId,
+
+        host.host,
+
+        hostConfig?.storage || null,
+
+        hostConfig?.knight ? 1 : 0,
+
+        0,
+
+        hostConfig?.id || null
+
+      )
+      .run()
+
+      /* ===================================================
+         LINKS
+      =================================================== */
+
+      for(const link of host.links){
+
+        if(!link.link) continue
+
+        await db.prepare(`
+
+          INSERT INTO download_links (
+
+            id,
+            host_id,
+            quality,
+            link,
+            created_at
+
+          )
+
+          VALUES (
+
+            ?,?,?,?,
+            datetime('now')
+
+          )
+
+        `)
+        .bind(
+
+          crypto.randomUUID(),
+
+          hostId,
+
+          link.quality || null,
+
+          link.link
+
+        )
+        .run()
+
+      }
+
+    }
+
+    return c.json({
+
+      success:true
+
+    })
+
 })
 
-/* =====================================================
-PUBLIC: FINAL LINK (OPTIONAL SAFE API)
-===================================================== */
-app.get("/download-final", async (c)=>{
+/* =========================================================
+   PUBLIC
+   DOWNLOAD PAGE
+========================================================= */
 
-  const anime = c.req.query("anime")
-  const season = c.req.query("season")
-  const episode = c.req.query("episode")
-  const host = c.req.query("host")
-  const quality = c.req.query("quality")
+app.get(
+  "/downloads-page/:animeId",
+  async(c)=>{
 
-  const data = await c.env.DB.prepare(`
-    SELECT link FROM downloads
-    WHERE anime=? AND season=? AND episode=? AND host=? AND quality=?
-    LIMIT 1
-  `)
-  .bind(anime, season, episode, host, quality)
-  .first()
+    const animeId =
+    c.req.param("animeId")
 
-  if(!data) return c.text("Link not found")
+    const db = c.env.DB
 
-  return c.redirect(data.link)
+    /* =========================
+       ENTRIES
+    ========================= */
+
+    const { results:entries } =
+    await db.prepare(`
+
+      SELECT *
+
+      FROM download_entries
+
+      WHERE anime_id=?
+
+      ORDER BY
+      season ASC,
+      episode ASC
+
+    `)
+    .bind(animeId)
+    .all()
+
+    if(!entries.length){
+
+      return c.json([])
+
+    }
+
+    /* =========================
+       IDS
+    ========================= */
+
+    const ids =
+    entries.map(x=>x.id)
+
+    const placeholders =
+    ids.map(()=>"?").join(",")
+
+    /* =========================
+       HOSTS
+    ========================= */
+
+    const { results:hosts } =
+    await db.prepare(`
+
+      SELECT *
+
+      FROM download_hosts
+
+      WHERE entry_id IN (${placeholders})
+
+    `)
+    .bind(...ids)
+    .all()
+
+    /* =========================
+       BUILD
+    ========================= */
+
+    const hostMap =
+    groupBy(hosts,"entry_id")
+
+    const final =
+    entries.map(entry=>({
+
+      id:entry.id,
+
+      season:entry.season,
+
+      episode:entry.episode,
+
+      episode_title:
+      entry.episode_title,
+
+      content_type:
+      entry.content_type,
+
+      hosts:
+      (hostMap[entry.id] || [])
+      .map(host=>({
+
+        host:host.host
+
+      }))
+
+    }))
+
+    return c.json(final)
+
+})
+
+/* =========================================================
+   PUBLIC
+   KNIGHT PAGE
+========================================================= */
+
+app.get(
+  "/knight-data",
+  async(c)=>{
+
+    const anime =
+    c.req.query("anime")
+
+    const season =
+    c.req.query("season")
+
+    const episode =
+    c.req.query("episode")
+
+    const host =
+    c.req.query("host")
+
+    const db = c.env.DB
+
+    /* =========================
+       ENTRY
+    ========================= */
+
+    const entry =
+    await db.prepare(`
+
+      SELECT id
+
+      FROM download_entries
+
+      WHERE
+
+        anime_id=?
+        AND season=?
+        AND episode=?
+
+      LIMIT 1
+
+    `)
+    .bind(
+      anime,
+      season,
+      episode
+    )
+    .first()
+
+    if(!entry){
+
+      return c.json([])
+
+    }
+
+    /* =========================
+       HOST
+    ========================= */
+
+    const hostData =
+    await db.prepare(`
+
+      SELECT *
+
+      FROM download_hosts
+
+      WHERE
+
+        entry_id=?
+        AND LOWER(host)=LOWER(?)
+
+      LIMIT 1
+
+    `)
+    .bind(
+      entry.id,
+      host
+    )
+    .first()
+
+    if(!hostData){
+
+      return c.json([])
+
+    }
+
+    /* =========================
+       LINKS
+    ========================= */
+
+    const { results } =
+    await db.prepare(`
+
+      SELECT
+        quality,
+        link
+
+      FROM download_links
+
+      WHERE host_id=?
+
+    `)
+    .bind(hostData.id)
+    .all()
+
+    return c.json(results)
+
+})
+
+/* =========================================================
+   PUBLIC
+   FINAL DOWNLOAD
+========================================================= */
+
+app.get(
+  "/download-final",
+  async(c)=>{
+
+    const hostId =
+    c.req.query("host_id")
+
+    const quality =
+    c.req.query("quality")
+
+    const db = c.env.DB
+
+    let row = null
+
+    /* =========================
+       KNIGHT
+    ========================= */
+
+    if(quality){
+
+      row =
+      await db.prepare(`
+
+        SELECT *
+
+        FROM download_links
+
+        WHERE
+
+          host_id=?
+          AND quality=?
+
+        LIMIT 1
+
+      `)
+      .bind(
+        hostId,
+        quality
+      )
+      .first()
+
+    }
+
+    /* =========================
+       NORMAL
+    ========================= */
+
+    else{
+
+      row =
+      await db.prepare(`
+
+        SELECT *
+
+        FROM download_links
+
+        WHERE host_id=?
+
+        LIMIT 1
+
+      `)
+      .bind(hostId)
+      .first()
+
+    }
+
+    if(!row){
+
+      return c.text(
+        "Download not found"
+      )
+
+    }
+
+    return c.redirect(row.link)
+
 })
 
 export default app
