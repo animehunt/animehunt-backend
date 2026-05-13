@@ -1,10 +1,12 @@
 /* =========================================================
    src/routes/ads.js
-   FINAL MONETIZATION ENGINE V3
+   ⚡ PART 1 — CORE + HELPERS
 ========================================================= */
 
 import { Hono } from "hono"
-import { verifyAdmin } from "../middleware/adminAuth.js"
+
+import { verifyAdmin }
+from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
@@ -12,11 +14,20 @@ const app = new Hono()
    HELPERS
 ========================================================= */
 
-function jsonParse(v,fallback=[]){
+/* =========================================================
+   SAFE JSON PARSE
+========================================================= */
+
+function jsonParse(
+  value,
+  fallback=[]
+){
 
   try{
 
-    return JSON.parse(v || "[]")
+    return JSON.parse(
+      value || "[]"
+    )
 
   }catch{
 
@@ -26,669 +37,2127 @@ function jsonParse(v,fallback=[]){
 
 }
 
+/* =========================================================
+   UUID
+========================================================= */
+
+function uuid(){
+
+  return crypto.randomUUID()
+
+}
+
+/* =========================================================
+   RANDOM PICK
+========================================================= */
+
 function randomPick(arr){
 
-  if(!arr?.length) return null
+  if(!arr?.length){
+
+    return null
+
+  }
 
   return arr[
-    Math.floor(Math.random() * arr.length)
+    Math.floor(
+      Math.random() * arr.length
+    )
   ]
 
 }
 
 /* =========================================================
-   ADS LIBRARY
+   WEIGHTED RANDOM
 ========================================================= */
 
-/* ================= GET ================= */
+function weightedPick(items){
 
-app.get(
-  "/ads-library",
-  verifyAdmin,
-  async(c)=>{
+  if(!items?.length){
 
-    const { results } =
-    await c.env.DB.prepare(`
+    return null
 
-      SELECT *
+  }
 
-      FROM ads_library
+  /* =========================
+     TOTAL
+  ========================= */
 
-      ORDER BY created_at DESC
+  const total =
+  items.reduce((sum,item)=>{
 
-    `).all()
-
-    return c.json(results)
-
-})
-
-/* ================= CREATE ================= */
-
-app.post(
-  "/ads-library",
-  verifyAdmin,
-  async(c)=>{
-
-    const body =
-    await c.req.json()
-
-    const id =
-    crypto.randomUUID()
-
-    await c.env.DB.prepare(`
-
-      INSERT INTO ads_library (
-
-        id,
-        name,
-        type,
-        code,
-        delay,
-        weight,
-        created_at
-
+    return (
+      sum +
+      Number(
+        item.weight || 1
       )
-
-      VALUES (
-
-        ?,?,?,?,?,?,
-        datetime('now')
-
-      )
-
-    `)
-    .bind(
-
-      id,
-
-      body.name,
-      body.type,
-      body.code,
-
-      body.delay || 0,
-      body.weight || 1
-
     )
-    .run()
 
-    return c.json({
+  },0)
 
-      success:true,
-      id
+  /* =========================
+     RANDOM
+  ========================= */
 
-    })
+  let random =
+  Math.random() * total
 
-})
+  /* =========================
+     PICK
+  ========================= */
 
-/* ================= DELETE ================= */
+  for(const item of items){
 
-app.delete(
-  "/ads-library/:id",
-  verifyAdmin,
-  async(c)=>{
-
-    await c.env.DB.prepare(`
-
-      DELETE FROM ads_library
-      WHERE id=?
-
-    `)
-    .bind(
-      c.req.param("id")
+    random -= Number(
+      item.weight || 1
     )
-    .run()
 
-    return c.json({
+    if(random <= 0){
 
-      success:true
-
-    })
-
-})
-
-/* =========================================================
-   SHORTLINK LIBRARY
-========================================================= */
-
-/* ================= GET ================= */
-
-app.get(
-  "/shortlinks-library",
-  verifyAdmin,
-  async(c)=>{
-
-    const { results } =
-    await c.env.DB.prepare(`
-
-      SELECT *
-
-      FROM shortlinks_library
-
-      ORDER BY created_at DESC
-
-    `).all()
-
-    return c.json(results)
-
-})
-
-/* ================= CREATE ================= */
-
-app.post(
-  "/shortlinks-library",
-  verifyAdmin,
-  async(c)=>{
-
-    const body =
-    await c.req.json()
-
-    const id =
-    crypto.randomUUID()
-
-    await c.env.DB.prepare(`
-
-      INSERT INTO shortlinks_library (
-
-        id,
-        name,
-        base_url,
-        api_key,
-        created_at
-
-      )
-
-      VALUES (
-
-        ?,?,?,?,
-        datetime('now')
-
-      )
-
-    `)
-    .bind(
-
-      id,
-
-      body.name,
-      body.base_url,
-
-      body.api_key || null
-
-    )
-    .run()
-
-    return c.json({
-
-      success:true,
-      id
-
-    })
-
-})
-
-/* ================= DELETE ================= */
-
-app.delete(
-  "/shortlinks-library/:id",
-  verifyAdmin,
-  async(c)=>{
-
-    await c.env.DB.prepare(`
-
-      DELETE FROM shortlinks_library
-      WHERE id=?
-
-    `)
-    .bind(
-      c.req.param("id")
-    )
-    .run()
-
-    return c.json({
-
-      success:true
-
-    })
-
-})
-
-/* =========================================================
-   POPUP LIBRARY
-========================================================= */
-
-/* ================= GET ================= */
-
-app.get(
-  "/popup-library",
-  verifyAdmin,
-  async(c)=>{
-
-    const { results } =
-    await c.env.DB.prepare(`
-
-      SELECT *
-
-      FROM popup_library
-
-      ORDER BY created_at DESC
-
-    `).all()
-
-    return c.json(results)
-
-})
-
-/* ================= CREATE ================= */
-
-app.post(
-  "/popup-library",
-  verifyAdmin,
-  async(c)=>{
-
-    const body =
-    await c.req.json()
-
-    const id =
-    crypto.randomUUID()
-
-    await c.env.DB.prepare(`
-
-      INSERT INTO popup_library (
-
-        id,
-        name,
-        script,
-        created_at
-
-      )
-
-      VALUES (
-
-        ?,?,?,
-        datetime('now')
-
-      )
-
-    `)
-    .bind(
-
-      id,
-
-      body.name,
-      body.script
-
-    )
-    .run()
-
-    return c.json({
-
-      success:true,
-      id
-
-    })
-
-})
-
-/* ================= DELETE ================= */
-
-app.delete(
-  "/popup-library/:id",
-  verifyAdmin,
-  async(c)=>{
-
-    await c.env.DB.prepare(`
-
-      DELETE FROM popup_library
-      WHERE id=?
-
-    `)
-    .bind(
-      c.req.param("id")
-    )
-    .run()
-
-    return c.json({
-
-      success:true
-
-    })
-
-})
-
-/* =========================================================
-   HOST MONETIZATION
-========================================================= */
-
-/* ================= GET ================= */
-
-app.get(
-  "/host-monetization",
-  verifyAdmin,
-  async(c)=>{
-
-    const { results } =
-    await c.env.DB.prepare(`
-
-      SELECT *
-
-      FROM host_monetization
-
-      ORDER BY host ASC
-
-    `).all()
-
-    const final = []
-
-    for(const row of results){
-
-      const adsIds =
-      jsonParse(row.ads)
-
-      const shortIds =
-      jsonParse(row.shortlinks)
-
-      const popupIds =
-      jsonParse(row.popups)
-
-      /* =========================
-         ADS
-      ========================= */
-
-      let ads = []
-
-      if(adsIds.length){
-
-        const placeholders =
-        adsIds.map(()=>"?").join(",")
-
-        const { results } =
-        await c.env.DB.prepare(`
-
-          SELECT
-
-            id,
-            name,
-            type
-
-          FROM ads_library
-
-          WHERE id IN (${placeholders})
-
-        `)
-        .bind(...adsIds)
-        .all()
-
-        ads = results
-
-      }
-
-      /* =========================
-         SHORTLINKS
-      ========================= */
-
-      let shortlinks = []
-
-      if(shortIds.length){
-
-        const placeholders =
-        shortIds.map(()=>"?").join(",")
-
-        const { results } =
-        await c.env.DB.prepare(`
-
-          SELECT
-
-            id,
-            name
-
-          FROM shortlinks_library
-
-          WHERE id IN (${placeholders})
-
-        `)
-        .bind(...shortIds)
-        .all()
-
-        shortlinks = results
-
-      }
-
-      /* =========================
-         POPUPS
-      ========================= */
-
-      let popups = []
-
-      if(popupIds.length){
-
-        const placeholders =
-        popupIds.map(()=>"?").join(",")
-
-        const { results } =
-        await c.env.DB.prepare(`
-
-          SELECT
-
-            id,
-            name
-
-          FROM popup_library
-
-          WHERE id IN (${placeholders})
-
-        `)
-        .bind(...popupIds)
-        .all()
-
-        popups = results
-
-      }
-
-      final.push({
-
-        id:row.id,
-
-        host:row.host,
-
-        storage:row.storage,
-
-        knight:!!row.knight,
-
-        mode:row.mode,
-
-        clicks:row.clicks || 0,
-
-        ads,
-        shortlinks,
-        popups
-
-      })
+      return item
 
     }
 
-    return c.json(final)
+  }
 
-})
+  return items[0]
 
-/* ================= CREATE ================= */
+}
 
-app.post(
-  "/host-monetization",
-  verifyAdmin,
-  async(c)=>{
+/* =========================================================
+   SEQUENCE PICK
+========================================================= */
 
-    const body =
-    await c.req.json()
+function sequencePick(
+  items,
+  clicks=0
+){
 
-    const id =
-    crypto.randomUUID()
+  if(!items?.length){
 
-    await c.env.DB.prepare(`
+    return null
 
-      INSERT INTO host_monetization (
+  }
+
+  const index =
+  clicks % items.length
+
+  return items[index]
+
+}
+
+/* =========================================================
+   MODE PICKER
+========================================================= */
+
+function pickByMode(
+  items,
+  mode="random",
+  clicks=0
+){
+
+  if(!items?.length){
+
+    return null
+
+  }
+
+  /* =========================
+     DIRECT
+  ========================= */
+
+  if(mode === "direct"){
+
+    return items[0]
+
+  }
+
+  /* =========================
+     SEQUENCE
+  ========================= */
+
+  if(mode === "sequence"){
+
+    return sequencePick(
+      items,
+      clicks
+    )
+
+  }
+
+  /* =========================
+     RANDOM
+  ========================= */
+
+  return weightedPick(items)
+
+}
+
+/* =========================================================
+   RESPONSE
+========================================================= */
+
+function success(
+  data={}
+){
+
+  return {
+    success:true,
+    ...data
+  }
+
+}
+
+function failure(
+  error="Something went wrong"
+){
+
+  return {
+    success:false,
+    error
+  }
+
+}
+
+/* =========================================================
+   GET BODY
+========================================================= */
+
+async function getBody(c){
+
+  try{
+
+    return await c.req.json()
+
+  }catch{
+
+    return {}
+
+  }
+
+}
+
+/* =========================================================
+   VALIDATION
+========================================================= */
+
+function required(
+  value
+){
+
+  return (
+    value &&
+    String(value)
+    .trim()
+    .length
+  )
+
+}
+
+/* =========================================================
+   ANALYTICS
+========================================================= */
+
+async function trackEvent(
+
+  db,
+
+  type,
+
+  meta={}
+
+){
+
+  try{
+
+    await db.prepare(`
+
+      INSERT INTO monetization_analytics (
 
         id,
-        host,
-        storage,
-        knight,
-        ads,
-        shortlinks,
-        popups,
-        mode,
-        clicks,
+        type,
+        meta,
         created_at
 
       )
 
       VALUES (
 
-        ?,?,?,?,?,?,?,?,?,
-        datetime('now')
+        ?,?,?,datetime('now')
 
       )
 
     `)
     .bind(
 
-      id,
+      uuid(),
 
-      body.host,
+      type,
 
-      body.storage || null,
-
-      body.knight ? 1 : 0,
-
-      JSON.stringify(body.ads || []),
-
-      JSON.stringify(body.shortlinks || []),
-
-      JSON.stringify(body.popups || []),
-
-      body.mode || "random",
-
-      0
+      JSON.stringify(meta)
 
     )
     .run()
 
-    return c.json({
+  }catch(err){
 
-      success:true,
-      id
+    console.error(
+      "Analytics Error",
+      err
+    )
 
-    })
+  }
+
+}
+
+/* =========================================================
+   GET IDS PLACEHOLDER
+========================================================= */
+
+function placeholders(arr){
+
+  return arr
+  .map(()=>"?")
+  .join(",")
+
+}
+
+/* =========================================================
+   LOAD ADS BY IDS
+========================================================= */
+
+async function getAds(
+
+  db,
+  ids=[]
+
+){
+
+  if(!ids.length){
+
+    return []
+
+  }
+
+  const { results } =
+  await db.prepare(`
+
+    SELECT *
+
+    FROM ads_library
+
+    WHERE id IN (${placeholders(ids)})
+
+  `)
+  .bind(...ids)
+  .all()
+
+  return results || []
+
+}
+
+/* =========================================================
+   LOAD SHORTLINKS BY IDS
+========================================================= */
+
+async function getShortlinks(
+
+  db,
+  ids=[]
+
+){
+
+  if(!ids.length){
+
+    return []
+
+  }
+
+  const { results } =
+  await db.prepare(`
+
+    SELECT *
+
+    FROM shortlinks_library
+
+    WHERE id IN (${placeholders(ids)})
+
+  `)
+  .bind(...ids)
+  .all()
+
+  return results || []
+
+}
+
+/* =========================================================
+   LOAD POPUPS BY IDS
+========================================================= */
+
+async function getPopups(
+
+  db,
+  ids=[]
+
+){
+
+  if(!ids.length){
+
+    return []
+
+  }
+
+  const { results } =
+  await db.prepare(`
+
+    SELECT *
+
+    FROM popup_library
+
+    WHERE id IN (${placeholders(ids)})
+
+  `)
+  .bind(...ids)
+  .all()
+
+  return results || []
+
+}
+
+/* =========================================================
+   EXPORT
+========================================================= */
+
+export default app
+
+/* =========================================================
+   ⚡ PART 2 — ADS LIBRARY APIs
+========================================================= */
+
+/* =========================================================
+   GET ADS
+========================================================= */
+
+app.get(
+
+  "/ads-library",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    try{
+
+      const { results } =
+      await db.prepare(`
+
+        SELECT *
+
+        FROM ads_library
+
+        ORDER BY created_at DESC
+
+      `).all()
+
+      return c.json(
+        results || []
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+        failure(
+          "Failed to load ads"
+        ),
+        500
+      )
+
+    }
 
 })
 
-/* ================= UPDATE ================= */
+/* =========================================================
+   CREATE AD
+========================================================= */
+
+app.post(
+
+  "/ads-library",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const body =
+    await getBody(c)
+
+    /* =========================
+       VALIDATION
+    ========================= */
+
+    if(
+
+      !required(body.name) ||
+
+      !required(body.type) ||
+
+      !required(body.code)
+
+    ){
+
+      return c.json(
+
+        failure(
+          "Missing required fields"
+        ),
+
+        400
+
+      )
+
+    }
+
+    try{
+
+      /* =========================
+         DUPLICATE CHECK
+      ========================= */
+
+      const exists =
+      await db.prepare(`
+
+        SELECT id
+
+        FROM ads_library
+
+        WHERE LOWER(name)=LOWER(?)
+
+        LIMIT 1
+
+      `)
+      .bind(body.name)
+      .first()
+
+      if(exists){
+
+        return c.json(
+
+          failure(
+            "Ad already exists"
+          ),
+
+          400
+
+        )
+
+      }
+
+      /* =========================
+         INSERT
+      ========================= */
+
+      const id =
+      uuid()
+
+      await db.prepare(`
+
+        INSERT INTO ads_library (
+
+          id,
+          name,
+          type,
+          code,
+          delay,
+          weight,
+          created_at
+
+        )
+
+        VALUES (
+
+          ?,?,?,?,?,?,
+          datetime('now')
+
+        )
+
+      `)
+      .bind(
+
+        id,
+
+        body.name,
+
+        body.type,
+
+        body.code,
+
+        Number(
+          body.delay || 0
+        ),
+
+        Number(
+          body.weight || 1
+        )
+
+      )
+      .run()
+
+      return c.json(
+
+        success({
+          id
+        })
+
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to create ad"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   UPDATE AD
+========================================================= */
 
 app.put(
-  "/host-monetization/:id",
+
+  "/ads-library/:id",
+
   verifyAdmin,
+
   async(c)=>{
+
+    const db =
+    c.env.DB
 
     const id =
     c.req.param("id")
 
     const body =
-    await c.req.json()
+    await getBody(c)
 
-    await c.env.DB.prepare(`
+    /* =========================
+       VALIDATION
+    ========================= */
 
-      UPDATE host_monetization
+    if(
 
-      SET
+      !required(body.name) ||
 
-        host=?,
-        storage=?,
-        knight=?,
-        ads=?,
-        shortlinks=?,
-        popups=?,
-        mode=?
+      !required(body.type) ||
 
-      WHERE id=?
+      !required(body.code)
 
-    `)
-    .bind(
+    ){
 
-      body.host,
+      return c.json(
 
-      body.storage || null,
+        failure(
+          "Missing required fields"
+        ),
 
-      body.knight ? 1 : 0,
+        400
 
-      JSON.stringify(body.ads || []),
+      )
 
-      JSON.stringify(body.shortlinks || []),
+    }
 
-      JSON.stringify(body.popups || []),
+    try{
 
-      body.mode || "random",
+      /* =========================
+         EXISTS
+      ========================= */
 
-      id
+      const exists =
+      await db.prepare(`
 
-    )
-    .run()
+        SELECT id
 
-    return c.json({
+        FROM ads_library
 
-      success:true
+        WHERE id=?
 
-    })
+        LIMIT 1
 
-})
+      `)
+      .bind(id)
+      .first()
 
-/* ================= DELETE ================= */
+      if(!exists){
 
-app.delete(
-  "/host-monetization/:id",
-  verifyAdmin,
-  async(c)=>{
+        return c.json(
 
-    await c.env.DB.prepare(`
+          failure(
+            "Ad not found"
+          ),
 
-      DELETE FROM host_monetization
-      WHERE id=?
+          404
 
-    `)
-    .bind(
-      c.req.param("id")
-    )
-    .run()
+        )
 
-    return c.json({
+      }
 
-      success:true
+      /* =========================
+         UPDATE
+      ========================= */
 
-    })
+      await db.prepare(`
+
+        UPDATE ads_library
+
+        SET
+
+          name=?,
+          type=?,
+          code=?,
+          delay=?,
+          weight=?
+
+        WHERE id=?
+
+      `)
+      .bind(
+
+        body.name,
+
+        body.type,
+
+        body.code,
+
+        Number(
+          body.delay || 0
+        ),
+
+        Number(
+          body.weight || 1
+        ),
+
+        id
+
+      )
+      .run()
+
+      return c.json(
+        success()
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to update ad"
+        ),
+
+        500
+
+      )
+
+    }
 
 })
 
 /* =========================================================
-   PUBLIC
-   HOST FLOW
+   DELETE AD
+========================================================= */
+
+app.delete(
+
+  "/ads-library/:id",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const id =
+    c.req.param("id")
+
+    try{
+
+      /* =========================
+         DELETE
+      ========================= */
+
+      await db.prepare(`
+
+        DELETE FROM ads_library
+
+        WHERE id=?
+
+      `)
+      .bind(id)
+      .run()
+
+      return c.json(
+        success()
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to delete ad"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   ⚡ PART 3 — SHORTLINKS APIs
+========================================================= */
+
+/* =========================================================
+   GET SHORTLINKS
 ========================================================= */
 
 app.get(
-  "/download-flow",
+
+  "/shortlinks-library",
+
+  verifyAdmin,
+
   async(c)=>{
+
+    const db =
+    c.env.DB
+
+    try{
+
+      const { results } =
+      await db.prepare(`
+
+        SELECT *
+
+        FROM shortlinks_library
+
+        ORDER BY created_at DESC
+
+      `).all()
+
+      return c.json(
+        results || []
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to load shortlinks"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   CREATE SHORTLINK
+========================================================= */
+
+app.post(
+
+  "/shortlinks-library",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const body =
+    await getBody(c)
+
+    /* =========================
+       VALIDATION
+    ========================= */
+
+    if(
+
+      !required(body.name) ||
+
+      !required(body.base_url)
+
+    ){
+
+      return c.json(
+
+        failure(
+          "Missing required fields"
+        ),
+
+        400
+
+      )
+
+    }
+
+    try{
+
+      /* =========================
+         DUPLICATE CHECK
+      ========================= */
+
+      const exists =
+      await db.prepare(`
+
+        SELECT id
+
+        FROM shortlinks_library
+
+        WHERE LOWER(name)=LOWER(?)
+
+        LIMIT 1
+
+      `)
+      .bind(body.name)
+      .first()
+
+      if(exists){
+
+        return c.json(
+
+          failure(
+            "Shortlink already exists"
+          ),
+
+          400
+
+        )
+
+      }
+
+      /* =========================
+         INSERT
+      ========================= */
+
+      const id =
+      uuid()
+
+      await db.prepare(`
+
+        INSERT INTO shortlinks_library (
+
+          id,
+          name,
+          base_url,
+          api_key,
+          created_at
+
+        )
+
+        VALUES (
+
+          ?,?,?,?,
+          datetime('now')
+
+        )
+
+      `)
+      .bind(
+
+        id,
+
+        body.name,
+
+        body.base_url,
+
+        body.api_key || null
+
+      )
+      .run()
+
+      return c.json(
+
+        success({
+          id
+        })
+
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to create shortlink"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   UPDATE SHORTLINK
+========================================================= */
+
+app.put(
+
+  "/shortlinks-library/:id",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const id =
+    c.req.param("id")
+
+    const body =
+    await getBody(c)
+
+    /* =========================
+       VALIDATION
+    ========================= */
+
+    if(
+
+      !required(body.name) ||
+
+      !required(body.base_url)
+
+    ){
+
+      return c.json(
+
+        failure(
+          "Missing required fields"
+        ),
+
+        400
+
+      )
+
+    }
+
+    try{
+
+      /* =========================
+         EXISTS
+      ========================= */
+
+      const exists =
+      await db.prepare(`
+
+        SELECT id
+
+        FROM shortlinks_library
+
+        WHERE id=?
+
+        LIMIT 1
+
+      `)
+      .bind(id)
+      .first()
+
+      if(!exists){
+
+        return c.json(
+
+          failure(
+            "Shortlink not found"
+          ),
+
+          404
+
+        )
+
+      }
+
+      /* =========================
+         UPDATE
+      ========================= */
+
+      await db.prepare(`
+
+        UPDATE shortlinks_library
+
+        SET
+
+          name=?,
+          base_url=?,
+          api_key=?
+
+        WHERE id=?
+
+      `)
+      .bind(
+
+        body.name,
+
+        body.base_url,
+
+        body.api_key || null,
+
+        id
+
+      )
+      .run()
+
+      return c.json(
+        success()
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to update shortlink"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   DELETE SHORTLINK
+========================================================= */
+
+app.delete(
+
+  "/shortlinks-library/:id",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const id =
+    c.req.param("id")
+
+    try{
+
+      /* =========================
+         DELETE
+      ========================= */
+
+      await db.prepare(`
+
+        DELETE FROM shortlinks_library
+
+        WHERE id=?
+
+      `)
+      .bind(id)
+      .run()
+
+      return c.json(
+        success()
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to delete shortlink"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   ⚡ PART 4 — POPUP APIs
+========================================================= */
+
+/* =========================================================
+   GET POPUPS
+========================================================= */
+
+app.get(
+
+  "/popup-library",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    try{
+
+      const { results } =
+      await db.prepare(`
+
+        SELECT *
+
+        FROM popup_library
+
+        ORDER BY created_at DESC
+
+      `).all()
+
+      return c.json(
+        results || []
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to load popups"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   CREATE POPUP
+========================================================= */
+
+app.post(
+
+  "/popup-library",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const body =
+    await getBody(c)
+
+    /* =========================
+       VALIDATION
+    ========================= */
+
+    if(
+
+      !required(body.name) ||
+
+      !required(body.script)
+
+    ){
+
+      return c.json(
+
+        failure(
+          "Missing required fields"
+        ),
+
+        400
+
+      )
+
+    }
+
+    try{
+
+      /* =========================
+         DUPLICATE CHECK
+      ========================= */
+
+      const exists =
+      await db.prepare(`
+
+        SELECT id
+
+        FROM popup_library
+
+        WHERE LOWER(name)=LOWER(?)
+
+        LIMIT 1
+
+      `)
+      .bind(body.name)
+      .first()
+
+      if(exists){
+
+        return c.json(
+
+          failure(
+            "Popup already exists"
+          ),
+
+          400
+
+        )
+
+      }
+
+      /* =========================
+         INSERT
+      ========================= */
+
+      const id =
+      uuid()
+
+      await db.prepare(`
+
+        INSERT INTO popup_library (
+
+          id,
+          name,
+          script,
+          created_at
+
+        )
+
+        VALUES (
+
+          ?,?,?,
+          datetime('now')
+
+        )
+
+      `)
+      .bind(
+
+        id,
+
+        body.name,
+
+        body.script
+
+      )
+      .run()
+
+      return c.json(
+
+        success({
+          id
+        })
+
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to create popup"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   UPDATE POPUP
+========================================================= */
+
+app.put(
+
+  "/popup-library/:id",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const id =
+    c.req.param("id")
+
+    const body =
+    await getBody(c)
+
+    /* =========================
+       VALIDATION
+    ========================= */
+
+    if(
+
+      !required(body.name) ||
+
+      !required(body.script)
+
+    ){
+
+      return c.json(
+
+        failure(
+          "Missing required fields"
+        ),
+
+        400
+
+      )
+
+    }
+
+    try{
+
+      /* =========================
+         EXISTS
+      ========================= */
+
+      const exists =
+      await db.prepare(`
+
+        SELECT id
+
+        FROM popup_library
+
+        WHERE id=?
+
+        LIMIT 1
+
+      `)
+      .bind(id)
+      .first()
+
+      if(!exists){
+
+        return c.json(
+
+          failure(
+            "Popup not found"
+          ),
+
+          404
+
+        )
+
+      }
+
+      /* =========================
+         UPDATE
+      ========================= */
+
+      await db.prepare(`
+
+        UPDATE popup_library
+
+        SET
+
+          name=?,
+          script=?
+
+        WHERE id=?
+
+      `)
+      .bind(
+
+        body.name,
+
+        body.script,
+
+        id
+
+      )
+      .run()
+
+      return c.json(
+        success()
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to update popup"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   DELETE POPUP
+========================================================= */
+
+app.delete(
+
+  "/popup-library/:id",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const id =
+    c.req.param("id")
+
+    try{
+
+      /* =========================
+         DELETE
+      ========================= */
+
+      await db.prepare(`
+
+        DELETE FROM popup_library
+
+        WHERE id=?
+
+      `)
+      .bind(id)
+      .run()
+
+      return c.json(
+        success()
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to delete popup"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+/* =========================================================
+   ⚡ PART 5 — HOST MONETIZATION APIs
+========================================================= */
+
+/* =========================================================
+   GET HOST CONFIGS
+========================================================= */
+
+app.get(
+
+  "/host-monetization",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    try{
+
+      /* =========================
+         HOSTS
+      ========================= */
+
+      const { results:hosts } =
+      await db.prepare(`
+
+        SELECT *
+
+        FROM host_monetization
+
+        ORDER BY host ASC
+
+      `).all()
+
+      if(!hosts?.length){
+
+        return c.json([])
+
+      }
+
+      /* =====================================================
+         BUILD
+      ===================================================== */
+
+      const final = []
+
+      for(const host of hosts){
+
+        /* =========================
+           IDS
+        ========================= */
+
+        const adsIds =
+        jsonParse(
+          host.ads
+        )
+
+        const shortIds =
+        jsonParse(
+          host.shortlinks
+        )
+
+        const popupIds =
+        jsonParse(
+          host.popups
+        )
+
+        /* =========================
+           LOAD DATA
+        ========================= */
+
+        const ads =
+        await getAds(
+          db,
+          adsIds
+        )
+
+        const shortlinks =
+        await getShortlinks(
+          db,
+          shortIds
+        )
+
+        const popups =
+        await getPopups(
+          db,
+          popupIds
+        )
+
+        final.push({
+
+          id:
+          host.id,
+
+          host:
+          host.host,
+
+          storage:
+          host.storage,
+
+          knight:
+          !!host.knight,
+
+          mode:
+          host.mode || "random",
+
+          clicks:
+          Number(
+            host.clicks || 0
+          ),
+
+          ads,
+
+          shortlinks,
+
+          popups
+
+        })
+
+      }
+
+      return c.json(final)
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to load hosts"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   CREATE HOST CONFIG
+========================================================= */
+
+app.post(
+
+  "/host-monetization",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const body =
+    await getBody(c)
+
+    /* =========================
+       VALIDATION
+    ========================= */
+
+    if(
+      !required(body.host)
+    ){
+
+      return c.json(
+
+        failure(
+          "Host name required"
+        ),
+
+        400
+
+      )
+
+    }
+
+    try{
+
+      /* =========================
+         DUPLICATE CHECK
+      ========================= */
+
+      const exists =
+      await db.prepare(`
+
+        SELECT id
+
+        FROM host_monetization
+
+        WHERE LOWER(host)=LOWER(?)
+
+        LIMIT 1
+
+      `)
+      .bind(body.host)
+      .first()
+
+      if(exists){
+
+        return c.json(
+
+          failure(
+            "Host already exists"
+          ),
+
+          400
+
+        )
+
+      }
+
+      /* =========================
+         INSERT
+      ========================= */
+
+      const id =
+      uuid()
+
+      await db.prepare(`
+
+        INSERT INTO host_monetization (
+
+          id,
+          host,
+          storage,
+          knight,
+          ads,
+          shortlinks,
+          popups,
+          mode,
+          clicks,
+          created_at
+
+        )
+
+        VALUES (
+
+          ?,?,?,?,?,?,?,?,?,
+          datetime('now')
+
+        )
+
+      `)
+      .bind(
+
+        id,
+
+        body.host,
+
+        body.storage || null,
+
+        Number(
+          body.knight || 0
+        ),
+
+        JSON.stringify(
+          body.ads || []
+        ),
+
+        JSON.stringify(
+          body.shortlinks || []
+        ),
+
+        JSON.stringify(
+          body.popups || []
+        ),
+
+        body.mode || "random",
+
+        0
+
+      )
+      .run()
+
+      return c.json(
+
+        success({
+          id
+        })
+
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to create host"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   UPDATE HOST CONFIG
+========================================================= */
+
+app.put(
+
+  "/host-monetization/:id",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const id =
+    c.req.param("id")
+
+    const body =
+    await getBody(c)
+
+    /* =========================
+       VALIDATION
+    ========================= */
+
+    if(
+      !required(body.host)
+    ){
+
+      return c.json(
+
+        failure(
+          "Host name required"
+        ),
+
+        400
+
+      )
+
+    }
+
+    try{
+
+      /* =========================
+         EXISTS
+      ========================= */
+
+      const exists =
+      await db.prepare(`
+
+        SELECT id
+
+        FROM host_monetization
+
+        WHERE id=?
+
+        LIMIT 1
+
+      `)
+      .bind(id)
+      .first()
+
+      if(!exists){
+
+        return c.json(
+
+          failure(
+            "Host not found"
+          ),
+
+          404
+
+        )
+
+      }
+
+      /* =========================
+         UPDATE
+      ========================= */
+
+      await db.prepare(`
+
+        UPDATE host_monetization
+
+        SET
+
+          host=?,
+          storage=?,
+          knight=?,
+          ads=?,
+          shortlinks=?,
+          popups=?,
+          mode=?
+
+        WHERE id=?
+
+      `)
+      .bind(
+
+        body.host,
+
+        body.storage || null,
+
+        Number(
+          body.knight || 0
+        ),
+
+        JSON.stringify(
+          body.ads || []
+        ),
+
+        JSON.stringify(
+          body.shortlinks || []
+        ),
+
+        JSON.stringify(
+          body.popups || []
+        ),
+
+        body.mode || "random",
+
+        id
+
+      )
+      .run()
+
+      return c.json(
+        success()
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to update host"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+
+/* =========================================================
+   DELETE HOST CONFIG
+========================================================= */
+
+app.delete(
+
+  "/host-monetization/:id",
+
+  verifyAdmin,
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    const id =
+    c.req.param("id")
+
+    try{
+
+      /* =========================
+         DELETE
+      ========================= */
+
+      await db.prepare(`
+
+        DELETE FROM host_monetization
+
+        WHERE id=?
+
+      `)
+      .bind(id)
+      .run()
+
+      return c.json(
+        success()
+      )
+
+    }catch(err){
+
+      console.error(err)
+
+      return c.json(
+
+        failure(
+          "Failed to delete host"
+        ),
+
+        500
+
+      )
+
+    }
+
+})
+/* =========================================================
+   ⚡ PART 6 — /api/go FLOW ENGINE
+========================================================= */
+
+/* =========================================================
+   PUBLIC
+   GO ROUTER
+========================================================= */
+
+app.get(
+
+  "/go",
+
+  async(c)=>{
+
+    const db =
+    c.env.DB
+
+    /* =====================================================
+       PARAMS
+    ===================================================== */
 
     const hostId =
     c.req.query("host_id")
 
+    const quality =
+    c.req.query("quality") || ""
+
+    const step =
+    Number(
+      c.req.query("step") || 1
+    )
+
+    /* =====================================================
+       VALIDATION
+    ===================================================== */
+
     if(!hostId){
 
-      return c.json({
-
-        success:false
-
-      },400)
+      return c.text(
+        "Missing host"
+      )
 
     }
 
+    /* =====================================================
+       HOST
+    ===================================================== */
+
     const host =
-    await c.env.DB.prepare(`
+    await db.prepare(`
 
       SELECT *
 
@@ -704,157 +2173,470 @@ app.get(
 
     if(!host){
 
-      return c.json({
-
-        success:false
-
-      },404)
+      return c.text(
+        "Host not found"
+      )
 
     }
 
-    const monetization =
-    await c.env.DB.prepare(`
+    /* =====================================================
+       MONETIZATION
+    ===================================================== */
 
-      SELECT *
+    let monetization = null
 
-      FROM host_monetization
+    if(host.monetization_id){
 
-      WHERE id=?
+      monetization =
+      await db.prepare(`
 
-      LIMIT 1
+        SELECT *
 
-    `)
-    .bind(host.monetization_id)
-    .first()
+        FROM host_monetization
+
+        WHERE id=?
+
+        LIMIT 1
+
+      `)
+      .bind(
+        host.monetization_id
+      )
+      .first()
+
+    }
+
+    /* =====================================================
+       NO MONETIZATION
+    ===================================================== */
 
     if(!monetization){
 
-      return c.json({
+      return c.redirect(
 
-        success:true,
+        `/api/download-final?host_id=${hostId}&quality=${quality}`
 
-        host:{
-          id:host.id,
-          host:host.host
-        },
-
-        ads:[],
-        shortlinks:[],
-        popups:[]
-
-      })
+      )
 
     }
+
+    /* =====================================================
+       IDS
+    ===================================================== */
 
     const adsIds =
-    jsonParse(monetization.ads)
+    jsonParse(
+      monetization.ads
+    )
 
     const shortIds =
-    jsonParse(monetization.shortlinks)
+    jsonParse(
+      monetization.shortlinks
+    )
 
     const popupIds =
-    jsonParse(monetization.popups)
+    jsonParse(
+      monetization.popups
+    )
 
-    /* =========================
-       ADS
-    ========================= */
+    /* =====================================================
+       MODE
+    ===================================================== */
 
-    let ads = []
+    const mode =
+    monetization.mode || "random"
 
-    if(adsIds.length){
+    const clicks =
+    Number(
+      monetization.clicks || 0
+    )
 
-      const placeholders =
-      adsIds.map(()=>"?").join(",")
+    /* =====================================================
+       STEP 1 — POPUPS
+    ===================================================== */
 
-      const { results } =
-      await c.env.DB.prepare(`
+    if(
+      step === 1 &&
+      popupIds.length
+    ){
 
-        SELECT *
+      const popups =
+      await getPopups(
+        db,
+        popupIds
+      )
 
-        FROM ads_library
+      const popup =
+      pickByMode(
+        popups,
+        mode,
+        clicks
+      )
 
-        WHERE id IN (${placeholders})
+      if(popup){
 
-      `)
-      .bind(...adsIds)
-      .all()
+        /* =========================
+           ANALYTICS
+        ========================= */
 
-      ads = results
+        await trackEvent(
+
+          db,
+
+          "popup_open",
+
+          {
+
+            host_id:
+            hostId,
+
+            popup_id:
+            popup.id
+
+          }
+
+        )
+
+        return c.html(`
+
+<!DOCTYPE html>
+<html>
+<head>
+
+<title>
+Popup Redirect
+</title>
+
+<meta
+name="viewport"
+content="width=device-width,initial-scale=1"
+/>
+
+<style>
+
+body{
+  margin:0;
+  background:#000;
+  color:#fff;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  min-height:100vh;
+  font-family:system-ui;
+}
+
+.loader{
+  text-align:center;
+}
+
+.loader h2{
+  margin-bottom:12px;
+}
+
+.loader p{
+  color:#999;
+  font-size:14px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="loader">
+
+<h2>
+Please Wait...
+</h2>
+
+<p>
+Loading Popup
+</p>
+
+</div>
+
+${popup.script}
+
+<script>
+
+setTimeout(()=>{
+
+  location.href =
+
+  "/api/go?host_id=${hostId}&quality=${quality}&step=2"
+
+},1000)
+
+</script>
+
+</body>
+</html>
+
+        `)
+
+      }
 
     }
 
-    /* =========================
-       SHORTLINKS
-    ========================= */
+    /* =====================================================
+       STEP 2 — SHORTLINKS
+    ===================================================== */
 
-    let shortlinks = []
+    if(
+      step === 2 &&
+      shortIds.length
+    ){
 
-    if(shortIds.length){
+      const shortlinks =
+      await getShortlinks(
+        db,
+        shortIds
+      )
 
-      const placeholders =
-      shortIds.map(()=>"?").join(",")
+      const short =
+      pickByMode(
+        shortlinks,
+        mode,
+        clicks
+      )
 
-      const { results } =
-      await c.env.DB.prepare(`
+      if(short){
 
-        SELECT *
+        /* =========================
+           ANALYTICS
+        ========================= */
 
-        FROM shortlinks_library
+        await trackEvent(
 
-        WHERE id IN (${placeholders})
+          db,
 
-      `)
-      .bind(...shortIds)
-      .all()
+          "shortlink_click",
 
-      shortlinks = results
+          {
+
+            host_id:
+            hostId,
+
+            shortlink_id:
+            short.id
+
+          }
+
+        )
+
+        /* =========================
+           TARGET
+        ========================= */
+
+        const target =
+
+          encodeURIComponent(
+
+            `/api/go?host_id=${hostId}&quality=${quality}&step=3`
+
+          )
+
+        /* =========================
+           REDIRECT
+        ========================= */
+
+        return c.redirect(
+
+          `${short.base_url}${target}`
+
+        )
+
+      }
 
     }
 
-    /* =========================
-       POPUPS
-    ========================= */
+    /* =====================================================
+       STEP 3 — ADS
+    ===================================================== */
 
-    let popups = []
+    if(
+      step === 3 &&
+      adsIds.length
+    ){
 
-    if(popupIds.length){
+      const ads =
+      await getAds(
+        db,
+        adsIds
+      )
 
-      const placeholders =
-      popupIds.map(()=>"?").join(",")
+      const ad =
+      pickByMode(
+        ads,
+        mode,
+        clicks
+      )
 
-      const { results } =
-      await c.env.DB.prepare(`
+      if(ad){
 
-        SELECT *
+        /* =========================
+           ANALYTICS
+        ========================= */
 
-        FROM popup_library
+        await trackEvent(
 
-        WHERE id IN (${placeholders})
+          db,
 
-      `)
-      .bind(...popupIds)
-      .all()
+          "ad_open",
 
-      popups = results
+          {
+
+            host_id:
+            hostId,
+
+            ad_id:
+            ad.id
+
+          }
+
+        )
+
+        /* =================================================
+           REDIRECT
+        ================================================= */
+
+        if(
+          ad.type === "redirect"
+        ){
+
+          return c.redirect(
+            ad.code
+          )
+
+        }
+
+        /* =================================================
+           SCRIPT
+        ================================================= */
+
+        return c.html(`
+
+<!DOCTYPE html>
+<html>
+<head>
+
+<title>
+Advertisement
+</title>
+
+<meta
+name="viewport"
+content="width=device-width,initial-scale=1"
+/>
+
+<style>
+
+body{
+  margin:0;
+  background:#000;
+  color:#fff;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  min-height:100vh;
+  font-family:system-ui;
+}
+
+.loader{
+  text-align:center;
+}
+
+.loader h2{
+  margin-bottom:10px;
+}
+
+.loader p{
+  color:#999;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="loader">
+
+<h2>
+Loading Ad...
+</h2>
+
+<p>
+Please wait
+</p>
+
+</div>
+
+<script>
+
+${ad.code}
+
+setTimeout(()=>{
+
+  location.href =
+
+  "/api/go?host_id=${hostId}&quality=${quality}&step=4"
+
+}, ${Number(ad.delay || 1500)})
+
+</script>
+
+</body>
+</html>
+
+        `)
+
+      }
 
     }
 
-    return c.json({
+    /* =====================================================
+       STEP 4 — KNIGHT / FINAL
+    ===================================================== */
 
-      success:true,
+    if(step === 4){
 
-      host:{
-        id:host.id,
-        host:host.host,
-        knight:!!monetization.knight,
-        mode:monetization.mode
-      },
+      /* =========================
+         KNIGHT
+      ========================= */
 
-      ads,
-      shortlinks,
-      popups
+      if(host.knight){
 
-    })
+        return c.redirect(
+
+          `/knight.html?host_id=${hostId}`
+
+        )
+
+      }
+
+      /* =========================
+         FINAL
+      ========================= */
+
+      return c.redirect(
+
+        `/api/download-final?host_id=${hostId}&quality=${quality}`
+
+      )
+
+    }
+
+    /* =====================================================
+       FALLBACK
+    ===================================================== */
+
+    return c.redirect(
+
+      `/api/download-final?host_id=${hostId}&quality=${quality}`
+
+    )
 
 })
 
@@ -863,8 +2645,17 @@ app.get(
 ========================================================= */
 
 app.get(
+
   "/download-final",
+
   async(c)=>{
+
+    const db =
+    c.env.DB
+
+    /* =====================================================
+       PARAMS
+    ===================================================== */
 
     const hostId =
     c.req.query("host_id")
@@ -874,9 +2665,15 @@ app.get(
 
     if(!hostId){
 
-      return c.text("Missing host")
+      return c.text(
+        "Missing host"
+      )
 
     }
+
+    /* =====================================================
+       FIND LINK
+    ===================================================== */
 
     let row = null
 
@@ -887,7 +2684,7 @@ app.get(
     if(quality){
 
       row =
-      await c.env.DB.prepare(`
+      await db.prepare(`
 
         SELECT *
 
@@ -916,7 +2713,7 @@ app.get(
     else{
 
       row =
-      await c.env.DB.prepare(`
+      await db.prepare(`
 
         SELECT *
 
@@ -932,6 +2729,10 @@ app.get(
 
     }
 
+    /* =====================================================
+       NOT FOUND
+    ===================================================== */
+
     if(!row){
 
       return c.text(
@@ -940,11 +2741,11 @@ app.get(
 
     }
 
-    /* =========================
-       TRACK
-    ========================= */
+    /* =====================================================
+       UPDATE CLICKS
+    ===================================================== */
 
-    await c.env.DB.prepare(`
+    await db.prepare(`
 
       UPDATE host_monetization
 
@@ -964,329 +2765,495 @@ app.get(
     .bind(hostId)
     .run()
 
-    return c.redirect(row.link)
+    /* =====================================================
+       ANALYTICS
+    ===================================================== */
+
+    await trackEvent(
+
+      db,
+
+      "final_download",
+
+      {
+
+        host_id:
+        hostId,
+
+        quality:
+        quality || null
+
+      }
+
+    )
+
+    /* =====================================================
+       REDIRECT
+    ===================================================== */
+
+    return c.redirect(
+      row.link
+    )
 
 })
+/* =========================================================
+   ⚡ PART 7 — FLOW HELPERS + ANALYTICS HELPERS
+========================================================= */
 
 /* =========================================================
-   GO ROUTER
+   PARSE JSON
+========================================================= */
+
+function jsonParse(
+  value,
+  fallback=[]
+){
+
+  try{
+
+    return JSON.parse(
+      value || "[]"
+    )
+
+  }catch{
+
+    return fallback
+
+  }
+
+}
+
+/* =========================================================
+   UUID
+========================================================= */
+
+function uuid(){
+
+  return crypto.randomUUID()
+
+}
+
+/* =========================================================
+   BODY
+========================================================= */
+
+async function getBody(c){
+
+  try{
+
+    return await c.req.json()
+
+  }catch{
+
+    return {}
+
+  }
+
+}
+
+/* =========================================================
+   REQUIRED
+========================================================= */
+
+function required(v){
+
+  return !!String(
+    v || ""
+  ).trim()
+
+}
+
+/* =========================================================
+   SUCCESS
+========================================================= */
+
+function success(data={}){
+
+  return {
+
+    success:true,
+
+    ...data
+
+  }
+
+}
+
+/* =========================================================
+   FAILURE
+========================================================= */
+
+function failure(message){
+
+  return {
+
+    success:false,
+
+    message
+
+  }
+
+}
+
+/* =========================================================
+   RANDOM PICK
+========================================================= */
+
+function randomPick(arr=[]){
+
+  if(!arr?.length){
+
+    return null
+
+  }
+
+  return arr[
+    Math.floor(
+      Math.random() * arr.length
+    )
+  ]
+
+}
+
+/* =========================================================
+   SEQUENCE PICK
+========================================================= */
+
+function sequencePick(
+  arr=[],
+  clicks=0
+){
+
+  if(!arr?.length){
+
+    return null
+
+  }
+
+  const index =
+  clicks % arr.length
+
+  return arr[index]
+
+}
+
+/* =========================================================
+   PICK BY MODE
+========================================================= */
+
+function pickByMode(
+  arr=[],
+  mode="random",
+  clicks=0
+){
+
+  if(!arr?.length){
+
+    return null
+
+  }
+
+  /* =========================
+     DIRECT
+  ========================= */
+
+  if(mode === "direct"){
+
+    return arr[0]
+
+  }
+
+  /* =========================
+     SEQUENCE
+  ========================= */
+
+  if(mode === "sequence"){
+
+    return sequencePick(
+      arr,
+      clicks
+    )
+
+  }
+
+  /* =========================
+     RANDOM
+  ========================= */
+
+  return randomPick(arr)
+
+}
+
+/* =========================================================
+   GET ADS
+========================================================= */
+
+async function getAds(
+  db,
+  ids=[]
+){
+
+  if(!ids?.length){
+
+    return []
+
+  }
+
+  const placeholders =
+  ids.map(()=>"?").join(",")
+
+  const { results } =
+  await db.prepare(`
+
+    SELECT *
+
+    FROM ads_library
+
+    WHERE id IN (${placeholders})
+
+  `)
+  .bind(...ids)
+  .all()
+
+  return results || []
+
+}
+
+/* =========================================================
+   GET SHORTLINKS
+========================================================= */
+
+async function getShortlinks(
+  db,
+  ids=[]
+){
+
+  if(!ids?.length){
+
+    return []
+
+  }
+
+  const placeholders =
+  ids.map(()=>"?").join(",")
+
+  const { results } =
+  await db.prepare(`
+
+    SELECT *
+
+    FROM shortlinks_library
+
+    WHERE id IN (${placeholders})
+
+  `)
+  .bind(...ids)
+  .all()
+
+  return results || []
+
+}
+
+/* =========================================================
+   GET POPUPS
+========================================================= */
+
+async function getPopups(
+  db,
+  ids=[]
+){
+
+  if(!ids?.length){
+
+    return []
+
+  }
+
+  const placeholders =
+  ids.map(()=>"?").join(",")
+
+  const { results } =
+  await db.prepare(`
+
+    SELECT *
+
+    FROM popup_library
+
+    WHERE id IN (${placeholders})
+
+  `)
+  .bind(...ids)
+  .all()
+
+  return results || []
+
+}
+
+/* =========================================================
+   TRACK EVENT
+========================================================= */
+
+async function trackEvent(
+
+  db,
+
+  type,
+
+  meta={}
+
+){
+
+  try{
+
+    await db.prepare(`
+
+      INSERT INTO monetization_analytics (
+
+        id,
+        type,
+        meta,
+        created_at
+
+      )
+
+      VALUES (
+
+        ?,?,?,datetime('now')
+
+      )
+
+    `)
+    .bind(
+
+      uuid(),
+
+      type,
+
+      JSON.stringify(meta)
+
+    )
+    .run()
+
+  }catch(err){
+
+    console.error(
+      "Analytics Error",
+      err
+    )
+
+  }
+
+}
+
+/* =========================================================
+   TOTAL ANALYTICS
 ========================================================= */
 
 app.get(
-  "/go",
+
+  "/analytics-summary",
+
+  verifyAdmin,
+
   async(c)=>{
 
-    const hostId =
-    c.req.query("host_id")
+    const db =
+    c.env.DB
 
-    const quality =
-    c.req.query("quality")
+    try{
 
-    const step =
-    Number(
-      c.req.query("step") || 1
-    )
+      /* =========================
+         HOSTS
+      ========================= */
 
-    if(!hostId){
+      const hosts =
+      await db.prepare(`
 
-      return c.text(
-        "Missing host"
-      )
+        SELECT COUNT(*) as total
 
-    }
+        FROM host_monetization
 
-    /* =========================
-       HOST
-    ========================= */
+      `).first()
 
-    const host =
-    await c.env.DB.prepare(`
+      /* =========================
+         ADS
+      ========================= */
 
-      SELECT *
+      const ads =
+      await db.prepare(`
 
-      FROM download_hosts
-
-      WHERE id=?
-
-      LIMIT 1
-
-    `)
-    .bind(hostId)
-    .first()
-
-    if(!host){
-
-      return c.text(
-        "Host not found"
-      )
-
-    }
-
-    /* =========================
-       MONETIZATION
-    ========================= */
-
-    const monetization =
-    await c.env.DB.prepare(`
-
-      SELECT *
-
-      FROM host_monetization
-
-      WHERE id=?
-
-      LIMIT 1
-
-    `)
-    .bind(host.monetization_id)
-    .first()
-
-    /* =========================
-       NO MONETIZATION
-    ========================= */
-
-    if(!monetization){
-
-      return c.redirect(
-
-        `/api/download-final?host_id=${hostId}&quality=${quality || ""}`
-
-      )
-
-    }
-
-    const adsIds =
-    jsonParse(monetization.ads)
-
-    const shortIds =
-    jsonParse(monetization.shortlinks)
-
-    const popupIds =
-    jsonParse(monetization.popups)
-
-    /* =====================================================
-       STEP 1
-       POPUPS
-    ===================================================== */
-
-    if(
-      step === 1 &&
-      popupIds.length
-    ){
-
-      const placeholders =
-      popupIds.map(()=>"?").join(",")
-
-      const { results } =
-      await c.env.DB.prepare(`
-
-        SELECT *
-
-        FROM popup_library
-
-        WHERE id IN (${placeholders})
-
-      `)
-      .bind(...popupIds)
-      .all()
-
-      const popup =
-      randomPick(results)
-
-      if(popup){
-
-        return c.html(`
-
-          <html>
-
-          <body style="background:#000;color:#fff">
-
-          ${popup.script}
-
-          <script>
-
-          setTimeout(()=>{
-
-            location.href =
-            "/api/go?host_id=${hostId}&quality=${quality || ""}&step=2"
-
-          },1000)
-
-          </script>
-
-          </body>
-
-          </html>
-
-        `)
-
-      }
-
-    }
-
-    /* =====================================================
-       STEP 2
-       SHORTLINK
-    ===================================================== */
-
-    if(
-      step === 2 &&
-      shortIds.length
-    ){
-
-      const placeholders =
-      shortIds.map(()=>"?").join(",")
-
-      const { results } =
-      await c.env.DB.prepare(`
-
-        SELECT *
-
-        FROM shortlinks_library
-
-        WHERE id IN (${placeholders})
-
-      `)
-      .bind(...shortIds)
-      .all()
-
-      const short =
-      randomPick(results)
-
-      if(short){
-
-        return c.redirect(
-          short.base_url
-        )
-
-      }
-
-    }
-
-    /* =====================================================
-       STEP 3
-       ADS
-    ===================================================== */
-
-    if(
-      step === 3 &&
-      adsIds.length
-    ){
-
-      const placeholders =
-      adsIds.map(()=>"?").join(",")
-
-      const { results } =
-      await c.env.DB.prepare(`
-
-        SELECT *
+        SELECT COUNT(*) as total
 
         FROM ads_library
 
-        WHERE id IN (${placeholders})
+      `).first()
 
-        ORDER BY weight DESC
+      /* =========================
+         SHORTLINKS
+      ========================= */
 
-      `)
-      .bind(...adsIds)
-      .all()
+      const shortlinks =
+      await db.prepare(`
 
-      const ad =
-      randomPick(results)
+        SELECT COUNT(*) as total
 
-      if(ad){
+        FROM shortlinks_library
 
-        /* =========================
-           REDIRECT
-        ========================= */
+      `).first()
 
-        if(ad.type === "redirect"){
+      /* =========================
+         DOWNLOADS
+      ========================= */
 
-          return c.redirect(
-            ad.code
-          )
+      const downloads =
+      await db.prepare(`
 
-        }
+        SELECT COUNT(*) as total
 
-        /* =========================
-           SCRIPT
-        ========================= */
+        FROM monetization_analytics
 
-        return c.html(`
+        WHERE type='final_download'
 
-          <html>
+      `).first()
 
-          <body style="background:#000;color:#fff;text-align:center;padding-top:100px">
+      return c.json({
 
-          <h2>Please wait...</h2>
+        total_hosts:
+        Number(
+          hosts?.total || 0
+        ),
 
-          <script>
+        total_ads:
+        Number(
+          ads?.total || 0
+        ),
 
-          ${ad.code}
+        total_shortlinks:
+        Number(
+          shortlinks?.total || 0
+        ),
 
-          setTimeout(()=>{
-
-            location.href =
-            "/api/go?host_id=${hostId}&quality=${quality || ""}&step=4"
-
-          }, ${ad.delay || 1500})
-
-          </script>
-
-          </body>
-
-          </html>
-
-        `)
-
-      }
-
-    }
-
-    /* =====================================================
-       STEP 4
-       KNIGHT
-    ===================================================== */
-
-    if(step === 4){
-
-      if(monetization.knight){
-
-        return c.redirect(
-
-          `/knight.html?host_id=${hostId}`
-
+        total_downloads:
+        Number(
+          downloads?.total || 0
         )
 
-      }
+      })
 
-      return c.redirect(
+    }catch(err){
 
-        `/api/download-final?host_id=${hostId}&quality=${quality || ""}`
+      console.error(err)
 
-      )
+      return c.json(
 
-    }
+        failure(
+          "Failed to load analytics"
+        ),
 
-    /* =====================================================
-       STEP 99
-       FINAL
-    ===================================================== */
-
-    if(step === 99){
-
-      return c.redirect(
-
-        `/api/download-final?host_id=${hostId}&quality=${quality || ""}`
+        500
 
       )
 
     }
-
-    return c.text(
-      "Invalid Step"
-    )
 
 })
-
-export default app
