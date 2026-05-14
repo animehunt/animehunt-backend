@@ -72,9 +72,15 @@ app.notFound((c) => {
 import { firewall } from "./middleware/firewall.js"
 import { systemGuard } from "./middleware/systemGuard.js"
 
-/* 🔥 IMPORTANT ORDER */
+/* ================================================= */
+/* 🔥 TEMP FIX                                       */
+/* ================================================= */
+/* systemGuard OFF because login blocked             */
+/* firewall ON                                       */
+/* ================================================= */
 
-app.use("*", systemGuard)
+// app.use("*", systemGuard)
+
 app.use("*", firewall)
 
 /* ================= ROUTES ================= */
@@ -214,25 +220,18 @@ app.route("/api/admin", upload)
 /* ================= PUBLIC ROUTES ===================== */
 /* ===================================================== */
 
-/* PUBLIC ANIME */
 app.route("/api", publicAnime)
 
-/* PUBLIC PLAYER */
 app.route("/api", player)
 
-/* DOWNLOAD FLOW */
 app.route("/api", downloads)
 
-/* ADS FLOW */
 app.route("/api", ads)
 
-/* SEARCH */
 app.route("/api", publicSearch)
 
-/* SEO */
 app.route("/api", publicSEO)
 
-/* ANALYTICS */
 app.route("/api", analyticsTrack)
 
 /* ================= ENV CHECK ================= */
