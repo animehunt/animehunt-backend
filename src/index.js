@@ -5,47 +5,66 @@ import { cors } from "hono/cors"
 
 const app = new Hono()
 
-/* ================= GLOBAL ERROR HANDLER ================= */
-
-app.onError((err, c) => {
-  console.error("🔥 GLOBAL ERROR:", err)
-
-  return c.json({
-    success: false,
-    error: "Internal Server Error"
-  }, 500)
-})
-
-/* ================= NOT FOUND ================= */
-
-app.notFound((c) => {
-  return c.json({
-    success: false,
-    error: "Route Not Found"
-  }, 404)
-})
-
 /* ================= CORS ================= */
 
 app.use("*", cors({
   origin: "*",
-  allowHeaders: ["Content-Type", "Authorization"],
-  allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+  allowHeaders: [
+    "Content-Type",
+    "Authorization"
+  ],
+  allowMethods: [
+    "GET",
+    "POST",
+    "PUT",
+    "DELETE",
+    "PATCH",
+    "OPTIONS"
+  ]
 }))
 
-/* ================= OPTIONS FIX ================= */
+/* ================= OPTIONS ================= */
 
 app.options("*", (c) => c.text("", 200))
 
-/* ================= BASIC LOGGER ================= */
+/* ================= LOGGER ================= */
 
 app.use("*", async (c, next) => {
+
   const start = Date.now()
 
   await next()
 
   const ms = Date.now() - start
-  console.log(`${c.req.method} ${c.req.url} - ${ms}ms`)
+
+  console.log(
+    `${c.req.method} ${c.req.path} - ${ms}ms`
+  )
+
+})
+
+/* ================= ERROR HANDLER ================= */
+
+app.onError((err, c) => {
+
+  console.error("🔥 GLOBAL ERROR:", err)
+
+  return c.json({
+    success: false,
+    message: err.message || "Internal Server Error"
+  }, 500)
+
+})
+
+/* ================= NOT FOUND ================= */
+
+app.notFound((c) => {
+
+  return c.json({
+    success: false,
+    message: "Route Not Found"
+  }, 404)
+
 })
 
 /* ================= MIDDLEWARE ================= */
@@ -53,51 +72,68 @@ app.use("*", async (c, next) => {
 import { firewall } from "./middleware/firewall.js"
 import { systemGuard } from "./middleware/systemGuard.js"
 
-/* 🔥 ORDER IMPORTANT */
+/* 🔥 IMPORTANT ORDER */
+
 app.use("*", systemGuard)
 app.use("*", firewall)
 
-/* ================= ROUTES IMPORT ================= */
+/* ================= ROUTES ================= */
 
 /* AUTH */
 import auth from "./routes/auth.js"
+
+/* DASHBOARD */
 import dashboard from "./routes/dashboard.js"
 
-/* CONTENT */
+/* ANIME */
 import anime from "./routes/anime.js"
+import publicAnime from "./routes/public.js"
+
+/* EPISODES */
 import episodes from "./routes/episodes.js"
-import publicAnime from "./routes/publicAnime.js"
-import publicEpisodes from "./routes/publicEpisodes.js"
+
+/* CATEGORIES */
 import categories from "./routes/categories.js"
-import publicCategories from "./routes/publicCategories.js"
+
+/* BANNERS */
 import banners from "./routes/banners.js"
-import publicBanners from "./routes/publicBanners.js"
 
 /* SERVERS */
 import adminServers from "./routes/adminServers.js"
-import publicServers from "./routes/publicServers.js"
 
 /* PLAYER */
 import player from "./routes/player.js"
-import publicPlayer from "./routes/publicPlayer.js"
 
 /* DOWNLOADS */
 import downloads from "./routes/downloads.js"
 
-/* UI */
-import homepage from "./routes/homepage.js"
-import footer from "./routes/footer.js"
+/* ADS */
+import ads from "./routes/ads.js"
+import adsAnalytics from "./routes/adsAnalytics.js"
 
-/* UPLOAD */
-import upload from "./routes/upload.js"
+/* ANALYTICS */
+import analyticsTrack from "./routes/analyticsTrack.js"
+import analyticsAdmin from "./routes/analyticsAdmin.js"
 
 /* SEARCH */
 import searchAdmin from "./routes/searchAdmin.js"
-import searchPublic from "./routes/searchPublic.js"
+import publicSearch from "./routes/publicSearch.js"
 
 /* SEO */
 import seoAdmin from "./routes/seoAdmin.js"
-import seoPublic from "./routes/seoPublic.js"
+import publicSEO from "./routes/publicSEO.js"
+
+/* SIDEBAR */
+import sidebar from "./routes/sidebar.js"
+
+/* FOOTER */
+import footer from "./routes/footer.js"
+
+/* HOMEPAGE */
+import homepage from "./routes/homepage.js"
+
+/* AI */
+import ai from "./routes/ai.js"
 
 /* SECURITY */
 import securityAdmin from "./routes/securityAdmin.js"
@@ -108,40 +144,34 @@ import performance from "./routes/performance.js"
 /* SYSTEM */
 import system from "./routes/system.js"
 
-/* ADS */
-import ads from "./routes/ads.js"
-import adsAnalytics from "./routes/adsAnalytics.js"
-
-/* ANALYTICS */
-import analyticsTrack from "./routes/analyticsTrack.js"
-import analyticsAdmin from "./routes/analyticsAdmin.js"
-
-/* AI */
-import ai from "./routes/ai.js"
-
 /* DEPLOY */
 import deploy from "./routes/deploy.js"
 
-/* SIDEBAR */
-import sidebar from "./routes/sidebar.js"
+/* UPLOAD */
+import upload from "./routes/upload.js"
 
 /* ================= AI ENGINES ================= */
 
-import { runSystemAI as runAIEngines } from "./ai/engine.js"
+import { runSystemAI } from "./ai/engine.js"
 import { runFooterAI } from "./ai/footerAI.js"
 
-/* ================= HEALTH ================= */
+/* ================= ROOT ================= */
 
 app.get("/", (c) => {
+
   return c.json({
     success: true,
-    status: "AnimeHunt Backend Running 🚀"
+    message: "AnimeHunt Backend Running 🚀"
   })
+
 })
 
-/* ================= ADMIN ROUTES ================= */
+/* ===================================================== */
+/* ================= ADMIN ROUTES ====================== */
+/* ===================================================== */
 
 app.route("/api/admin", auth)
+
 app.route("/api/admin", dashboard)
 
 app.route("/api/admin", anime)
@@ -155,8 +185,14 @@ app.route("/api/admin", player)
 
 app.route("/api/admin", downloads)
 
+app.route("/api/admin", ads)
+app.route("/api/admin", adsAnalytics)
+
+app.route("/api/admin", analyticsAdmin)
+
 app.route("/api/admin", homepage)
 app.route("/api/admin", footer)
+app.route("/api/admin", sidebar)
 
 app.route("/api/admin", searchAdmin)
 
@@ -168,56 +204,70 @@ app.route("/api/admin", performance)
 
 app.route("/api/admin", system)
 
-app.route("/api/admin", ads)
-app.route("/api/admin", adsAnalytics)
-
-app.route("/api/admin", analyticsAdmin)
-
 app.route("/api/admin", ai)
 
 app.route("/api/admin", deploy)
 
 app.route("/api/admin", upload)
 
-app.route("/api/admin", sidebar)
+/* ===================================================== */
+/* ================= PUBLIC ROUTES ===================== */
+/* ===================================================== */
 
-/* ================= PUBLIC ROUTES ================= */
-
-app.route("/api", publicServers)
-app.route("/api", publicEpisodes)
-app.route("/api", publicCategories)
-app.route("/api", publicBanners)
+/* PUBLIC ANIME */
 app.route("/api", publicAnime)
 
-app.route("/api", publicPlayer)
+/* PUBLIC PLAYER */
+app.route("/api", player)
 
+/* DOWNLOAD FLOW */
+app.route("/api", downloads)
 
+/* ADS FLOW */
+app.route("/api", ads)
 
-app.route("/api", searchPublic)
+/* SEARCH */
+app.route("/api", publicSearch)
 
-app.route("/api", seoPublic)
+/* SEO */
+app.route("/api", publicSEO)
 
+/* ANALYTICS */
 app.route("/api", analyticsTrack)
 
-/* ================= ENV VALIDATION ================= */
+/* ================= ENV CHECK ================= */
 
 app.use("*", async (c, next) => {
+
   if (!c.env.DB) {
+
     return c.json({
       success: false,
-      error: "Database not configured"
+      message: "DB NOT CONFIGURED"
     }, 500)
+
   }
+
   await next()
+
 })
 
 /* ================= EXPORT ================= */
 
 export default {
+
   fetch: app.fetch,
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runAIEngines(env))
-    ctx.waitUntil(runFooterAI(env))
+
+    ctx.waitUntil(
+      runSystemAI(env)
+    )
+
+    ctx.waitUntil(
+      runFooterAI(env)
+    )
+
   }
+
 }
