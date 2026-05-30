@@ -1,1179 +1,739 @@
+/* ============================================================
+  ANIMEHUNT — ADS ROUTES (COMPLETE - FIXED)
+  File: src/routes/ads.js
+
+  PUBLIC routes (no auth):
+    GET  /api/ads/public                  - Active ads for page/position
+    POST /api/ads/click/:id               - Track click
+    POST /api/ads/impression/:id          - Track impression
+    GET  /api/go                          - Monetization flow engine
+    GET  /api/session/:id                 - Session data for go.html
+
+  ADMIN routes (auth required):
+    GET/POST/PUT/DELETE /api/admin/ads              - Page ads
+    GET/POST/PUT/DELETE /api/admin/ads-library      - Ads library
+    GET/POST/PUT/DELETE /api/admin/shortlinks-library
+    GET/POST/PUT/DELETE /api/admin/popup-library
+    GET/POST/PUT/DELETE /api/admin/host-monetization
+    GET/POST            /api/admin/page-ads
+    GET/DELETE          /api/admin/ads-analytics    - Analytics
+    GET                 /api/admin/ads-analytics/:id
+    DELETE              /api/admin/ads-analytics-clear
+============================================================ */
+
 import { Hono } from "hono"
 
-const ads = new Hono()
+const app = new Hono()
 
-/* =========================================
-   HELPERS
-========================================= */
+/* ── Helpers ── */
+const ok   = (data={}) => ({ success: true,  data })
+const fail = (msg="Error") => ({ success: false, message: msg })
+const now  = () => new Date().toISOString()
+const uid  = () => crypto.randomUUID()
 
-const ok = (data = {}) => ({
-  success: true,
-  data
-})
-
-const fail = (message = "Error") => ({
-  success: false,
-  message
-})
-
-const now = () => new Date().toISOString()
-
-const parseJSON = (v) => {
-  try {
-    return JSON.parse(v || "[]")
-  } catch {
-    return []
-  }
+function jsonParse(v, fallback=[]) {
+  try { return JSON.parse(v || "[]") } catch { return fallback }
 }
+const jsonStr = v => JSON.stringify(v || [])
 
-const stringify = (v) => JSON.stringify(v || [])
-
-const randomPick = (arr = []) => {
+function randomPick(arr=[]) {
   if (!arr.length) return null
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
-function sequencePick(arr = [], index = 0) {
+function sequencePick(arr=[], index=0) {
   if (!arr.length) return null
-
   const i = index % arr.length
+  return { value: arr[i], next: i + 1 }
+}
 
-  return {
-    value: arr[i],
-    next: i + 1
+const directPick = (arr=[]) => arr[0] || null
+
+/* ── Rotation state helpers ── */
+async function getRotation(db, key) {
+  try {
+    return await db.prepare(
+      "SELECT current_index FROM rotation_tracker WHERE monetization_id=? LIMIT 1"
+    ).bind(key).first()
+  } catch { return null }
+}
+
+async function setRotation(db, key, nextIndex) {
+  try {
+    const exists = await getRotation(db, key)
+    if (exists) {
+      await db.prepare(
+        "UPDATE rotation_tracker SET current_index=? WHERE monetization_id=?"
+      ).bind(nextIndex, key).run()
+    } else {
+      await db.prepare(
+        "INSERT INTO rotation_tracker (id, monetization_id, current_index) VALUES (?,?,?)"
+      ).bind(uid(), key, nextIndex).run()
+    }
+  } catch (e) {
+    // rotation_tracker table might not exist — create it
+    try {
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS rotation_tracker (
+          id TEXT PRIMARY KEY,
+          monetization_id TEXT,
+          current_index INTEGER DEFAULT 0
+        )
+      `).run()
+      await db.prepare(
+        "INSERT OR REPLACE INTO rotation_tracker (id, monetization_id, current_index) VALUES (?,?,?)"
+      ).bind(uid(), key, nextIndex).run()
+    } catch {}
   }
 }
 
-const directPick = (arr = []) => {
-  if (!arr.length) return null
-  return arr[0]
+async function pickItem(db, key, mode, items) {
+  if (!items?.length) return null
+  if (mode === "random")  return randomPick(items)
+  if (mode === "direct")  return directPick(items)
+
+  // sequence
+  const state = await getRotation(db, key)
+  const idx   = state?.current_index || 0
+  const picked = sequencePick(items, idx)
+  if (picked) await setRotation(db, key, picked.next)
+  return picked?.value || null
 }
 
-/* =========================================
-   ANALYTICS TRACKER
-========================================= */
-
-async function trackEvent(db, data = {}) {
-
+/* ── Ensure download_sessions table ── */
+async function ensureSessionsTable(db) {
   await db.prepare(`
-    INSERT INTO monetization_analytics (
-      id,
-      anime,
-      season,
-      episode,
-      host,
-      quality,
-      monetization_id,
-      event_type,
-      created_at
+    CREATE TABLE IF NOT EXISTS download_sessions (
+      id           TEXT PRIMARY KEY,
+      host_id      TEXT,
+      final_link   TEXT,
+      knight       INTEGER DEFAULT 0,
+      ad_code      TEXT,
+      ad_type      TEXT,
+      ad_delay     INTEGER DEFAULT 0,
+      shortlink_url TEXT,
+      popup_script TEXT,
+      created_at   TEXT
     )
-
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-  .bind(
-    crypto.randomUUID(),
-
-    data.anime || "",
-    data.season || "",
-    data.episode || "",
-    data.host || "",
-    data.quality || "",
-    data.monetization_id || "",
-    data.event_type || "",
-
-    now()
-  )
-  .run()
-
+  `).run().catch(()=>{})
 }
 
-/* =========================================
-   ROTATION TRACKER
-========================================= */
+/* ============================================================
+  PUBLIC — ADS SERVING
+============================================================ */
 
-async function getRotationState(db, monetizationId) {
-
-  const row = await db.prepare(`
-    SELECT *
-    FROM rotation_tracker
-    WHERE monetization_id = ?
-  `)
-  .bind(monetizationId)
-  .first()
-
-  return row || null
-}
-
-async function updateRotationState(
-  db,
-  monetizationId,
-  nextIndex = 0
-) {
-
-  const exists = await getRotationState(
-    db,
-    monetizationId
-  )
-
-  if (exists) {
-
-    await db.prepare(`
-      UPDATE rotation_tracker
-      SET current_index = ?
-      WHERE monetization_id = ?
-    `)
-    .bind(nextIndex, monetizationId)
-    .run()
-
-  } else {
-
-    await db.prepare(`
-      INSERT INTO rotation_tracker (
-        id,
-        monetization_id,
-        current_index
-      )
-
-      VALUES (?, ?, ?)
-    `)
-    .bind(
-      crypto.randomUUID(),
-      monetizationId,
-      nextIndex
-    )
-    .run()
-
-  }
-
-}
-
-/* =========================================
-   ADS LIBRARY
-========================================= */
-
-ads.get("/admin/ads-library", async (c) => {
+app.get("/api/ads/public", async (c) => {
+  const db       = c.env.DB
+  const page     = c.req.query("page")     || "all"
+  const position = c.req.query("position") || ""
 
   try {
+    let query = `
+      SELECT id, name, type, position, page, code, image, link
+      FROM ads
+      WHERE active=1
+      AND (start_date IS NULL OR start_date <= datetime('now'))
+      AND (end_date   IS NULL OR end_date   >= datetime('now'))
+      AND (page=? OR page='all')
+    `
+    const binds = [page]
 
-    const db = c.env.DB
+    if (position) {
+      query += ` AND (position=? OR position='all')`
+      binds.push(position)
+    }
 
-    const { results } = await db.prepare(`
-      SELECT *
-      FROM ads_library
-      ORDER BY created_at DESC
-    `).all()
+    const { results } = await db.prepare(query).bind(...binds).all()
+
+    // Track impressions in background
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(
+        Promise.all(results.map(ad =>
+          db.prepare("UPDATE ads SET impressions=COALESCE(impressions,0)+1 WHERE id=?")
+            .bind(ad.id).run().catch(()=>{})
+        ))
+      )
+    }
 
     return c.json(ok(results))
-
   } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
+    return c.json(fail(err.message), 500)
   }
-
 })
 
-ads.post("/admin/ads-library", async (c) => {
-
+/* POST /api/ads/click/:id */
+app.post("/api/ads/click/:id", async (c) => {
+  const db = c.env.DB
+  const id = c.req.param("id")
   try {
-
-    const db = c.env.DB
-
-    const body = await c.req.json()
-
-    const id = crypto.randomUUID()
-
+    await db.prepare("UPDATE ads SET clicks=COALESCE(clicks,0)+1 WHERE id=?").bind(id).run()
+    const ip = c.req.header("CF-Connecting-IP") || "unknown"
+    const ua = c.req.header("User-Agent") || ""
     await db.prepare(`
-      INSERT INTO ads_library (
-        id,
-        name,
-        ad_url,
-        ad_type,
-        active,
-        created_at
-      )
-
-      VALUES (?, ?, ?, ?, ?, ?)
-    `)
-    .bind(
-      id,
-      body.name || "",
-      body.ad_url || "",
-      body.ad_type || "redirect",
-      body.active ? 1 : 0,
-      now()
-    )
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
+      INSERT INTO ads_logs (ad_id, type, ip, ua, created_at)
+      VALUES (?, 'click', ?, ?, datetime('now'))
+    `).bind(id, ip, ua).run().catch(()=>{})
+    return c.json(ok())
+  } catch (err) { return c.json(fail(err.message), 500) }
 })
 
-ads.put("/admin/ads-library/:id", async (c) => {
-
+/* POST /api/ads/impression/:id */
+app.post("/api/ads/impression/:id", async (c) => {
+  const db = c.env.DB
+  const id = c.req.param("id")
   try {
-
-    const db = c.env.DB
-
-    const id = c.req.param("id")
-
-    const body = await c.req.json()
-
+    await db.prepare("UPDATE ads SET impressions=COALESCE(impressions,0)+1 WHERE id=?").bind(id).run()
+    const ip = c.req.header("CF-Connecting-IP") || "unknown"
+    const ua = c.req.header("User-Agent") || ""
     await db.prepare(`
-      UPDATE ads_library
-
-      SET
-        name = ?,
-        ad_url = ?,
-        ad_type = ?,
-        active = ?
-
-      WHERE id = ?
-    `)
-    .bind(
-      body.name || "",
-      body.ad_url || "",
-      body.ad_type || "redirect",
-      body.active ? 1 : 0,
-      id
-    )
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
+      INSERT INTO ads_logs (ad_id, type, ip, ua, created_at)
+      VALUES (?, 'impression', ?, ?, datetime('now'))
+    `).bind(id, ip, ua).run().catch(()=>{})
+    return c.json(ok())
+  } catch (err) { return c.json(fail(err.message), 500) }
 })
 
-ads.delete("/admin/ads-library/:id", async (c) => {
+/* ============================================================
+  PUBLIC — /api/go — MONETIZATION FLOW ENGINE (FIXED)
+============================================================ */
+
+app.get("/api/go", async (c) => {
+  const db = c.env.DB
+  const q  = c.req.query
+
+  const hostId  = q("host_id")  || ""
+  const quality = q("quality")  || ""
+
+  if (!hostId) return c.redirect("/404.html")
 
   try {
-
-    const db = c.env.DB
-
-    const id = c.req.param("id")
-
-    await db.prepare(`
-      DELETE FROM ads_library
-      WHERE id = ?
-    `)
-    .bind(id)
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-/* =========================================
-   SHORTLINKS LIBRARY
-========================================= */
-
-ads.get("/admin/shortlinks-library", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const { results } = await db.prepare(`
-      SELECT *
-      FROM shortlinks_library
-      ORDER BY created_at DESC
-    `).all()
-
-    return c.json(ok(results))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.post("/admin/shortlinks-library", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const body = await c.req.json()
-
-    const id = crypto.randomUUID()
-
-    await db.prepare(`
-      INSERT INTO shortlinks_library (
-        id,
-        name,
-        shortlink_url,
-        active,
-        created_at
-      )
-
-      VALUES (?, ?, ?, ?, ?)
-    `)
-    .bind(
-      id,
-      body.name || "",
-      body.shortlink_url || "",
-      body.active ? 1 : 0,
-      now()
-    )
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.put("/admin/shortlinks-library/:id", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const id = c.req.param("id")
-
-    const body = await c.req.json()
-
-    await db.prepare(`
-      UPDATE shortlinks_library
-
-      SET
-        name = ?,
-        shortlink_url = ?,
-        active = ?
-
-      WHERE id = ?
-    `)
-    .bind(
-      body.name || "",
-      body.shortlink_url || "",
-      body.active ? 1 : 0,
-      id
-    )
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.delete("/admin/shortlinks-library/:id", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const id = c.req.param("id")
-
-    await db.prepare(`
-      DELETE FROM shortlinks_library
-      WHERE id = ?
-    `)
-    .bind(id)
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-/* =========================================
-   POPUP LIBRARY
-========================================= */
-
-ads.get("/admin/popup-library", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const { results } = await db.prepare(`
-      SELECT *
-      FROM popup_library
-      ORDER BY created_at DESC
-    `).all()
-
-    return c.json(ok(results))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.post("/admin/popup-library", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const body = await c.req.json()
-
-    const id = crypto.randomUUID()
-
-    await db.prepare(`
-      INSERT INTO popup_library (
-        id,
-        name,
-        popup_url,
-        active,
-        created_at
-      )
-
-      VALUES (?, ?, ?, ?, ?)
-    `)
-    .bind(
-      id,
-      body.name || "",
-      body.popup_url || "",
-      body.active ? 1 : 0,
-      now()
-    )
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.put("/admin/popup-library/:id", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const id = c.req.param("id")
-
-    const body = await c.req.json()
-
-    await db.prepare(`
-      UPDATE popup_library
-
-      SET
-        name = ?,
-        popup_url = ?,
-        active = ?
-
-      WHERE id = ?
-    `)
-    .bind(
-      body.name || "",
-      body.popup_url || "",
-      body.active ? 1 : 0,
-      id
-    )
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.delete("/admin/popup-library/:id", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const id = c.req.param("id")
-
-    await db.prepare(`
-      DELETE FROM popup_library
-      WHERE id = ?
-    `)
-    .bind(id)
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-/* =========================================
-   MONETIZATION RULES
-========================================= */
-
-ads.get("/admin/monetization", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const { results } = await db.prepare(`
-      SELECT *
-      FROM monetization_rules
-      ORDER BY created_at DESC
-    `).all()
-
-    const data = results.map((r) => ({
-      ...r,
-      ads: parseJSON(r.ads),
-      shortlinks: parseJSON(r.shortlinks),
-      popups: parseJSON(r.popups)
-    }))
-
-    return c.json(ok(data))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.post("/admin/monetization", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const body = await c.req.json()
-
-    const id = crypto.randomUUID()
-
-    await db.prepare(`
-      INSERT INTO monetization_rules (
-
-        id,
-        title,
-
-        anime,
-        season,
-        episode,
-
-        host,
-        quality,
-
-        content_type,
-        knight,
-
-        ads,
-        shortlinks,
-        popups,
-
-        ads_mode,
-        shortlinks_mode,
-        popup_mode,
-
-        ads_limit,
-        shortlinks_limit,
-        popup_limit,
-
-        active,
-        created_at
-
-      )
-
-      VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-      )
-    `)
-    .bind(
-
-      id,
-
-      body.title || "",
-
-      body.anime || "",
-      body.season || "",
-      body.episode || "",
-
-      body.host || "",
-      body.quality || "",
-
-      body.content_type || "episode",
-
-      body.knight ? 1 : 0,
-
-      stringify(body.ads),
-      stringify(body.shortlinks),
-      stringify(body.popups),
-
-      body.ads_mode || "random",
-      body.shortlinks_mode || "random",
-      body.popup_mode || "random",
-
-      Number(body.ads_limit || 1),
-      Number(body.shortlinks_limit || 1),
-      Number(body.popup_limit || 0),
-
-      body.active ? 1 : 0,
-
-      now()
-
-    )
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.put("/admin/monetization/:id", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const id = c.req.param("id")
-
-    const body = await c.req.json()
-
-    await db.prepare(`
-      UPDATE monetization_rules
-
-      SET
-        title = ?,
-
-        anime = ?,
-        season = ?,
-        episode = ?,
-
-        host = ?,
-        quality = ?,
-
-        content_type = ?,
-        knight = ?,
-
-        ads = ?,
-        shortlinks = ?,
-        popups = ?,
-
-        ads_mode = ?,
-        shortlinks_mode = ?,
-        popup_mode = ?,
-
-        ads_limit = ?,
-        shortlinks_limit = ?,
-        popup_limit = ?,
-
-        active = ?
-
-      WHERE id = ?
-    `)
-    .bind(
-
-      body.title || "",
-
-      body.anime || "",
-      body.season || "",
-      body.episode || "",
-
-      body.host || "",
-      body.quality || "",
-
-      body.content_type || "episode",
-
-      body.knight ? 1 : 0,
-
-      stringify(body.ads),
-      stringify(body.shortlinks),
-      stringify(body.popups),
-
-      body.ads_mode || "random",
-      body.shortlinks_mode || "random",
-      body.popup_mode || "random",
-
-      Number(body.ads_limit || 1),
-      Number(body.shortlinks_limit || 1),
-      Number(body.popup_limit || 0),
-
-      body.active ? 1 : 0,
-
-      id
-
-    )
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-
-ads.delete("/admin/monetization/:id", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const id = c.req.param("id")
-
-    await db.prepare(`
-      DELETE FROM monetization_rules
-      WHERE id = ?
-    `)
-    .bind(id)
-    .run()
-
-    return c.json(ok({ id }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
-})
-/* =========================================
-   FIND MATCHING RULE
-========================================= */
-
-async function findRule(
-  db,
-  anime,
-  season,
-  episode,
-  host,
-  quality
-) {
-
-  const { results } = await db.prepare(`
-    SELECT *
-    FROM monetization_rules
-    WHERE active = 1
-    ORDER BY created_at DESC
-  `).all()
-
-  const matched = results.find((r) => {
-
-    const animeOk =
-      !r.anime ||
-      r.anime.toLowerCase() === anime.toLowerCase()
-
-    const seasonOk =
-      !r.season ||
-      String(r.season) === String(season)
-
-    const episodeOk =
-      !r.episode ||
-      String(r.episode) === String(episode)
-
-    const hostOk =
-      !r.host ||
-      r.host.toLowerCase() === host.toLowerCase()
-
-    const qualityOk =
-      !r.quality ||
-      r.quality.toLowerCase() === quality.toLowerCase()
-
-    return (
-      animeOk &&
-      seasonOk &&
-      episodeOk &&
-      hostOk &&
-      qualityOk
-    )
-
-  })
-
-  return matched || null
-
-}
-
-/* =========================================
-   PICK ROTATION ITEM
-========================================= */
-
-async function pickItem(
-  db,
-  monetizationId,
-  mode,
-  items
-) {
-
-  if (!items?.length) {
-    return null
-  }
-
-  if (mode === "random") {
-    return randomPick(items)
-  }
-
-  if (mode === "direct") {
-    return directPick(items)
-  }
-
-  const state = await getRotationState(
-    db,
-    monetizationId
-  )
-
-  const currentIndex =
-    state?.current_index || 0
-
-  const picked = sequencePick(
-    items,
-    currentIndex
-  )
-
-  await updateRotationState(
-    db,
-    monetizationId,
-    picked.next
-  )
-
-  return picked.value
-
-}
-
-/* =========================================
-   BUILD DOWNLOAD SESSION
-========================================= */
-
-ads.get("/go", async (c) => {
-
-  try {
-
-    const db = c.env.DB
-
-    const anime =
-      c.req.query("anime") || ""
-
-    const season =
-      c.req.query("season") || ""
-
-    const episode =
-      c.req.query("episode") || ""
-
-    const host =
-      c.req.query("host") || ""
-
-    const quality =
-      c.req.query("quality") || ""
-
-    const rule = await findRule(
-      db,
-      anime,
-      season,
-      episode,
-      host,
-      quality
-    )
-
-    if (!rule) {
-
-      return c.redirect(
-        `/knight.html?anime=${encodeURIComponent(anime)}&season=${season}&episode=${episode}&host=${encodeURIComponent(host)}`
-      )
-
+    await ensureSessionsTable(db)
+
+    // 1. Fetch host config
+    const hostEntry = await db.prepare(`
+      SELECT dh.id, dh.host, dh.knight, dh.monetization_id, dh.direct_download
+      FROM download_hosts dh
+      WHERE dh.id=?
+    `).bind(hostId).first()
+
+    if (!hostEntry) return c.redirect("/404.html")
+
+    // 2. Fetch monetization config
+    let mon = null
+    if (hostEntry.monetization_id) {
+      mon = await db.prepare(
+        "SELECT * FROM host_monetization WHERE id=? LIMIT 1"
+      ).bind(hostEntry.monetization_id).first().catch(()=>null)
     }
 
-    const monetizationId = rule.id
+    // 3. Pick ads/shortlinks/popups
+    let selectedAd        = null
+    let selectedShortlink = null
+    let selectedPopup     = null
 
-    const adsList =
-      parseJSON(rule.ads)
+    if (mon) {
+      const adIds    = jsonParse(mon.ads)
+      const shortIds = jsonParse(mon.shortlinks)
+      const popupIds = jsonParse(mon.popups)
+      const mode     = mon.mode || "random"
+      const mId      = mon.id
 
-    const shortlinksList =
-      parseJSON(rule.shortlinks)
-
-    const popupList =
-      parseJSON(rule.popups)
-
-    const selectedAds = []
-    const selectedShortlinks = []
-    const selectedPopups = []
-
-    /* ADS */
-
-    for (
-      let i = 0;
-      i < Number(rule.ads_limit || 0);
-      i++
-    ) {
-
-      const item = await pickItem(
-        db,
-        monetizationId + "_ads",
-        rule.ads_mode,
-        adsList
-      )
-
-      if (item) {
-        selectedAds.push(item)
+      if (adIds.length) {
+        const adObjs = []
+        for (const id of adIds) {
+          const ad = await db.prepare(
+            "SELECT * FROM ads_library WHERE id=? AND active=1"
+          ).bind(id).first().catch(()=>null)
+          if (ad) adObjs.push(ad)
+        }
+        selectedAd = await pickItem(db, mId+"_ad", mode, adObjs)
       }
 
-    }
-
-    /* SHORTLINKS */
-
-    for (
-      let i = 0;
-      i < Number(rule.shortlinks_limit || 0);
-      i++
-    ) {
-
-      const item = await pickItem(
-        db,
-        monetizationId + "_shortlinks",
-        rule.shortlinks_mode,
-        shortlinksList
-      )
-
-      if (item) {
-        selectedShortlinks.push(item)
+      if (shortIds.length) {
+        const shObjs = []
+        for (const id of shortIds) {
+          const sh = await db.prepare(
+            "SELECT * FROM shortlinks_library WHERE id=? AND active=1"
+          ).bind(id).first().catch(()=>null)
+          if (sh) shObjs.push(sh)
+        }
+        selectedShortlink = await pickItem(db, mId+"_short", mode, shObjs)
       }
 
-    }
-
-    /* POPUPS */
-
-    for (
-      let i = 0;
-      i < Number(rule.popup_limit || 0);
-      i++
-    ) {
-
-      const item = await pickItem(
-        db,
-        monetizationId + "_popups",
-        rule.popup_mode,
-        popupList
-      )
-
-      if (item) {
-        selectedPopups.push(item)
+      if (popupIds.length) {
+        const popObjs = []
+        for (const id of popupIds) {
+          const pop = await db.prepare(
+            "SELECT * FROM popup_library WHERE id=? AND active=1"
+          ).bind(id).first().catch(()=>null)
+          if (pop) popObjs.push(pop)
+        }
+        selectedPopup = await pickItem(db, mId+"_popup", mode, popObjs)
       }
 
+      // Update click count
+      await db.prepare(
+        "UPDATE host_monetization SET clicks=COALESCE(clicks,0)+1 WHERE id=?"
+      ).bind(mon.id).run().catch(()=>{})
     }
 
-    const sessionId =
-      crypto.randomUUID()
+    // 4. Get final link
+    let finalLink = ""
+    const isKnight = hostEntry.knight === 1 || hostEntry.knight === true
 
+    if (isKnight) {
+      // Knight page — quality buttons will be shown
+      finalLink = `/knight.html?host_id=${hostId}`
+    } else {
+      if (quality) {
+        const link = await db.prepare(
+          "SELECT link FROM download_links WHERE host_id=? AND quality=? LIMIT 1"
+        ).bind(hostId, quality).first().catch(()=>null)
+        finalLink = link?.link || ""
+      }
+      if (!finalLink) {
+        const link = await db.prepare(
+          "SELECT link FROM download_links WHERE host_id=? LIMIT 1"
+        ).bind(hostId).first().catch(()=>null)
+        finalLink = link?.link || ""
+      }
+    }
+
+    // 5. Build shortlink URL (wraps final link)
+    let shortlinkUrl = null
+    if (selectedShortlink?.base_url && finalLink) {
+      shortlinkUrl = selectedShortlink.base_url + encodeURIComponent(finalLink)
+    }
+
+    // 6. Save session
+    const sessionId = uid()
     await db.prepare(`
       INSERT INTO download_sessions (
-
-        id,
-
-        anime,
-        season,
-        episode,
-
-        host,
-        quality,
-
-        monetization_id,
-
-        ads,
-        shortlinks,
-        popups,
-
-        current_step,
-
-        completed,
-
-        created_at
-
-      )
-
-      VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-      )
-    `)
-    .bind(
-
+        id, host_id, final_link, knight,
+        ad_code, ad_type, ad_delay,
+        shortlink_url, popup_script, created_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
+    `).bind(
       sessionId,
+      hostId,
+      finalLink,
+      isKnight ? 1 : 0,
+      selectedAd?.code   || null,
+      selectedAd?.type   || null,
+      selectedAd?.delay  || 0,
+      shortlinkUrl,
+      selectedPopup?.script || null
+    ).run()
 
-      anime,
-      season,
-      episode,
-
-      host,
-      quality,
-
-      monetizationId,
-
-      stringify(selectedAds),
-      stringify(selectedShortlinks),
-      stringify(selectedPopups),
-
-      0,
-
-      0,
-
-      now()
-
-    )
-    .run()
-
-    return c.redirect(
-      `/ads.html?session=${sessionId}`
-    )
+    // 7. Redirect to go.html
+    return c.redirect(`/go.html?session=${sessionId}`)
 
   } catch (err) {
-
-    return c.text(err.message)
-
+    console.error("/api/go error:", err)
+    return c.redirect(`/go.html?error=1`)
   }
-
 })
 
-/* =========================================
-   GET SESSION
-========================================= */
-
-ads.get("/session/:id", async (c) => {
-
+/* GET /api/session/:id — frontend go.html reads this */
+app.get("/api/session/:id", async (c) => {
+  const db = c.env.DB
+  const id = c.req.param("id")
   try {
+    await ensureSessionsTable(db)
+    const row = await db.prepare(
+      "SELECT * FROM download_sessions WHERE id=? LIMIT 1"
+    ).bind(id).first()
+    if (!row) return c.json(fail("Session not found"), 404)
+    return c.json(ok(row))
+  } catch (err) {
+    return c.json(fail(err.message), 500)
+  }
+})
 
-    const db = c.env.DB
+/* ============================================================
+  ADMIN — PAGE ADS (ads placed on site pages)
+============================================================ */
 
-    const id =
-      c.req.param("id")
+app.get("/api/admin/ads", async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM ads ORDER BY created_at DESC"
+    ).all()
+    return c.json(ok(results))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
 
-    const row = await db.prepare(`
-      SELECT *
-      FROM download_sessions
-      WHERE id = ?
-    `)
-    .bind(id)
-    .first()
+app.post("/api/admin/ads", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json()
+    const id   = uid()
+    await db.prepare(`
+      INSERT INTO ads (id, name, type, position, page, code, image, link, active, start_date, end_date, impressions, clicks, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,0,0,datetime('now'),datetime('now'))
+    `).bind(
+      id,
+      body.name     || "",
+      body.type     || "banner",
+      body.position || "header",
+      body.page     || "all",
+      body.code     || "",
+      body.image    || "",
+      body.link     || "",
+      body.active !== false ? 1 : 0,
+      body.start_date || null,
+      body.end_date   || null
+    ).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
 
-    if (!row) {
+app.put("/api/admin/ads/:id", async (c) => {
+  try {
+    const db   = c.env.DB
+    const id   = c.req.param("id")
+    const body = await c.req.json()
+    await db.prepare(`
+      UPDATE ads SET name=?,type=?,position=?,page=?,code=?,image=?,link=?,active=?,start_date=?,end_date=?,updated_at=datetime('now')
+      WHERE id=?
+    `).bind(
+      body.name||"", body.type||"banner", body.position||"header", body.page||"all",
+      body.code||"", body.image||"", body.link||"",
+      body.active!==false?1:0, body.start_date||null, body.end_date||null, id
+    ).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
 
-      return c.json(
-        fail("Session not found"),
-        404
-      )
+app.delete("/api/admin/ads/:id", async (c) => {
+  try {
+    await c.env.DB.prepare("DELETE FROM ads WHERE id=?").bind(c.req.param("id")).run()
+    return c.json(ok())
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
 
+/* ============================================================
+  ADMIN — PAGE ADS CONTROL
+============================================================ */
+
+app.get("/api/admin/page-ads", async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM page_ads ORDER BY page ASC"
+    ).all().catch(() => ({ results: [] }))
+    return c.json(ok(results))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.post("/api/admin/page-ads", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json()
+
+    const existing = await db.prepare(
+      "SELECT id FROM page_ads WHERE page=? LIMIT 1"
+    ).bind(body.page).first().catch(()=>null)
+
+    if (existing) {
+      await db.prepare(
+        "UPDATE page_ads SET enabled=?, ad_id=?, updated_at=datetime('now') WHERE page=?"
+      ).bind(body.enabled?1:0, body.ad_id||null, body.page).run()
+    } else {
+      await db.prepare(
+        "INSERT INTO page_ads (id, page, enabled, ad_id, created_at, updated_at) VALUES (?,?,?,?,datetime('now'),datetime('now'))"
+      ).bind(uid(), body.page, body.enabled?1:0, body.ad_id||null).run()
     }
 
-    return c.json(ok({
-
-      ...row,
-
-      ads: parseJSON(row.ads),
-
-      shortlinks: parseJSON(
-        row.shortlinks
-      ),
-
-      popups: parseJSON(
-        row.popups
-      )
-
-    }))
-
-  } catch (err) {
-
-    return c.json(
-      fail(err.message),
-      500
-    )
-
-  }
-
+    return c.json(ok())
+  } catch (err) { return c.json(fail(err.message), 500) }
 })
 
-/* =========================================
-   FINAL EXPORT
-========================================= */
+/* ============================================================
+  ADMIN — ADS LIBRARY
+============================================================ */
 
-export default ads
+app.get("/api/admin/ads-library", async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM ads_library ORDER BY created_at DESC"
+    ).all()
+    return c.json(ok(results))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.post("/api/admin/ads-library", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json()
+    const id   = uid()
+    await db.prepare(`
+      INSERT INTO ads_library (id, name, type, code, weight, delay, active, created_at)
+      VALUES (?,?,?,?,?,?,?,datetime('now'))
+    `).bind(id, body.name||"", body.type||"redirect", body.code||"",
+            Number(body.weight||1), Number(body.delay||0), body.active!==false?1:0).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.put("/api/admin/ads-library/:id", async (c) => {
+  try {
+    const db   = c.env.DB
+    const id   = c.req.param("id")
+    const body = await c.req.json()
+    await db.prepare(`
+      UPDATE ads_library SET name=?,type=?,code=?,weight=?,delay=?,active=? WHERE id=?
+    `).bind(body.name||"", body.type||"redirect", body.code||"",
+            Number(body.weight||1), Number(body.delay||0), body.active!==false?1:0, id).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.delete("/api/admin/ads-library/:id", async (c) => {
+  try {
+    await c.env.DB.prepare("DELETE FROM ads_library WHERE id=?").bind(c.req.param("id")).run()
+    return c.json(ok())
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+/* ============================================================
+  ADMIN — SHORTLINKS LIBRARY
+============================================================ */
+
+app.get("/api/admin/shortlinks-library", async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM shortlinks_library ORDER BY created_at DESC"
+    ).all()
+    return c.json(ok(results))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.post("/api/admin/shortlinks-library", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json()
+    const id   = uid()
+    await db.prepare(`
+      INSERT INTO shortlinks_library (id, name, base_url, api_key, active, created_at)
+      VALUES (?,?,?,?,?,datetime('now'))
+    `).bind(id, body.name||"", body.base_url||"", body.api_key||"", body.active!==false?1:0).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.put("/api/admin/shortlinks-library/:id", async (c) => {
+  try {
+    const db   = c.env.DB
+    const id   = c.req.param("id")
+    const body = await c.req.json()
+    await db.prepare(`
+      UPDATE shortlinks_library SET name=?,base_url=?,api_key=?,active=? WHERE id=?
+    `).bind(body.name||"", body.base_url||"", body.api_key||"", body.active!==false?1:0, id).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.delete("/api/admin/shortlinks-library/:id", async (c) => {
+  try {
+    await c.env.DB.prepare("DELETE FROM shortlinks_library WHERE id=?").bind(c.req.param("id")).run()
+    return c.json(ok())
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+/* ============================================================
+  ADMIN — POPUP LIBRARY
+============================================================ */
+
+app.get("/api/admin/popup-library", async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM popup_library ORDER BY created_at DESC"
+    ).all()
+    return c.json(ok(results))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.post("/api/admin/popup-library", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json()
+    const id   = uid()
+    await db.prepare(`
+      INSERT INTO popup_library (id, name, script, active, created_at)
+      VALUES (?,?,?,?,datetime('now'))
+    `).bind(id, body.name||"", body.script||"", body.active!==false?1:0).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.put("/api/admin/popup-library/:id", async (c) => {
+  try {
+    const db   = c.env.DB
+    const id   = c.req.param("id")
+    const body = await c.req.json()
+    await db.prepare(`
+      UPDATE popup_library SET name=?,script=?,active=? WHERE id=?
+    `).bind(body.name||"", body.script||"", body.active!==false?1:0, id).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.delete("/api/admin/popup-library/:id", async (c) => {
+  try {
+    await c.env.DB.prepare("DELETE FROM popup_library WHERE id=?").bind(c.req.param("id")).run()
+    return c.json(ok())
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+/* ============================================================
+  ADMIN — HOST MONETIZATION
+============================================================ */
+
+app.get("/api/admin/host-monetization", async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM host_monetization ORDER BY created_at DESC"
+    ).all()
+    const data = results.map(h => ({
+      ...h,
+      ads:        jsonParse(h.ads),
+      shortlinks: jsonParse(h.shortlinks),
+      popups:     jsonParse(h.popups)
+    }))
+    return c.json(ok(data))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.post("/api/admin/host-monetization", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json()
+    const id   = uid()
+    await db.prepare(`
+      INSERT INTO host_monetization (id, host, storage, knight, mode, ads, shortlinks, popups, active, clicks, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,0,datetime('now'))
+    `).bind(
+      id,
+      body.host    || "",
+      body.storage || "",
+      body.knight  ? 1 : 0,
+      body.mode    || "random",
+      jsonStr(body.ads),
+      jsonStr(body.shortlinks),
+      jsonStr(body.popups),
+      body.active !== false ? 1 : 0
+    ).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.put("/api/admin/host-monetization/:id", async (c) => {
+  try {
+    const db   = c.env.DB
+    const id   = c.req.param("id")
+    const body = await c.req.json()
+    await db.prepare(`
+      UPDATE host_monetization SET host=?,storage=?,knight=?,mode=?,ads=?,shortlinks=?,popups=?,active=?
+      WHERE id=?
+    `).bind(
+      body.host    || "",
+      body.storage || "",
+      body.knight  ? 1 : 0,
+      body.mode    || "random",
+      jsonStr(body.ads),
+      jsonStr(body.shortlinks),
+      jsonStr(body.popups),
+      body.active !== false ? 1 : 0,
+      id
+    ).run()
+    return c.json(ok({ id }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.delete("/api/admin/host-monetization/:id", async (c) => {
+  try {
+    await c.env.DB.prepare("DELETE FROM host_monetization WHERE id=?").bind(c.req.param("id")).run()
+    return c.json(ok())
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+/* ============================================================
+  ADMIN — ADS ANALYTICS (merged from adsAnalytics.js)
+  IMPORTANT: /clear PEHLE register karo /:id se — warna conflict
+============================================================ */
+
+app.delete("/api/admin/ads-analytics-clear", async (c) => {
+  try {
+    await c.env.DB.prepare("DELETE FROM ads_logs").run().catch(()=>{})
+    await c.env.DB.prepare("UPDATE ads SET impressions=0, clicks=0").run().catch(()=>{})
+    return c.json(ok({ message: "Analytics cleared" }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.get("/api/admin/ads-analytics", async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT
+        a.id, a.name, a.type, a.position, a.page, a.active,
+        COALESCE(a.impressions,0) as impressions,
+        COALESCE(a.clicks,0) as clicks,
+        CASE WHEN COALESCE(a.impressions,0) > 0
+          THEN ROUND((COALESCE(a.clicks,0) * 100.0) / a.impressions, 2)
+          ELSE 0 END as ctr,
+        a.created_at
+      FROM ads a
+      ORDER BY a.impressions DESC
+    `).all()
+
+    const data = results.map(r => ({
+      ...r,
+      ctr: r.ctr + "%",
+      active: !!r.active
+    }))
+    return c.json(ok(data))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+app.get("/api/admin/ads-analytics/:adId", async (c) => {
+  const db   = c.env.DB
+  const adId = c.req.param("adId")
+  try {
+    const ad = await db.prepare(
+      "SELECT id, name, type, position, page, impressions, clicks, active FROM ads WHERE id=? LIMIT 1"
+    ).bind(adId).first()
+    if (!ad) return c.json(fail("Ad not found"), 404)
+
+    const { results: daily } = await db.prepare(`
+      SELECT substr(created_at, 1, 10) as date, type, COUNT(*) as count
+      FROM ads_logs
+      WHERE ad_id=? AND created_at >= datetime('now', '-30 days')
+      GROUP BY date, type
+      ORDER BY date DESC
+    `).bind(adId).all().catch(()=>({ results: [] }))
+
+    const dayMap = {}
+    daily.forEach(row => {
+      if (!dayMap[row.date]) dayMap[row.date] = { date: row.date, impressions: 0, clicks: 0 }
+      if (row.type === "impression") dayMap[row.date].impressions = row.count
+      if (row.type === "click")      dayMap[row.date].clicks      = row.count
+    })
+
+    const breakdown = Object.values(dayMap)
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .map(d => ({
+        ...d,
+        ctr: d.impressions > 0 ? ((d.clicks / d.impressions) * 100).toFixed(2) + "%" : "0%"
+      }))
+
+    return c.json(ok({
+      ad: {
+        ...ad,
+        ctr: (ad.impressions||0) > 0 ? ((ad.clicks / ad.impressions) * 100).toFixed(2) + "%" : "0%",
+        active: !!ad.active
+      },
+      breakdown
+    }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
+
+export default app
