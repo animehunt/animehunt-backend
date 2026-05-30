@@ -1,301 +1,449 @@
-import { Hono } from "hono";
-import { verifyAdmin } from "../middleware/adminAuth.js";
+/* ================================================
+   categories.js — Admin + Public Category Routes
+   Auth handled by adminAuth middleware in index.js
+   NO local auth middleware here
+================================================ */
 
-const app = new Hono();
+import { Hono } from "hono"
+
+const app = new Hono()
 
 /* ================= HELPERS ================= */
 
-const success = (data) => ({ success: true, data });
-const failure = (msg) => ({ success: false, message: msg });
+const success = (data) => ({ success: true,  data })
+const failure = (msg)  => ({ success: false, message: msg })
+const now     = ()     => new Date().toISOString()
+const bool    = (v)    => (v ? 1 : 0)
 
-const now = () => new Date().toISOString();
-const bool = (v) => (v ? 1 : 0);
+function normalizeSlug(slug) {
+  return slug.toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
+function makeSlug(name) {
+  return normalizeSlug(name || "")
+}
+
+/* ================= FORMAT ================= */
+
+function format(row) {
+  return {
+    id:             row.id,
+    name:           row.name,
+    slug:           row.slug,
+    type:           row.type,
+    category_order: row.category_order,
+    priority:       row.priority,
+    show_home:      !!row.show_home,
+    active:         !!row.active,
+    featured:       !!row.featured,
+    ai_trending:    !!row.ai_trending,
+    ai_popular:     !!row.ai_popular,
+    ai_assign:      !!row.ai_assign,
+    created_at:     row.created_at,
+    updated_at:     row.updated_at
+  }
+}
 
 /* ================= VALIDATION ================= */
 
 function validate(body) {
-  if (!body.name?.trim()) return "Name required";
-  if (!body.slug?.trim()) return "Slug required";
-  return null;
+  if (!body.name?.trim()) return "Name required"
+  return null
 }
 
-/* ================= SLUG ================= */
+/* ================= SYNC TO REPLICAS ================= */
 
-function normalizeSlug(slug) {
-  return slug
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+async function syncToReplicas(env, action, data) {
+  const promises = []
+
+  if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
+    promises.push(
+      fetch(`${env.TURSO_URL}/v2/pipeline`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+          "Content-Type":  "application/json"
+        },
+        body: JSON.stringify(buildTursoPayload(action, data))
+      }).catch(e => console.error("Turso sync:", e))
+    )
+  }
+
+  if (env.SUPABASE_URL && env.SUPABASE_KEY) {
+    promises.push(
+      syncSupabase(env, action, data)
+        .catch(e => console.error("Supabase sync:", e))
+    )
+  }
+
+  Promise.all(promises)
 }
+
+function buildTursoPayload(action, data) {
+  if (action === "insert") {
+    return {
+      requests: [{
+        type: "execute",
+        stmt: {
+          sql: `INSERT OR REPLACE INTO categories (
+            id,name,slug,type,category_order,priority,
+            show_home,active,featured,
+            ai_trending,ai_popular,ai_assign,
+            created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          args: [
+            { type:"text",    value: data.id },
+            { type:"text",    value: data.name },
+            { type:"text",    value: data.slug },
+            { type:"text",    value: data.type },
+            { type:"integer", value: data.category_order },
+            { type:"integer", value: data.priority },
+            { type:"integer", value: data.show_home },
+            { type:"integer", value: data.active },
+            { type:"integer", value: data.featured },
+            { type:"integer", value: data.ai_trending },
+            { type:"integer", value: data.ai_popular },
+            { type:"integer", value: data.ai_assign },
+            { type:"text",    value: data.created_at },
+            { type:"text",    value: data.updated_at }
+          ]
+        }
+      }]
+    }
+  }
+  if (action === "delete") {
+    return {
+      requests: [{
+        type: "execute",
+        stmt: {
+          sql:  "DELETE FROM categories WHERE id=?",
+          args: [{ type:"text", value: data.id }]
+        }
+      }]
+    }
+  }
+  return { requests: [] }
+}
+
+async function syncSupabase(env, action, data) {
+  const base    = `${env.SUPABASE_URL}/rest/v1/categories`
+  const headers = {
+    "apikey":        env.SUPABASE_KEY,
+    "Authorization": `Bearer ${env.SUPABASE_KEY}`,
+    "Content-Type":  "application/json",
+    "Prefer":        "resolution=merge-duplicates"
+  }
+  if (action === "insert") {
+    await fetch(base, { method:"POST", headers, body: JSON.stringify(data) })
+  }
+  if (action === "delete") {
+    await fetch(`${base}?id=eq.${data.id}`, { method:"DELETE", headers })
+  }
+}
+
+/* ================================================
+   PUBLIC ROUTES — must be BEFORE /:id
+================================================ */
+
+app.get("/categories/public", async (c) => {
+  try {
+    const db = c.env.DB
+    const { results } = await db.prepare(`
+      SELECT * FROM categories
+      WHERE active=1
+      ORDER BY priority ASC, category_order ASC
+    `).all()
+    return c.json(success(results.map(format)))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+app.get("/categories/home", async (c) => {
+  try {
+    const db = c.env.DB
+    const { results } = await db.prepare(`
+      SELECT * FROM categories
+      WHERE active=1 AND show_home=1
+      ORDER BY priority ASC, category_order ASC
+    `).all()
+    return c.json(success(results.map(format)))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
 
 /* ================= CREATE ================= */
 
-app.post("/categories", verifyAdmin, async (c) => {
+app.post("/categories", async (c) => {
   try {
-    const db = c.env.DB;
-    const body = await c.req.json();
+    const db   = c.env.DB
+    const body = await c.req.json()
 
-    const err = validate(body);
-    if (err) return c.json(failure(err), 400);
+    const err = validate(body)
+    if (err) return c.json(failure(err), 400)
 
-    const slug = normalizeSlug(body.slug);
+    const slug = body.slug?.trim()
+      ? normalizeSlug(body.slug)
+      : makeSlug(body.name)
 
-    // UNIQUE CHECK
-    const exists = await db
-      .prepare("SELECT id FROM categories WHERE slug=?")
-      .bind(slug)
-      .first();
+    if (!slug) return c.json(failure("Could not generate slug"), 400)
 
-    if (exists) return c.json(failure("Slug exists"), 400);
+    const exists = await db.prepare(
+      "SELECT id FROM categories WHERE slug=?"
+    ).bind(slug).first()
+    if (exists) return c.json(failure("Slug already exists"), 400)
 
-    let order = Number(body.order);
-
-    // AUTO ORDER
-    if (!order || order < 0) {
-      const last = await db
-        .prepare("SELECT MAX(category_order) as max FROM categories")
-        .first();
-
-      order = (last?.max || 0) + 1;
+    /* Auto order or manual */
+    let order = Number(body.order)
+    if (!order || order < 1) {
+      const last = await db.prepare(
+        "SELECT MAX(category_order) as max FROM categories"
+      ).first()
+      order = (last?.max || 0) + 1
     } else {
-      // SHIFT DOWN
+      /* Shift others down */
       await db.prepare(`
         UPDATE categories
         SET category_order = category_order + 1
         WHERE category_order >= ?
-      `).bind(order).run();
+      `).bind(order).run()
     }
 
-    const id = crypto.randomUUID();
+    const id        = crypto.randomUUID()
+    const timestamp = now()
+
+    const row = {
+      id,
+      name:           body.name.trim(),
+      slug,
+      type:           body.type      || "row",
+      category_order: order,
+      priority:       Number(body.priority || 1),
+      show_home:      bool(body.showHome),
+      active:         bool(body.isActive !== false),
+      featured:       bool(body.isFeatured),
+      ai_trending:    bool(body.aiTrending),
+      ai_popular:     bool(body.aiPopular),
+      ai_assign:      bool(body.aiAssign),
+      created_at:     timestamp,
+      updated_at:     timestamp
+    }
 
     await db.prepare(`
       INSERT INTO categories (
-        id, name, slug, type,
-        category_order, priority,
-        show_home, active, featured,
-        ai_trending, ai_popular, ai_assign,
-        created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id,name,slug,type,category_order,priority,
+        show_home,active,featured,
+        ai_trending,ai_popular,ai_assign,
+        created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
-      id,
-      body.name.trim(),
-      slug,
-      body.type || "row",
-      order,
-      Number(body.priority || 1),
+      row.id, row.name, row.slug, row.type,
+      row.category_order, row.priority,
+      row.show_home, row.active, row.featured,
+      row.ai_trending, row.ai_popular, row.ai_assign,
+      row.created_at, row.updated_at
+    ).run()
 
-      bool(body.showHome),
-      bool(body.isActive !== false),
-      bool(body.isFeatured),
+    syncToReplicas(c.env, "insert", row)
 
-      bool(body.aiTrending),
-      bool(body.aiPopular),
-      bool(body.aiAssign),
-
-      now(),
-      now()
-    ).run();
-
-    return c.json(success({ id }));
+    return c.json(success({ id, slug }), 201)
 
   } catch (err) {
-    console.error(err);
-    return c.json(failure("Create failed"), 500);
+    console.error("categories POST:", err)
+    return c.json(failure(err.message), 500)
   }
-});
+})
 
 /* ================= GET ALL (ADMIN) ================= */
 
-app.get("/categories", verifyAdmin, async (c) => {
+app.get("/categories", async (c) => {
   try {
-    const db = c.env.DB;
+    const db     = c.env.DB
+    const search = c.req.query("search") || ""
+    const type   = c.req.query("type")   || ""
+
+    let where    = "WHERE 1=1"
+    const params = []
+
+    if (search) { where += " AND name LIKE ?";  params.push(`%${search}%`) }
+    if (type)   { where += " AND type=?";        params.push(type) }
 
     const { results } = await db.prepare(`
-      SELECT *
-      FROM categories
+      SELECT * FROM categories
+      ${where}
       ORDER BY priority ASC, category_order ASC
-    `).all();
+    `).bind(...params).all()
 
-    const data = results.map(format);
-
-    return c.json(success(data));
+    return c.json(success(results.map(format)))
 
   } catch (err) {
-    console.error(err);
-    return c.json(failure("Load failed"), 500);
+    console.error("categories GET:", err)
+    return c.json(failure(err.message), 500)
   }
-});
+})
 
 /* ================= GET ONE ================= */
 
-app.get("/categories/:id", verifyAdmin, async (c) => {
+app.get("/categories/:id", async (c) => {
   try {
-    const db = c.env.DB;
-    const id = c.req.param("id");
+    const db  = c.env.DB
+    const id  = c.req.param("id")
+    const row = await db.prepare(
+      "SELECT * FROM categories WHERE id=? OR slug=?"
+    ).bind(id, id).first()
 
-    const row = await db.prepare(`
-      SELECT * FROM categories WHERE id=?
-    `).bind(id).first();
-
-    if (!row) return c.json(failure("Not found"), 404);
-
-    return c.json(success(format(row)));
+    if (!row) return c.json(failure("Category not found"), 404)
+    return c.json(success(format(row)))
 
   } catch (err) {
-    console.error(err);
-    return c.json(failure("Fetch failed"), 500);
+    return c.json(failure(err.message), 500)
   }
-});
+})
 
 /* ================= UPDATE ================= */
 
-app.put("/categories/:id", verifyAdmin, async (c) => {
+app.put("/categories/:id", async (c) => {
   try {
-    const db = c.env.DB;
-    const id = c.req.param("id");
-    const body = await c.req.json();
+    const db   = c.env.DB
+    const id   = c.req.param("id")
+    const body = await c.req.json()
 
-    const err = validate(body);
-    if (err) return c.json(failure(err), 400);
+    const err = validate(body)
+    if (err) return c.json(failure(err), 400)
 
-    const slug = normalizeSlug(body.slug);
+    const existing = await db.prepare(
+      "SELECT id FROM categories WHERE id=?"
+    ).bind(id).first()
+    if (!existing) return c.json(failure("Category not found"), 404)
 
-    const exists = await db.prepare(`
-      SELECT id FROM categories
-      WHERE slug=? AND id!=?
-    `).bind(slug, id).first();
+    const slug = body.slug?.trim()
+      ? normalizeSlug(body.slug)
+      : makeSlug(body.name)
 
-    if (exists) return c.json(failure("Slug exists"), 400);
+    const conflict = await db.prepare(
+      "SELECT id FROM categories WHERE slug=? AND id!=?"
+    ).bind(slug, id).first()
+    if (conflict) return c.json(failure("Slug already used"), 400)
+
+    const timestamp = now()
+
+    const row = {
+      id,
+      name:           body.name.trim(),
+      slug,
+      type:           body.type      || "row",
+      category_order: Number(body.order    || 0),
+      priority:       Number(body.priority || 1),
+      show_home:      bool(body.showHome),
+      active:         bool(body.isActive),
+      featured:       bool(body.isFeatured),
+      ai_trending:    bool(body.aiTrending),
+      ai_popular:     bool(body.aiPopular),
+      ai_assign:      bool(body.aiAssign),
+      updated_at:     timestamp
+    }
 
     await db.prepare(`
       UPDATE categories SET
-        name=?,
-        slug=?,
-        type=?,
-
-        category_order=?,
-        priority=?,
-
-        show_home=?,
-        active=?,
-        featured=?,
-
-        ai_trending=?,
-        ai_popular=?,
-        ai_assign=?,
-
+        name=?,slug=?,type=?,
+        category_order=?,priority=?,
+        show_home=?,active=?,featured=?,
+        ai_trending=?,ai_popular=?,ai_assign=?,
         updated_at=?
       WHERE id=?
     `).bind(
-      body.name.trim(),
-      slug,
-      body.type || "row",
+      row.name, row.slug, row.type,
+      row.category_order, row.priority,
+      row.show_home, row.active, row.featured,
+      row.ai_trending, row.ai_popular, row.ai_assign,
+      row.updated_at, id
+    ).run()
 
-      Number(body.order || 0),
-      Number(body.priority || 1),
+    syncToReplicas(c.env, "insert", { ...row, created_at: now() })
 
-      bool(body.showHome),
-      bool(body.isActive),
-      bool(body.isFeatured),
-
-      bool(body.aiTrending),
-      bool(body.aiPopular),
-      bool(body.aiAssign),
-
-      now(),
-      id
-    ).run();
-
-    return c.json(success({ id }));
+    return c.json(success({ id, slug }))
 
   } catch (err) {
-    console.error(err);
-    return c.json(failure("Update failed"), 500);
+    console.error("categories PUT:", err)
+    return c.json(failure(err.message), 500)
   }
-});
+})
 
 /* ================= DELETE ================= */
 
-app.delete("/categories/:id", verifyAdmin, async (c) => {
+app.delete("/categories/:id", async (c) => {
   try {
-    const db = c.env.DB;
-    const id = c.req.param("id");
+    const db = c.env.DB
+    const id = c.req.param("id")
 
-    await db.prepare(`
-      DELETE FROM categories WHERE id=?
-    `).bind(id).run();
+    const existing = await db.prepare(
+      "SELECT id FROM categories WHERE id=?"
+    ).bind(id).first()
+    if (!existing) return c.json(failure("Category not found"), 404)
 
-    return c.json(success({ id }));
+    await db.prepare("DELETE FROM categories WHERE id=?").bind(id).run()
+
+    syncToReplicas(c.env, "delete", { id })
+
+    return c.json(success({ id, deleted: true }))
 
   } catch (err) {
-    console.error(err);
-    return c.json(failure("Delete failed"), 500);
+    console.error("categories DELETE:", err)
+    return c.json(failure(err.message), 500)
   }
-});
+})
 
-/* ================= PUBLIC ================= */
+/* ================= REORDER (BULK) ================= */
 
-app.get("/categories/public", async (c) => {
+app.post("/categories/reorder", async (c) => {
   try {
-    const db = c.env.DB;
+    const db   = c.env.DB
+    const body = await c.req.json()
+    /* body.order = [{ id, order }, ...] */
 
-    const { results } = await db.prepare(`
-      SELECT *
-      FROM categories
-      WHERE active = 1
-      ORDER BY priority ASC, category_order ASC
-    `).all();
+    if (!Array.isArray(body.order)) {
+      return c.json(failure("order array required"), 400)
+    }
 
-    return c.json(results.map(format));
+    for (const item of body.order) {
+      await db.prepare(
+        "UPDATE categories SET category_order=?, updated_at=? WHERE id=?"
+      ).bind(item.order, now(), item.id).run()
+    }
 
-  } catch {
-    return c.json([]);
+    return c.json(success({ updated: body.order.length }))
+
+  } catch (err) {
+    console.error("categories REORDER:", err)
+    return c.json(failure(err.message), 500)
   }
-});
+})
 
-app.get("/categories/home", async (c) => {
+/* ================= TOGGLE ACTIVE ================= */
+
+app.patch("/categories/:id/toggle", async (c) => {
   try {
-    const db = c.env.DB;
+    const db  = c.env.DB
+    const id  = c.req.param("id")
+    const row = await db.prepare(
+      "SELECT id,active FROM categories WHERE id=?"
+    ).bind(id).first()
 
-    const { results } = await db.prepare(`
-      SELECT *
-      FROM categories
-      WHERE active = 1 AND show_home = 1
-      ORDER BY priority ASC, category_order ASC
-    `).all();
+    if (!row) return c.json(failure("Not found"), 404)
 
-    return c.json(results.map(format));
+    const newVal = row.active ? 0 : 1
+    await db.prepare(
+      "UPDATE categories SET active=?, updated_at=? WHERE id=?"
+    ).bind(newVal, now(), id).run()
 
-  } catch {
-    return c.json([]);
+    return c.json(success({ id, active: !!newVal }))
+
+  } catch (err) {
+    return c.json(failure(err.message), 500)
   }
-});
+})
 
-/* ================= FORMAT ================= */
-
-function format(c) {
-  return {
-    id: c.id,
-    name: c.name,
-    slug: c.slug,
-    type: c.type,
-
-    category_order: c.category_order,
-    priority: c.priority,
-
-    show_home: !!c.show_home,
-    active: !!c.active,
-    featured: !!c.featured,
-
-    ai_trending: !!c.ai_trending,
-    ai_popular: !!c.ai_popular,
-    ai_assign: !!c.ai_assign,
-
-    created_at: c.created_at,
-    updated_at: c.updated_at
-  };
-}
-
-export default app;
+export default app
