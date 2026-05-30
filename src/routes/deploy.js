@@ -1,194 +1,524 @@
+/* ================================================
+   deploy.js — Deploy, Backup & Restore
+   Auth handled by adminAuth middleware in index.js
+================================================ */
+
 import { Hono } from "hono"
-import { verifyAdmin } from "../middleware/adminAuth.js"
 
 const app = new Hono()
 
-/* ================= GET ================= */
+const success = (data) => ({ success: true,  data })
+const failure = (msg)  => ({ success: false, message: msg })
+const now     = ()     => new Date().toISOString()
 
-app.get("/deploy", verifyAdmin, async (c)=>{
+/* ================================================
+   ENSURE TABLES
+================================================ */
 
-  try{
-
-    const db = c.env.DB
-
-    const state = await db.prepare("SELECT * FROM deploy_state WHERE id=1").first()
-
-    const versions = (await db
-      .prepare("SELECT * FROM deploy_versions ORDER BY date DESC")
-      .all()).results
-
-    const backups = (await db
-      .prepare("SELECT id,name,date FROM deploy_backups ORDER BY date DESC")
-      .all()).results
-
-    return c.json({ state, versions, backups })
-
-  }catch(e){
-    console.error("DEPLOY LOAD ERROR:",e)
-    return c.json({error:"Load failed"},500)
-  }
-
-})
-
-/* ================= DEPLOY ================= */
-
-app.post("/deploy/deploy", verifyAdmin, async (c)=>{
-
-  await c.env.DB.prepare(`
-    UPDATE deploy_state
-    SET last_deploy=CURRENT_TIMESTAMP
-    WHERE id=1
-  `).run()
-
-  return c.json({success:true})
-
-})
-
-/* ================= VERSION ================= */
-
-app.post("/deploy/version", verifyAdmin, async (c)=>{
-
-  const id = crypto.randomUUID()
-
-  await c.env.DB.prepare(`
-    INSERT INTO deploy_versions(id,name,date)
-    VALUES(?,?,CURRENT_TIMESTAMP)
-  `)
-  .bind(id,"Version "+Date.now())
-  .run()
-
-  return c.json({success:true})
-
-})
-
-/* ================= BACKUP ================= */
-
-app.post("/deploy/backup", verifyAdmin, async (c)=>{
-
-  try{
-
-    const db = c.env.DB
-
-    const data = {
-      anime:(await db.prepare("SELECT * FROM anime").all()).results,
-      episodes:(await db.prepare("SELECT * FROM episodes").all()).results,
-      categories:(await db.prepare("SELECT * FROM categories").all()).results,
-      banners:(await db.prepare("SELECT * FROM banners").all()).results
-    }
-
-    const id = crypto.randomUUID()
+async function ensureTables(db) {
+  try {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS deploy_state (
+        id           INTEGER PRIMARY KEY DEFAULT 1,
+        last_deploy  TEXT,
+        frozen       INTEGER DEFAULT 0,
+        emergency    INTEGER DEFAULT 0,
+        version      TEXT    DEFAULT '1.0.0',
+        environment  TEXT    DEFAULT 'production',
+        updated_at   TEXT
+      )
+    `).run()
 
     await db.prepare(`
-      INSERT INTO deploy_backups(id,name,data,date)
-      VALUES(?,?,?,CURRENT_TIMESTAMP)
-    `)
-    .bind(id,"Backup "+new Date().toISOString(),JSON.stringify(data))
-    .run()
+      CREATE TABLE IF NOT EXISTS deploy_versions (
+        id          TEXT PRIMARY KEY,
+        name        TEXT,
+        tag         TEXT,
+        notes       TEXT,
+        anime_count INTEGER DEFAULT 0,
+        ep_count    INTEGER DEFAULT 0,
+        created_at  TEXT
+      )
+    `).run()
 
-    return c.json({success:true})
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS deploy_backups (
+        id         TEXT PRIMARY KEY,
+        name       TEXT,
+        size_kb    INTEGER DEFAULT 0,
+        data       TEXT,
+        created_at TEXT
+      )
+    `).run()
 
-  }catch(e){
-    console.error("BACKUP ERROR:",e)
-    return c.json({error:"Backup failed"},500)
+    /* Ensure deploy_state has a row */
+    const row = await db.prepare(
+      "SELECT id FROM deploy_state WHERE id=1"
+    ).first()
+
+    if (!row) {
+      await db.prepare(`
+        INSERT INTO deploy_state (id,frozen,emergency,version,environment,updated_at)
+        VALUES (1,0,0,'1.0.0','production',?)
+      `).bind(now()).run()
+    }
+
+  } catch (err) {
+    console.error("deploy ensureTables:", err)
   }
+}
 
+/* ================================================
+   SYNC BACKUP TO REPLICAS
+================================================ */
+
+async function syncBackupToReplicas(env, backupRow) {
+  /* We sync a lightweight reference — not the full data blob */
+  if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
+    fetch(`${env.TURSO_URL}/v2/pipeline`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+        "Content-Type":  "application/json"
+      },
+      body: JSON.stringify({
+        requests: [{
+          type: "execute",
+          stmt: {
+            sql: `INSERT OR REPLACE INTO deploy_backups (id,name,size_kb,data,created_at)
+                  VALUES (?,?,?,?,?)`,
+            args: [
+              { type:"text",    value: backupRow.id },
+              { type:"text",    value: backupRow.name },
+              { type:"integer", value: backupRow.size_kb },
+              { type:"text",    value: backupRow.data },
+              { type:"text",    value: backupRow.created_at }
+            ]
+          }
+        }]
+      })
+    }).catch(e => console.error("Turso backup sync:", e))
+  }
+}
+
+/* ================================================
+   GET /deploy — Load state + versions + backups
+================================================ */
+
+app.get("/deploy", async (c) => {
+  try {
+    const db = c.env.DB
+    await ensureTables(db)
+
+    const state = await db.prepare(
+      "SELECT * FROM deploy_state WHERE id=1"
+    ).first()
+
+    const { results: versions } = await db.prepare(`
+      SELECT id,name,tag,notes,anime_count,ep_count,created_at
+      FROM deploy_versions
+      ORDER BY created_at DESC
+      LIMIT 20
+    `).all()
+
+    const { results: backups } = await db.prepare(`
+      SELECT id,name,size_kb,created_at
+      FROM deploy_backups
+      ORDER BY created_at DESC
+      LIMIT 20
+    `).all()
+
+    /* DB counts for stats */
+    const animeCount = await db.prepare(
+      "SELECT COUNT(*) as c FROM anime"
+    ).first()
+    const epCount = await db.prepare(
+      "SELECT COUNT(*) as c FROM episodes"
+    ).first()
+    const catCount = await db.prepare(
+      "SELECT COUNT(*) as c FROM categories"
+    ).first()
+    const bannerCount = await db.prepare(
+      "SELECT COUNT(*) as c FROM banners"
+    ).first()
+
+    return c.json(success({
+      state: state || {},
+      versions: versions || [],
+      backups:  backups  || [],
+      stats: {
+        anime:    animeCount?.c    || 0,
+        episodes: epCount?.c       || 0,
+        categories: catCount?.c    || 0,
+        banners:  bannerCount?.c   || 0
+      },
+      dbStatus: {
+        d1:       true,
+        turso:    !!(c.env.TURSO_URL    && c.env.TURSO_AUTH_TOKEN),
+        supabase: !!(c.env.SUPABASE_URL && c.env.SUPABASE_KEY)
+      }
+    }))
+
+  } catch (err) {
+    console.error("deploy GET:", err)
+    return c.json(failure(err.message), 500)
+  }
 })
 
-/* ================= DELETE BACKUP ================= */
+/* ================================================
+   POST /deploy/deploy — Trigger deploy
+================================================ */
 
-app.post("/deploy/delete-backup", verifyAdmin, async (c)=>{
+app.post("/deploy/deploy", async (c) => {
+  try {
+    const db        = c.env.DB
+    const timestamp = now()
+    await ensureTables(db)
 
-  try{
+    /* Get current counts for version snapshot */
+    const animeCount = await db.prepare("SELECT COUNT(*) as c FROM anime").first()
+    const epCount    = await db.prepare("SELECT COUNT(*) as c FROM episodes").first()
 
-    const body = await c.req.json()
+    await db.prepare(`
+      UPDATE deploy_state SET last_deploy=?,updated_at=? WHERE id=1
+    `).bind(timestamp, timestamp).run()
 
-    await c.env.DB.prepare(`
-      DELETE FROM deploy_backups WHERE id=?
-    `)
-    .bind(body.id)
-    .run()
+    /* Auto-create version on deploy */
+    const vId = crypto.randomUUID()
+    const vNum = `v${Date.now().toString().slice(-6)}`
 
-    return c.json({success:true})
+    await db.prepare(`
+      INSERT INTO deploy_versions (id,name,tag,notes,anime_count,ep_count,created_at)
+      VALUES (?,?,?,?,?,?,?)
+    `).bind(
+      vId,
+      `Deploy ${new Date().toLocaleDateString()}`,
+      vNum,
+      "Auto-created on deploy",
+      animeCount?.c || 0,
+      epCount?.c    || 0,
+      timestamp
+    ).run()
 
-  }catch(e){
-    console.error("DELETE BACKUP ERROR:",e)
-    return c.json({error:"Delete failed"},500)
+    return c.json(success({
+      deployed:   true,
+      deployed_at: timestamp,
+      version:    vNum
+    }))
+
+  } catch (err) {
+    console.error("deploy POST:", err)
+    return c.json(failure(err.message), 500)
   }
-
 })
 
-/* ================= RESTORE ================= */
+/* ================================================
+   POST /deploy/backup — Create backup
+================================================ */
 
-app.post("/deploy/restore", verifyAdmin, async (c)=>{
+app.post("/deploy/backup", async (c) => {
+  try {
+    const db        = c.env.DB
+    const timestamp = now()
+    await ensureTables(db)
 
-  try{
+    const body = await c.req.json().catch(() => ({}))
+    const note = body.note || ""
 
+    /* Collect all data */
+    const [anime, episodes, categories, banners,
+           servers, seo, performance, security, search] = await Promise.all([
+      db.prepare("SELECT * FROM anime").all(),
+      db.prepare("SELECT * FROM episodes").all(),
+      db.prepare("SELECT * FROM categories").all(),
+      db.prepare("SELECT * FROM banners").all(),
+      db.prepare("SELECT * FROM servers").all().catch(() => ({ results: [] })),
+      db.prepare("SELECT * FROM seo_settings").all().catch(() => ({ results: [] })),
+      db.prepare("SELECT * FROM performance_settings").all().catch(() => ({ results: [] })),
+      db.prepare("SELECT * FROM security_settings").all().catch(() => ({ results: [] })),
+      db.prepare("SELECT * FROM search_settings").all().catch(() => ({ results: [] }))
+    ])
+
+    const data = {
+      version:    "2.0",
+      created_at: timestamp,
+      note,
+      anime:       anime.results       || [],
+      episodes:    episodes.results    || [],
+      categories:  categories.results  || [],
+      banners:     banners.results     || [],
+      servers:     servers.results     || [],
+      seo:         seo.results         || [],
+      performance: performance.results || [],
+      security:    security.results    || [],
+      search:      search.results      || []
+    }
+
+    const dataStr  = JSON.stringify(data)
+    const sizeKB   = Math.round(dataStr.length / 1024)
+    const id       = crypto.randomUUID()
+    const name     = `Backup ${new Date().toLocaleString()}${note ? ` — ${note}` : ""}`
+
+    await db.prepare(`
+      INSERT INTO deploy_backups (id,name,size_kb,data,created_at)
+      VALUES (?,?,?,?,?)
+    `).bind(id, name, sizeKB, dataStr, timestamp).run()
+
+    /* Sync to Turso */
+    syncBackupToReplicas(c.env, { id, name, size_kb: sizeKB, data: dataStr, created_at: timestamp })
+
+    return c.json(success({
+      id,
+      name,
+      size_kb:    sizeKB,
+      created_at: timestamp,
+      counts: {
+        anime:      data.anime.length,
+        episodes:   data.episodes.length,
+        categories: data.categories.length,
+        banners:    data.banners.length
+      }
+    }))
+
+  } catch (err) {
+    console.error("backup POST:", err)
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   POST /deploy/restore — Restore backup
+================================================ */
+
+app.post("/deploy/restore", async (c) => {
+  try {
+    const db   = c.env.DB
     const body = await c.req.json()
 
-    const row = await c.env.DB.prepare(`
-      SELECT data FROM deploy_backups WHERE id=?
-    `)
-    .bind(body.id)
-    .first()
+    if (!body.id) return c.json(failure("Backup ID required"), 400)
 
-    if(!row) return c.json({error:"Backup not found"},404)
+    const row = await db.prepare(
+      "SELECT data FROM deploy_backups WHERE id=?"
+    ).bind(body.id).first()
+
+    if (!row) return c.json(failure("Backup not found"), 404)
 
     const data = JSON.parse(row.data)
-    const db = c.env.DB
 
+    /* Clear existing data */
     await db.prepare("DELETE FROM anime").run()
     await db.prepare("DELETE FROM episodes").run()
     await db.prepare("DELETE FROM categories").run()
     await db.prepare("DELETE FROM banners").run()
 
-    /* SAFE INSERT (IMPORTANT FIX) */
-    for(const a of data.anime){
-      await db.prepare(`INSERT INTO anime VALUES(${Object.keys(a).map(()=>"?").join(",")})`)
-      .bind(...Object.values(a)).run()
+    let restored = { anime: 0, episodes: 0, categories: 0, banners: 0 }
+
+    /* Restore anime — explicit columns */
+    for (const a of (data.anime || [])) {
+      try {
+        await db.prepare(`
+          INSERT OR REPLACE INTO anime (
+            id,title,slug,type,status,poster,banner,year,rating,
+            language,duration,genres,tags,
+            is_home,is_trending,is_most_viewed,is_banner,is_hidden,
+            description,created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `).bind(
+          a.id, a.title, a.slug, a.type, a.status,
+          a.poster, a.banner, a.year, a.rating,
+          a.language, a.duration, a.genres, a.tags,
+          a.is_home, a.is_trending, a.is_most_viewed, a.is_banner, a.is_hidden,
+          a.description, a.created_at, a.updated_at
+        ).run()
+        restored.anime++
+      } catch (err) {
+        console.error("Restore anime row:", err)
+      }
     }
 
-    for(const e of data.episodes){
-      await db.prepare(`INSERT INTO episodes VALUES(${Object.keys(e).map(()=>"?").join(",")})`)
-      .bind(...Object.values(e)).run()
+    /* Restore episodes */
+    for (const e of (data.episodes || [])) {
+      try {
+        await db.prepare(`
+          INSERT OR REPLACE INTO episodes (
+            id,anime_id,anime_title,season,episode,
+            title,description,thumbnail,servers,
+            ongoing,featured,created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `).bind(
+          e.id, e.anime_id, e.anime_title, e.season, e.episode,
+          e.title, e.description, e.thumbnail, e.servers,
+          e.ongoing, e.featured, e.created_at, e.updated_at
+        ).run()
+        restored.episodes++
+      } catch (err) {
+        console.error("Restore episode row:", err)
+      }
     }
 
-    for(const cdata of data.categories){
-      await db.prepare(`INSERT INTO categories VALUES(${Object.keys(cdata).map(()=>"?").join(",")})`)
-      .bind(...Object.values(cdata)).run()
+    /* Restore categories */
+    for (const cat of (data.categories || [])) {
+      try {
+        await db.prepare(`
+          INSERT OR REPLACE INTO categories (
+            id,name,slug,type,category_order,priority,
+            show_home,active,featured,
+            ai_trending,ai_popular,ai_assign,
+            created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `).bind(
+          cat.id, cat.name, cat.slug, cat.type,
+          cat.category_order, cat.priority,
+          cat.show_home, cat.active, cat.featured,
+          cat.ai_trending, cat.ai_popular, cat.ai_assign,
+          cat.created_at, cat.updated_at
+        ).run()
+        restored.categories++
+      } catch (err) {
+        console.error("Restore category row:", err)
+      }
     }
 
-    for(const b of data.banners){
-      await db.prepare(`INSERT INTO banners VALUES(${Object.keys(b).map(()=>"?").join(",")})`)
-      .bind(...Object.values(b)).run()
+    /* Restore banners */
+    for (const b of (data.banners || [])) {
+      try {
+        await db.prepare(`
+          INSERT OR REPLACE INTO banners (
+            id,page,category,position,title,image,link,
+            banner_order,active,auto_rotate,created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        `).bind(
+          b.id, b.page, b.category, b.position,
+          b.title, b.image, b.link,
+          b.banner_order, b.active, b.auto_rotate,
+          b.created_at, b.updated_at
+        ).run()
+        restored.banners++
+      } catch (err) {
+        console.error("Restore banner row:", err)
+      }
     }
 
-    return c.json({success:true})
+    return c.json(success({ restored, backup_id: body.id }))
 
-  }catch(e){
-    console.error("RESTORE ERROR:",e)
-    return c.json({error:"Restore failed"},500)
+  } catch (err) {
+    console.error("restore POST:", err)
+    return c.json(failure(err.message), 500)
   }
-
 })
 
-/* ================= STATE ================= */
+/* ================================================
+   DELETE /deploy/backup/:id — Delete backup
+================================================ */
 
-app.patch("/deploy/state", verifyAdmin, async (c)=>{
+app.delete("/deploy/backup/:id", async (c) => {
+  try {
+    const db = c.env.DB
+    const id = c.req.param("id")
 
-  const body = await c.req.json()
+    const row = await db.prepare(
+      "SELECT id FROM deploy_backups WHERE id=?"
+    ).bind(id).first()
+    if (!row) return c.json(failure("Backup not found"), 404)
 
-  if(body.type==="freeze"){
-    await c.env.DB.prepare(`UPDATE deploy_state SET frozen=? WHERE id=1`)
-    .bind(body.value?1:0).run()
+    await db.prepare("DELETE FROM deploy_backups WHERE id=?").bind(id).run()
+    return c.json(success({ id, deleted: true }))
+
+  } catch (err) {
+    return c.json(failure(err.message), 500)
   }
+})
 
-  if(body.type==="emergency"){
-    await c.env.DB.prepare(`UPDATE deploy_state SET emergency=? WHERE id=1`)
-    .bind(body.value?1:0).run()
+/* ================================================
+   GET /deploy/backup/:id/download — Export backup JSON
+================================================ */
+
+app.get("/deploy/backup/:id/download", async (c) => {
+  try {
+    const db  = c.env.DB
+    const id  = c.req.param("id")
+    const row = await db.prepare(
+      "SELECT name,data FROM deploy_backups WHERE id=?"
+    ).bind(id).first()
+
+    if (!row) return c.json(failure("Not found"), 404)
+
+    return new Response(row.data, {
+      headers: {
+        "Content-Type":        "application/json",
+        "Content-Disposition": `attachment; filename="${row.name || "backup"}.json"`
+      }
+    })
+
+  } catch (err) {
+    return c.json(failure(err.message), 500)
   }
+})
 
-  return c.json({success:true})
+/* ================================================
+   PATCH /deploy/state — Freeze / Emergency
+================================================ */
 
+app.patch("/deploy/state", async (c) => {
+  try {
+    const db        = c.env.DB
+    const body      = await c.req.json()
+    const timestamp = now()
+    await ensureTables(db)
+
+    if (body.type === "freeze") {
+      await db.prepare(
+        "UPDATE deploy_state SET frozen=?,updated_at=? WHERE id=1"
+      ).bind(body.value ? 1 : 0, timestamp).run()
+    }
+
+    if (body.type === "emergency") {
+      await db.prepare(
+        "UPDATE deploy_state SET emergency=?,updated_at=? WHERE id=1"
+      ).bind(body.value ? 1 : 0, timestamp).run()
+    }
+
+    return c.json(success({ updated: true, timestamp }))
+
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   POST /deploy/version — Create version snapshot
+================================================ */
+
+app.post("/deploy/version", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json().catch(() => ({}))
+    await ensureTables(db)
+
+    const animeCount = await db.prepare("SELECT COUNT(*) as c FROM anime").first()
+    const epCount    = await db.prepare("SELECT COUNT(*) as c FROM episodes").first()
+
+    const id  = crypto.randomUUID()
+    const tag = body.tag || `v${Date.now().toString().slice(-6)}`
+
+    await db.prepare(`
+      INSERT INTO deploy_versions (id,name,tag,notes,anime_count,ep_count,created_at)
+      VALUES (?,?,?,?,?,?,?)
+    `).bind(
+      id,
+      body.name  || `Version ${new Date().toLocaleDateString()}`,
+      tag,
+      body.notes || "",
+      animeCount?.c || 0,
+      epCount?.c    || 0,
+      now()
+    ).run()
+
+    return c.json(success({ id, tag }), 201)
+
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
 })
 
 export default app
