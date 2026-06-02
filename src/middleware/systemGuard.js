@@ -1,43 +1,56 @@
+/* ============================================================
+  ANIMEHUNT — SYSTEM GUARD MIDDLEWARE
+  File: src/middleware/systemGuard.js
+
+  Maintenance mode check karta hai.
+  Public routes pe chalta hai.
+  index.js: app.use("/api/*", systemGuard)  ← firewall ke baad
+============================================================ */
+
 export async function systemGuard(c, next) {
+  const path = c.req.path
+
+  // Admin routes bypass — admin kaam karta rahe maintenance mein bhi
+  if (path.startsWith("/api/admin")) return next()
+
+  // Auth routes bypass
+  if (path.startsWith("/api/auth")) return next()
+
+  // Health check bypass
+  if (path === "/api/system/health" || path === "/api/health") return next()
 
   try {
+    const sys = await c.env.DB.prepare(
+      "SELECT systemOn, maintenanceSoft, maintenanceHard FROM system_settings WHERE id=1"
+    ).first()
 
-    const state = await c.env.DB
-      .prepare("SELECT frozen, emergency FROM deploy_state WHERE id=1")
-      .first()
+    if (!sys) return next() // Table nahi hai — allow
 
-    /* 🚫 EMERGENCY BLOCK */
-    if (state?.emergency) {
-      return c.json({ error: "System Offline" }, 503)
+    // Hard maintenance — sab block
+    if (sys.maintenanceHard) {
+      return c.json({
+        success: false,
+        maintenance: true,
+        message: "Site is under maintenance. Please try again later."
+      }, 503)
     }
 
-    /* ✅ CONTINUE REQUEST */
-    await next()
-
-    /* =========================
-       POST RESPONSE MODIFICATIONS
-    ========================= */
-
-    try {
-
-      const settings = await c.env.DB
-        .prepare("SELECT hide_server, hide_stack FROM security_settings WHERE id=1")
-        .first()
-
-      if (settings?.hide_server) {
-        c.res.headers.set("Server", "AnimeHunt")
-      }
-
-      if (settings?.hide_stack) {
-        c.res.headers.delete("x-powered-by")
-      }
-
-    } catch (e) {
-      console.error("STEALTH ERROR:", e)
+    // System off
+    if (sys.systemOn === 0) {
+      return c.json({
+        success: false,
+        offline: true,
+        message: "Site is currently offline."
+      }, 503)
     }
 
-  } catch (err) {
-    console.error("SYSTEM GUARD ERROR:", err)
-    return c.json({ error: "System guard failed" }, 500)
+    // Soft maintenance — allow but add header
+    if (sys.maintenanceSoft) {
+      c.header("X-Maintenance", "true")
+    }
+  } catch {
+    // DB error — allow through
   }
+
+  return next()
 }
