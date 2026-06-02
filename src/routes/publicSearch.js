@@ -1,121 +1,123 @@
+/* ============================================================
+  ANIMEHUNT — PUBLIC SEARCH (FIXED)
+  File: src/routes/publicSearch.js
+  NOTE: Basic search already in public.js (/api/search)
+  This file adds advanced search features.
+
+  GET /api/search/suggestions   - Autocomplete (title prefix)
+  GET /api/search/filter        - Advanced filtered search
+  GET /api/search/genre/:genre  - Browse by genre
+  GET /api/search/az/:letter    - A-Z browse
+============================================================ */
+
 import { Hono } from "hono"
+const app  = new Hono()
+const ok   = d => ({ success: true,  data: d })
+const fail = m => ({ success: false, message: m })
 
-const app = new Hono()
+const COLS = "id, title, slug, poster, type, status, rating, year, language"
 
-/* =========================================
-PUBLIC SEARCH
-========================================= */
+/* Autocomplete suggestions */
+app.get("/api/search/suggestions", async (c) => {
+  const db    = c.env.DB
+  const q     = (c.req.query("q") || "").trim()
+  const limit = Math.min(8, parseInt(c.req.query("limit") || "6"))
 
-app.get("/search", async (c) => {
+  if (q.length < 1) return c.json(ok([]))
 
   try {
+    const { results } = await db.prepare(`
+      SELECT id, title, slug, poster, type
+      FROM anime
+      WHERE title LIKE ? AND is_hidden=0 AND active=1
+      ORDER BY CASE WHEN title LIKE ? THEN 1 ELSE 2 END, rating DESC
+      LIMIT ?
+    `).bind(q + "%", q, limit).all()
+    return c.json(ok(results))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
 
-    const q =
-      (c.req.query("q") || "")
-      .trim()
-      .toLowerCase()
+/* Advanced filter search */
+app.get("/api/search/filter", async (c) => {
+  const db     = c.env.DB
+  const q      = c.req.query
+  const search = (q("q") || "").trim()
+  const type   = q("type")   || ""
+  const status = q("status") || ""
+  const genre  = q("genre")  || ""
+  const year   = q("year")   || ""
+  const sort   = q("sort")   || "rating"
+  const page   = Math.max(1, parseInt(q("page") || "1"))
+  const limit  = Math.min(40, parseInt(q("limit") || "20"))
+  const offset = (page - 1) * limit
 
-    if (!q) {
+  const where = ["is_hidden=0", "active=1"]
+  const binds = []
 
-      return c.json({
-        success: true,
-        data: []
-      })
-    }
+  if (search) { where.push("title LIKE ?"); binds.push("%" + search + "%") }
+  if (type)   { where.push("type=?");       binds.push(type) }
+  if (status) { where.push("status=?");     binds.push(status) }
+  if (genre)  { where.push("genres LIKE ?"); binds.push("%" + genre + "%") }
+  if (year)   { where.push("year=?");       binds.push(parseInt(year)) }
 
-    const limit = Math.min(
-      Number(
-        c.req.query("limit") || 8
-      ),
-      12
-    )
+  const orderMap = { rating: "rating DESC", latest: "created_at DESC", title: "title ASC", year: "year DESC" }
+  const orderBy  = orderMap[sort] || "rating DESC"
+  const whereSQL = where.join(" AND ")
 
-    const search =
-      `%${q}%`
+  try {
+    const countRow = await db.prepare(`SELECT COUNT(*) as total FROM anime WHERE ${whereSQL}`)
+      .bind(...binds).first()
+    const { results } = await db.prepare(
+      `SELECT ${COLS} FROM anime WHERE ${whereSQL} ORDER BY ${orderBy} LIMIT ? OFFSET ?`
+    ).bind(...binds, limit, offset).all()
 
-    const { results } =
-      await c.env.DB.prepare(`
+    return c.json(ok({
+      query: search, page, limit,
+      total: countRow?.total || 0,
+      count: results.length,
+      data:  results
+    }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
 
-        SELECT
-          id,
-          title,
-          slug,
-          poster,
-          genres,
-          type
+/* Browse by genre */
+app.get("/api/search/genre/:genre", async (c) => {
+  const db    = c.env.DB
+  const genre = c.req.param("genre")
+  const page  = Math.max(1, parseInt(c.req.query("page") || "1"))
+  const limit = Math.min(40, parseInt(c.req.query("limit") || "20"))
+  const offset = (page - 1) * limit
 
-        FROM anime
+  try {
+    const countRow = await db.prepare(
+      "SELECT COUNT(*) as total FROM anime WHERE genres LIKE ? AND is_hidden=0 AND active=1"
+    ).bind("%" + genre + "%").first()
+    const { results } = await db.prepare(`
+      SELECT ${COLS} FROM anime
+      WHERE genres LIKE ? AND is_hidden=0 AND active=1
+      ORDER BY rating DESC LIMIT ? OFFSET ?
+    `).bind("%" + genre + "%", limit, offset).all()
+    return c.json(ok({ genre, page, limit, total: countRow?.total || 0, data: results }))
+  } catch (err) { return c.json(fail(err.message), 500) }
+})
 
-        WHERE
-          is_hidden = 0
+/* A-Z browse */
+app.get("/api/search/az/:letter", async (c) => {
+  const db     = c.env.DB
+  const letter = c.req.param("letter").toUpperCase().slice(0, 1)
+  const page   = Math.max(1, parseInt(c.req.query("page") || "1"))
+  const limit  = Math.min(40, parseInt(c.req.query("limit") || "20"))
+  const offset = (page - 1) * limit
 
-        AND (
-
-          LOWER(title)
-          LIKE ?
-
-          OR LOWER(slug)
-          LIKE ?
-
-          OR LOWER(genres)
-          LIKE ?
-
-          OR LOWER(type)
-          LIKE ?
-
-        )
-
-        ORDER BY
-
-          is_trending DESC,
-          updated_at DESC
-
-        LIMIT ?
-
-      `).bind(
-        search,
-        search,
-        search,
-        search,
-        limit
-      ).all()
-
-    const data =
-      results.map(a => ({
-
-        id: a.id,
-
-        title: a.title,
-
-        slug: a.slug,
-
-        poster: a.poster,
-
-        type: a.type,
-
-        genres:
-          JSON.parse(
-            a.genres || "[]"
-          )
-      }))
-
-    return c.json({
-
-      success: true,
-
-      data
-    })
-
-  } catch (err) {
-
-    return c.json({
-
-      success: false,
-
-      message: err.message
-
-    }, 500)
-  }
+  try {
+    const pattern = letter === "#" ? "[^A-Za-z]%" : letter + "%"
+    const { results } = await db.prepare(`
+      SELECT ${COLS} FROM anime
+      WHERE title LIKE ? AND is_hidden=0 AND active=1
+      ORDER BY title ASC LIMIT ? OFFSET ?
+    `).bind(pattern, limit, offset).all()
+    return c.json(ok({ letter, page, limit, data: results }))
+  } catch (err) { return c.json(fail(err.message), 500) }
 })
 
 export default app
