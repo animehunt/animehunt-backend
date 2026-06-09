@@ -46,29 +46,14 @@ async function signJWT(payload, secret, expiresInHours = 24) {
 }
 
 /* ================================================
-   bcrypt verify — using Workers-compatible approach
-   We store bcrypt hash but verify using timingSafeEqual
-   For Cloudflare Workers, we use a simple PBKDF2 approach
+   bcrypt verify — bcryptjs (Workers compatible)
 ================================================ */
 
+import bcrypt from "bcryptjs"
+
 async function verifyPassword(plain, hash) {
-  /* If hash starts with $2a$ it's bcrypt — 
-     Cloudflare Workers don't support bcrypt natively.
-     Use the bcryptjs package or compare via secret env.
-     
-     SIMPLE APPROACH: store hashed password as SHA-256
-     and compare. Switch to bcryptjs if needed. */
   try {
-    const enc = new TextEncoder()
-    const hashBuf = await crypto.subtle.digest("SHA-256", enc.encode(plain))
-    const hashHex = [...new Uint8Array(hashBuf)]
-      .map(b => b.toString(16).padStart(2, "0"))
-      .join("")
-
-    // Compare with stored hash (SHA-256 hex)
-    // To generate: echo -n "yourpassword" | sha256sum
-    return hashHex === hash
-
+    return await bcrypt.compare(plain, hash)
   } catch {
     return false
   }
