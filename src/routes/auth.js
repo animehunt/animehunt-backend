@@ -3,6 +3,9 @@
 ================================================ */
 
 import { Hono } from "hono"
+import bcrypt from "bcryptjs"
+// FIX: adminAuth middleware import kiya taaki /me route secure ho sake
+import { adminAuth } from "../middleware/adminAuth.js"
 
 const auth = new Hono()
 
@@ -48,8 +51,6 @@ async function signJWT(payload, secret, expiresInHours = 24) {
 /* ================================================
    bcrypt verify — bcryptjs (Workers compatible)
 ================================================ */
-
-import bcrypt from "bcryptjs"
 
 async function verifyPassword(plain, hash) {
   try {
@@ -118,7 +119,8 @@ auth.post("/login", async (c) => {
    GET /api/admin/me — verify token
 ================================================ */
 
-auth.get("/me", async (c) => {
+// FIX: Yahan adminAuth middleware pass kiya taaki c.get("admin") work kare
+auth.get("/me", adminAuth, async (c) => {
   const admin = c.get("admin")
   if (!admin) {
     return c.json({ success: false, message: "Not authenticated" }, 401)
