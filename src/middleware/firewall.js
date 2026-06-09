@@ -1,4 +1,18 @@
-import { autoBan } from "../security/autoBan.js"
+async function autoBan(db, ip, reason) {
+  try {
+    const existing = await db
+      .prepare("SELECT ip FROM blocked_ips WHERE ip = ? LIMIT 1")
+      .bind(ip).first().catch(() => null)
+
+    if (!existing) {
+      await db.prepare(
+        "INSERT INTO blocked_ips (ip, reason, created_at) VALUES (?, ?, datetime('now'))"
+      ).bind(ip, reason).run()
+    }
+  } catch (err) {
+    console.error("autoBan error:", err)
+  }
+}
 
 export async function firewall(c, next) {
 
