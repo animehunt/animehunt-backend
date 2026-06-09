@@ -2,6 +2,9 @@
 🎬 ANIMEHUNT PLAYER ENGINE (FULL PRODUCTION - FIXED)
 ========================================================= */
 
+// Alias for index.js scheduled cron
+export const runPlayerAI = runPlayerEngine
+
 export async function runPlayerEngine(env, request){
 
   const db = env.DB
