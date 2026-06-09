@@ -15,7 +15,7 @@ app.use("*", cors({
 
 app.options("*", (c) => c.text("", 200))
 
-/* ================= DB CHECK (MUST BE FIRST) ================= */
+/* ================= DB CHECK ================= */
 
 app.use("*", async (c, next) => {
   if (!c.env.DB) {
@@ -25,8 +25,6 @@ app.use("*", async (c, next) => {
 })
 
 /* ================= DB SYNC MIDDLEWARE ================= */
-// Ye middleware c.get("db") available karta hai har route mein
-// getDB() automatically D1 → Turso → Supabase sync karta hai
 
 import { dbSync } from "./middleware/dbSync.js"
 app.use("*", dbSync)
@@ -62,9 +60,7 @@ import adminServers    from "./routes/adminServers.js"
 import player          from "./routes/player.js"
 import downloads       from "./routes/downloads.js"
 import ads             from "./routes/ads.js"
-import adsAnalytics    from "./routes/adsAnalytics.js"
-import analyticsTrack  from "./routes/analyticsTrack.js"
-import analyticsAdmin  from "./routes/analyticsAdmin.js"
+import analytics       from "./routes/analytics.js"
 import searchAdmin     from "./routes/searchAdmin.js"
 import publicSearch    from "./routes/publicSearch.js"
 import seoAdmin        from "./routes/seoAdmin.js"
@@ -107,7 +103,6 @@ app.route("/api", downloads)
 app.route("/api", ads)
 app.route("/api", publicSearch)
 app.route("/api", publicSEO)
-app.route("/api", analyticsTrack)
 app.route("/api", recommendations)
 app.route("/api", robots)
 app.route("/api", sitemap)
@@ -134,8 +129,7 @@ adminRoutes.route("/", banners)
 adminRoutes.route("/", adminServers)
 adminRoutes.route("/", downloads)
 adminRoutes.route("/", ads)
-adminRoutes.route("/", adsAnalytics)
-adminRoutes.route("/", analyticsAdmin)
+adminRoutes.route("/", analytics)
 adminRoutes.route("/", homepage)
 adminRoutes.route("/", footer)
 adminRoutes.route("/", sidebar)
@@ -147,7 +141,7 @@ adminRoutes.route("/", system)
 adminRoutes.route("/", ai)
 adminRoutes.route("/", deploy)
 adminRoutes.route("/", upload)
-adminRoutes.route("/", dbRestore)   // ← DB restore & status endpoints
+adminRoutes.route("/", dbRestore)
 
 app.route("/api/admin", adminRoutes)
 
