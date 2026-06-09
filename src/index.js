@@ -55,7 +55,7 @@ import adminServers    from "./routes/adminServers.js"
 import player          from "./routes/player.js"
 import downloads       from "./routes/downloads.js"
 import ads             from "./routes/ads.js"
-import adsAnalytics    from "./routes/adsAnalytics.js"
+import analytics       from "./routes/analytics.js"
 import analyticsTrack  from "./routes/analyticsTrack.js"
 import analyticsAdmin  from "./routes/analyticsAdmin.js"
 import searchAdmin     from "./routes/searchAdmin.js"
@@ -78,7 +78,7 @@ import trending        from "./routes/trending.js"
 
 /* ================= AI ENGINES ================= */
 
-import { runSystemAI } from "./ai/engine.js"
+import { runPlayerAI } from "./ai/playerEngine.js"
 import { runFooterAI } from "./ai/footerAI.js"
 
 /* ================= ROOT ================= */
@@ -129,7 +129,7 @@ adminRoutes.route("/", banners)
 adminRoutes.route("/", adminServers)
 adminRoutes.route("/", downloads)
 adminRoutes.route("/", ads)
-adminRoutes.route("/", adsAnalytics)
+adminRoutes.route("/", analytics)
 adminRoutes.route("/", analyticsAdmin)
 adminRoutes.route("/", homepage)
 adminRoutes.route("/", footer)
@@ -160,7 +160,7 @@ export default {
   fetch: app.fetch,
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runSystemAI(env))
+    ctx.waitUntil(runPlayerAI(env))
     ctx.waitUntil(runFooterAI(env))
   }
 }
