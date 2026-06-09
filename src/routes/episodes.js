@@ -60,6 +60,7 @@ async function syncToReplicas(env, action, data) {
   }
 
   return Promise.all(promises)   // ✅ FIX: was missing return — callers using waitUntil() got undefined instead of a Promise, causing sync to be killed early on CF Workers
+}
 
 function buildTursoPayload(action, data) {
   if (action === "insert") {
