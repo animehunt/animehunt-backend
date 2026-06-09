@@ -24,6 +24,13 @@ app.use("*", async (c, next) => {
   await next()
 })
 
+/* ================= DB SYNC MIDDLEWARE ================= */
+// Ye middleware c.get("db") available karta hai har route mein
+// getDB() automatically D1 → Turso → Supabase sync karta hai
+
+import { dbSync } from "./middleware/dbSync.js"
+app.use("*", dbSync)
+
 /* ================= LOGGER ================= */
 
 app.use("*", async (c, next) => {
@@ -55,7 +62,7 @@ import adminServers    from "./routes/adminServers.js"
 import player          from "./routes/player.js"
 import downloads       from "./routes/downloads.js"
 import ads             from "./routes/ads.js"
-import analytics       from "./routes/analytics.js"
+import adsAnalytics    from "./routes/adsAnalytics.js"
 import analyticsTrack  from "./routes/analyticsTrack.js"
 import analyticsAdmin  from "./routes/analyticsAdmin.js"
 import searchAdmin     from "./routes/searchAdmin.js"
@@ -75,6 +82,7 @@ import recommendations from "./routes/recommendations.js"
 import robots          from "./routes/robots.js"
 import sitemap         from "./routes/sitemap.js"
 import trending        from "./routes/trending.js"
+import dbRestore       from "./routes/dbRestore.js"
 
 /* ================= AI ENGINES ================= */
 
@@ -91,7 +99,6 @@ app.get("/", (c) => c.json({
 
 /* ===================================================== */
 /* ================= PUBLIC ROUTES ==================== */
-/* (No auth required)                                    */
 /* ===================================================== */
 
 app.route("/api", publicAnime)
@@ -108,14 +115,12 @@ app.route("/api", trending)
 
 /* ===================================================== */
 /* ================= AUTH ROUTE ======================= */
-/* (Login — no adminAuth needed here)                    */
 /* ===================================================== */
 
 app.route("/api/admin", auth)
 
 /* ===================================================== */
 /* ================= ADMIN ROUTES ===================== */
-/* (All protected by adminAuth middleware)               */
 /* ===================================================== */
 
 const adminRoutes = new Hono()
@@ -129,7 +134,7 @@ adminRoutes.route("/", banners)
 adminRoutes.route("/", adminServers)
 adminRoutes.route("/", downloads)
 adminRoutes.route("/", ads)
-adminRoutes.route("/", analytics)
+adminRoutes.route("/", adsAnalytics)
 adminRoutes.route("/", analyticsAdmin)
 adminRoutes.route("/", homepage)
 adminRoutes.route("/", footer)
@@ -142,6 +147,7 @@ adminRoutes.route("/", system)
 adminRoutes.route("/", ai)
 adminRoutes.route("/", deploy)
 adminRoutes.route("/", upload)
+adminRoutes.route("/", dbRestore)   // ← DB restore & status endpoints
 
 app.route("/api/admin", adminRoutes)
 
