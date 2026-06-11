@@ -250,8 +250,8 @@ app.post("/dashboard/sync-check", async (c) => {
 app.post("/dashboard/ai-scan", async (c) => {
   try {
     /* Import and run the AI engine */
-    const { runSystemAI } = await import("../ai/engine.js")
-    await runSystemAI(c.env)
+    const { runPlayerAI } = await import("../ai/playerEngine.js")
+    await runPlayerAI(c.env)
 
     return c.json(success({
       status:  "completed",
