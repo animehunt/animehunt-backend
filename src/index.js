@@ -120,7 +120,7 @@ app.route("/api/auth", auth)
 /* ===================================================== */
 
 const adminRoutes = new Hono()
-adminRoutes.use("*", adminAuth)
+
 
 adminRoutes.route("/", dashboard)
 adminRoutes.route("/", anime)
