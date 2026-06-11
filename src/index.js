@@ -92,7 +92,7 @@ import { runFooterAI } from "./ai/footerAI.js"
 app.get("/", (c) => c.json({
   success: true,
   message: "AnimeHunt Backend Running 🚀",
-  version: "2.0.0",
+  version: "2.0.1",
   timestamp: new Date().toISOString()
 }))
 
