@@ -1,142 +1,159 @@
-/* ================================================
-   auth.js — Admin Login + Token Refresh
-================================================ */
+import { Router } from "itty-router";
+import { SignJWT, jwtVerify } from "jose";
 
-import { Hono } from "hono"
-import bcrypt from "bcryptjs"
-// FIX: adminAuth middleware import kiya taaki /me route secure ho sake
-import { adminAuth } from "../middleware/adminAuth.js"
+const router = Router({ base: "/api/admin" });
 
-const auth = new Hono()
+// ──────────────────────────────────────────────
+// Helper: SHA-256 hex (Web Crypto – works in CF Workers)
+// ──────────────────────────────────────────────
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text)
+  );
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
-/* ================================================
-   JWT Sign (HS256) — WebCrypto (Works in Workers)
-================================================ */
-
-async function signJWT(payload, secret, expiresInHours = 24) {
-  const enc = new TextEncoder()
-
-  const header  = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }))
-    .replace(/=/g,"").replace(/\+/g,"-").replace(/\//g,"_")
-
-  const now = Math.floor(Date.now() / 1000)
-  const fullPayload = {
-    ...payload,
-    iat: now,
-    exp: now + (expiresInHours * 3600)
-  }
-
-  const payloadB64 = btoa(JSON.stringify(fullPayload))
-    .replace(/=/g,"").replace(/\+/g,"-").replace(/\//g,"_")
-
-  const keyData = enc.encode(secret)
+// ──────────────────────────────────────────────
+// Helper: sign JWT
+// ──────────────────────────────────────────────
+async function signToken(username, secret) {
   const key = await crypto.subtle.importKey(
-    "raw", keyData,
+    "raw",
+    new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"]
-  )
+  );
 
-  const sigBuf = await crypto.subtle.sign(
-    "HMAC", key,
-    enc.encode(`${header}.${payloadB64}`)
-  )
-
-  const sig = btoa(String.fromCharCode(...new Uint8Array(sigBuf)))
-    .replace(/=/g,"").replace(/\+/g,"-").replace(/\//g,"_")
-
-  return `${header}.${payloadB64}.${sig}`
+  return new SignJWT({ username, role: "admin" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("7d")
+    .sign(key);
 }
 
-/* ================================================
-   bcrypt verify — bcryptjs (Workers compatible)
-================================================ */
+// ──────────────────────────────────────────────
+// Helper: verify JWT (exported so adminAuth.js can reuse)
+// ──────────────────────────────────────────────
+export async function verifyToken(token, secret) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
 
-async function verifyPassword(plain, hash) {
+  const { payload } = await jwtVerify(token, key);
+  return payload; // { username, role, iat, exp }
+}
+
+// ──────────────────────────────────────────────
+// POST /api/admin/login
+// ──────────────────────────────────────────────
+router.post("/login", async (req, env) => {
+  let body;
   try {
-    return await bcrypt.compare(plain, hash)
+    body = await req.json();
   } catch {
-    return false
+    return Response.json(
+      { success: false, message: "Invalid JSON body" },
+      { status: 400 }
+    );
   }
-}
 
-/* ================================================
-   POST /api/admin/login
-================================================ */
+  const { username, password } = body ?? {};
 
-auth.post("/login", async (c) => {
+  if (!username || !password) {
+    return Response.json(
+      { success: false, message: "Username aur password dono required hain" },
+      { status: 400 }
+    );
+  }
+
+  // ── 1. Username check ──
+  if (username !== env.ADMIN_USERNAME) {
+    return Response.json(
+      { success: false, message: "Invalid credentials" },
+      { status: 401 }
+    );
+  }
+
+  // ── 2. Password check (SHA-256) ──
+  const hash = await sha256Hex(password);
+  if (hash !== env.ADMIN_PASSWORD_HASH) {
+    return Response.json(
+      { success: false, message: "Invalid credentials" },
+      { status: 401 }
+    );
+  }
+
+  // ── 3. Generate JWT ──
+  const token = await signToken(username, env.JWT_SECRET);
+
+  // ── 4. Optional: log login to D1 ──
   try {
-    const body = await c.req.json()
-    const { username, password } = body
-
-    if (!username || !password) {
-      return c.json({ success: false, message: "Username and password required" }, 400)
-    }
-
-    const ADMIN_USERNAME      = c.env.ADMIN_USERNAME
-    const ADMIN_PASSWORD_HASH = c.env.ADMIN_PASSWORD_HASH
-    const JWT_SECRET          = c.env.JWT_SECRET
-
-    if (!ADMIN_USERNAME || !ADMIN_PASSWORD_HASH || !JWT_SECRET) {
-      return c.json({ success: false, message: "Server not configured" }, 500)
-    }
-
-    /* Check username */
-    if (username.trim() !== ADMIN_USERNAME) {
-      return c.json({ success: false, message: "Invalid credentials" }, 401)
-    }
-
-    /* Check password */
-    const valid = await verifyPassword(password, ADMIN_PASSWORD_HASH)
-    if (!valid) {
-      return c.json({ success: false, message: "Invalid credentials" }, 401)
-    }
-
-    /* Generate JWT */
-    const token = await signJWT(
-      { username: ADMIN_USERNAME, role: "admin" },
-      JWT_SECRET,
-      24  // 24 hours
+    await env.DB.prepare(
+      "INSERT INTO admin_login_logs (username, logged_in_at) VALUES (?, ?)"
     )
-
-    return c.json({
-      success: true,
-      data: {
-        token,
-        username: ADMIN_USERNAME,
-        role: "admin",
-        expiresIn: "24h"
-      }
-    })
-
-  } catch (err) {
-    console.error("Login error:", err)
-    return c.json({ success: false, message: "Login failed" }, 500)
+      .bind(username, new Date().toISOString())
+      .run();
+  } catch {
+    // Table missing ho toh ignore karo – login block na ho
   }
-})
 
-/* ================================================
-   GET /api/admin/me — verify token
-================================================ */
-
-// FIX: Yahan adminAuth middleware pass kiya taaki c.get("admin") work kare
-auth.get("/me", adminAuth, async (c) => {
-  const admin = c.get("admin")
-  if (!admin) {
-    return c.json({ success: false, message: "Not authenticated" }, 401)
-  }
-  return c.json({
+  return Response.json({
     success: true,
-    data: { username: admin.username, role: admin.role }
-  })
-})
+    message: "Login successful",
+    data: {
+      token,
+      username,
+    },
+  });
+});
 
-/* ================================================
-   POST /api/admin/logout — client-side token drop
-================================================ */
+// ──────────────────────────────────────────────
+// POST /api/admin/logout  (client token delete karta hai,
+//                          server sirf confirm karta hai)
+// ──────────────────────────────────────────────
+router.post("/logout", async () => {
+  return Response.json({ success: true, message: "Logged out" });
+});
 
-auth.post("/logout", (c) => {
-  return c.json({ success: true, message: "Logged out" })
-})
+// ──────────────────────────────────────────────
+// GET /api/admin/me  – token verify करके user info दो
+// ──────────────────────────────────────────────
+router.get("/me", async (req, env) => {
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : null;
 
-export default auth
+  if (!token) {
+    return Response.json(
+      { success: false, message: "Token missing" },
+      { status: 401 }
+    );
+  }
+
+  try {
+    const payload = await verifyToken(token, env.JWT_SECRET);
+    return Response.json({
+      success: true,
+      data: { username: payload.username, role: payload.role },
+    });
+  } catch {
+    return Response.json(
+      { success: false, message: "Invalid or expired token" },
+      { status: 401 }
+    );
+  }
+});
+
+// ──────────────────────────────────────────────
+// Export
+// ──────────────────────────────────────────────
+export default router;
