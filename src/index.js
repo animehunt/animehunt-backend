@@ -42,14 +42,14 @@ app.use("*", async (c, next) => {
 
 import { firewall }    from "./middleware/firewall.js"
 import { systemGuard } from "./middleware/systemGuard.js"
-import { adminAuth }   from "./middleware/adminAuth.js"
+import 
 
 app.use("*", firewall)
 app.use("*", systemGuard)
 
 /* ================= ROUTE IMPORTS ================= */
 
-import auth            from "./routes/auth.js"
+
 import dashboard       from "./routes/dashboard.js"
 import anime           from "./routes/anime.js"
 import publicAnime     from "./routes/public.js"
