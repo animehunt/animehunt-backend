@@ -8,9 +8,11 @@ const app = new Hono()
 /* ================= CORS ================= */
 
 app.use("*", cors({
-  origin: "*",
+  origin: ["https://animehunt.in", "https://www.animehunt.in", "https://admin.animehunt.in"],
   allowHeaders: ["Content-Type", "Authorization"],
-  allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+  allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  credentials: true,
+  maxAge: 86400
 }))
 
 app.options("*", (c) => c.text("", 200))
@@ -35,7 +37,7 @@ app.use("*", async (c, next) => {
   const start = Date.now()
   await next()
   const ms = Date.now() - start
-  console.log(`${c.req.method} ${c.req.path} - ${ms}ms`)
+  console.log(`[${new Date().toISOString()}] ${c.req.method} ${c.req.path} ${c.res.status} - ${ms}ms`)
 })
 
 /* ================= MIDDLEWARE ================= */
@@ -90,8 +92,26 @@ import { runFooterAI } from "./ai/footerAI.js"
 app.get("/", (c) => c.json({
   success: true,
   message: "AnimeHunt Backend Running 🚀",
-  version: "2.0.0"
+  version: "2.0.0",
+  timestamp: new Date().toISOString()
 }))
+
+/* ================= HEALTH CHECK ================= */
+
+app.get("/health", async (c) => {
+  let dbOk = false
+  try {
+    await c.env.DB.prepare("SELECT 1").run()
+    dbOk = true
+  } catch {}
+
+  return c.json({
+    success: true,
+    status: "ok",
+    db: dbOk ? "connected" : "error",
+    timestamp: new Date().toISOString()
+  }, dbOk ? 200 : 503)
+})
 
 /* ===================================================== */
 /* ================= PUBLIC ROUTES ==================== */
@@ -148,8 +168,12 @@ app.route("/api/admin", adminRoutes)
 /* ================= ERROR HANDLER ================= */
 
 app.onError((err, c) => {
-  console.error("🔥 GLOBAL ERROR:", err)
-  return c.json({ success: false, message: err.message || "Internal Server Error" }, 500)
+  console.error(`🔥 GLOBAL ERROR [${c.req.method} ${c.req.path}]:`, err)
+  return c.json({
+    success: false,
+    message: err.message || "Internal Server Error",
+    ...(c.env.ENVIRONMENT === "development" && { stack: err.stack })
+  }, err.status ?? 500)
 })
 
 app.notFound((c) => c.json({ success: false, message: "Route Not Found" }, 404))
@@ -160,6 +184,7 @@ export default {
   fetch: app.fetch,
 
   async scheduled(event, env, ctx) {
+    console.log(`⏰ Cron triggered: ${event.cron} at ${new Date().toISOString()}`)
     ctx.waitUntil(runPlayerAI(env))
     ctx.waitUntil(runFooterAI(env))
   }
