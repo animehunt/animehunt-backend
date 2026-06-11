@@ -8,7 +8,7 @@ const app = new Hono()
 /* ================= CORS ================= */
 
 app.use("*", cors({
-  origin: ["https://animehunt.in", "https://www.animehunt.in", "https://admin.animehunt.in"],
+  origin: ["https://animehunt.in", "https://www.animehunt.in", "https://admin.animehunt.in", "https://animehunt-admin.pages.dev"],
   allowHeaders: ["Content-Type", "Authorization"],
   allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   credentials: true,
