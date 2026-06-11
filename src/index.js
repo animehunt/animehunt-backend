@@ -15,40 +15,7 @@ app.use("*", cors({
 
 app.options("*", (c) => c.text("", 200))
 
-/* ================= DB CHECK ================= */
-
-app.use("*", async (c, next) => {
-  if (!c.env.DB) {
-    return c.json({ success: false, message: "DB NOT CONFIGURED" }, 500)
-  }
-  await next()
-})
-
-/* ================= DB SYNC MIDDLEWARE ================= */
-
-import { dbSync } from "./middleware/dbSync.js"
-app.use("*", dbSync)
-
-/* ================= LOGGER ================= */
-
-app.use("*", async (c, next) => {
-  const start = Date.now()
-  await next()
-  const ms = Date.now() - start
-  console.log(`${c.req.method} ${c.req.path} - ${ms}ms`)
-})
-
-/* ================= MIDDLEWARE ================= */
-
-import { firewall }    from "./middleware/firewall.js"
-import { systemGuard } from "./middleware/systemGuard.js"
-import 
-
-app.use("*", firewall)
-app.use("*", systemGuard)
-
 /* ================= ROUTE IMPORTS ================= */
-
 
 import dashboard       from "./routes/dashboard.js"
 import anime           from "./routes/anime.js"
@@ -85,11 +52,42 @@ import dbRestore       from "./routes/dbRestore.js"
 import { runPlayerAI } from "./ai/playerEngine.js"
 import { runFooterAI } from "./ai/footerAI.js"
 
+/* ================= DB CHECK ================= */
+
+app.use("*", async (c, next) => {
+  if (!c.env.DB) {
+    return c.json({ success: false, message: "DB NOT CONFIGURED" }, 500)
+  }
+  await next()
+})
+
+/* ================= DB SYNC MIDDLEWARE ================= */
+
+import { dbSync } from "./middleware/dbSync.js"
+app.use("*", dbSync)
+
+/* ================= LOGGER ================= */
+
+app.use("*", async (c, next) => {
+  const start = Date.now()
+  await next()
+  const ms = Date.now() - start
+  console.log(`${c.req.method} ${c.req.path} - ${ms}ms`)
+})
+
+/* ================= MIDDLEWARE ================= */
+
+import { firewall }    from "./middleware/firewall.js"
+import { systemGuard } from "./middleware/systemGuard.js"
+
+app.use("*", firewall)
+app.use("*", systemGuard)
+
 /* ================= ROOT ================= */
 
 app.get("/", (c) => c.json({
   success: true,
-  message: "AnimeHunt Backend Running 🚀",
+  message: "AnimeHunt Backend Running (No Login Mode) 🚀",
   version: "2.0.0"
 }))
 
@@ -109,18 +107,17 @@ app.route("/api", sitemap)
 app.route("/api", trending)
 
 /* ===================================================== */
-/* ================= AUTH ROUTE (FIXED ✅) ============= */
-/* ===================================================== */
-
-// Is line ko /api/admin se badal kar /api/auth kar diya hai
-app.route("/api/auth", auth)
-
-/* ===================================================== */
 /* ================= ADMIN ROUTES ===================== */
 /* ===================================================== */
 
 const adminRoutes = new Hono()
 
+// ✅ BYPASS MIDDLEWARE: Purana adminAuth delete hone ke baad ye automatically
+// dummy user data inject kar dega taaki dashboard ke baaki pages crash na ho.
+adminRoutes.use("*", async (c, next) => {
+  c.set("admin", { username: "anime_moderator_007", role: "admin" })
+  await next()
+})
 
 adminRoutes.route("/", dashboard)
 adminRoutes.route("/", anime)
