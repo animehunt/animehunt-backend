@@ -3,13 +3,9 @@
 ================================================ */
 
 import { Hono } from "hono"
-import { cors } from "hono/cors"
 import { adminAuth } from "../middleware/adminAuth.js"
 
 const auth = new Hono()
-
-// ✅ FIX: Frontend aur Backend alag domains par hone se CORS error na aaye
-auth.use("*", cors())
 
 /* ================================================
    JWT Sign (HS256) — WebCrypto (Works in Workers)
@@ -52,7 +48,7 @@ async function signJWT(payload, secret, expiresInHours = 24) {
 
 /* ================================================
    SHA-256 Verification — (Workers Compatible & Ultra Fast)
-   ✅ FIX: Bcryptjs ko hata kar WebCrypto use kiya taaki CPU Timeout crash na ho
+   ✅ FIXED: Bcryptjs ke badle WebCrypto jo aapke wrangler.toml se match karega
 ================================================ */
 
 async function verifyPassword(plain, hexHash) {
