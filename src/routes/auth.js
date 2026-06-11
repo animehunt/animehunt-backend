@@ -1,13 +1,15 @@
 /* ================================================
-   auth.js — Admin Login + Token Refresh
+   auth.js — Admin Login + Token Refresh (FIXED)
 ================================================ */
 
 import { Hono } from "hono"
-import bcrypt from "bcryptjs"
-// FIX: adminAuth middleware import kiya taaki /me route secure ho sake
+import { cors } from "hono/cors"
 import { adminAuth } from "../middleware/adminAuth.js"
 
 const auth = new Hono()
+
+// ✅ FIX: Cross-origin authentication enable karne ke liye CORS apply kiya
+auth.use("*", cors())
 
 /* ================================================
    JWT Sign (HS256) — WebCrypto (Works in Workers)
@@ -49,12 +51,18 @@ async function signJWT(payload, secret, expiresInHours = 24) {
 }
 
 /* ================================================
-   bcrypt verify — bcryptjs (Workers compatible)
+   SHA-256 Verification — (Workers Compatible & Ultra Fast)
+   ✅ FIX: Bcryptjs ko hata kar WebCrypto use kiya taaki CPU Timeout crash na ho
 ================================================ */
 
-async function verifyPassword(plain, hash) {
+async function verifyPassword(plain, hexHash) {
   try {
-    return await bcrypt.compare(plain, hash)
+    const enc = new TextEncoder()
+    const data = enc.encode(plain)
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data)
+    const hashArray = Array.from(new Uint8Array(hashBuffer))
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+    return hashHex === hexHash
   } catch {
     return false
   }
@@ -119,7 +127,6 @@ auth.post("/login", async (c) => {
    GET /api/admin/me — verify token
 ================================================ */
 
-// FIX: Yahan adminAuth middleware pass kiya taaki c.get("admin") work kare
 auth.get("/me", adminAuth, async (c) => {
   const admin = c.get("admin")
   if (!admin) {
