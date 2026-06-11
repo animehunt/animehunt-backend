@@ -156,10 +156,10 @@ async function syncToReplicas(env, row) {
               row.geoBlock, row.ageLock, row.schedule, row.shadow,
               row.autoBackup, row.autoBackupHours, row.debugMode, row.apiLogs,
               row.rateLimitGlobal, row.cdnEnabled, row.imageProxy, row.updated_at
-            ].map(v => ({
-              type: typeof v === "number" ? "integer" : "text",
-              value: String(v ?? "")
-            }))
+            ].map(v => {
+              const isNum = typeof v === "number" || (typeof v === "string" && v !== "" && !isNaN(Number(v)) && !v.includes("-"))
+              return { type: isNum ? "integer" : "text", value: String(v ?? "") }
+            })
           }
         }]
       })
