@@ -48,7 +48,7 @@ async function signJWT(payload, secret, expiresInHours = 24) {
 
 /* ================================================
    SHA-256 Verification — (Workers Compatible & Ultra Fast)
-   ✅ FIXED: Bcryptjs ke badle WebCrypto jo aapke wrangler.toml se match karega
+   ✅ FIXED: Bcryptjs hata kar native SHA-256 laga diya hai
 ================================================ */
 
 async function verifyPassword(plain, hexHash) {
