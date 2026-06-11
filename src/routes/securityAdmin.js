@@ -175,7 +175,10 @@ async function syncToReplicas(env, row) {
     row.vpn_block, row.tor_block,
     row.ai_auto_ban, row.ai_threat_detect, row.ai_anomaly, row.ai_ban_threshold,
     row.hsts, row.csp, row.xframe, row.nosniff, row.updated_at
-  ].map(v => ({ type: typeof v === "number" ? "integer" : "text", value: String(v ?? "") }))
+  ].map(v => {
+    const isNum = typeof v === "number" || (typeof v === "string" && v !== "" && !isNaN(Number(v)) && !v.includes("-"))
+    return { type: isNum ? "integer" : "text", value: String(v ?? "") }
+  })
 
   if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
     fetch(`${env.TURSO_URL}/v2/pipeline`, {
@@ -395,9 +398,9 @@ app.get("/security/score", async (c) => {
 
     let score = 0
     const tips = []
-    checks.forEach(c => {
-      if (row[c.key]) score += c.pts
-      else tips.push(c.tip)
+    checks.forEach(chk => {
+      if (row[chk.key]) score += chk.pts
+      else tips.push(chk.tip)
     })
     score = Math.min(100, score)
 
