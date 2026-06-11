@@ -1,94 +1,58 @@
-/* ================================================
-   adminAuth.js — JWT Middleware for Admin Routes
-   All /api/admin/* routes (except /login) use this
-================================================ */
+import { verifyToken } from "../routes/auth.js";
 
-export async function adminAuth(c, next) {
+// ──────────────────────────────────────────────
+// adminAuth middleware
+// Har protected route ke pehle lagao
+// Usage: router.get("/api/admin/something", adminAuth, handler)
+// ──────────────────────────────────────────────
+export async function adminAuth(req, env) {
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : null;
+
+  // ── Cookie se bhi check karo (optional fallback) ──
+  const cookieToken = getCookieToken(req);
+  const finalToken = token || cookieToken;
+
+  if (!finalToken) {
+    return Response.json(
+      { success: false, message: "Unauthorized: Token missing" },
+      { status: 401 }
+    );
+  }
+
   try {
-    const authHeader = c.req.header("Authorization")
+    const payload = await verifyToken(finalToken, env.JWT_SECRET);
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return c.json({ success: false, message: "No token provided" }, 401)
-    }
+    // Payload ko request mein attach karo
+    req.admin = {
+      username: payload.username,
+      role: payload.role,
+    };
 
-    const token = authHeader.replace("Bearer ", "").trim()
-
-    if (!token) {
-      return c.json({ success: false, message: "Empty token" }, 401)
-    }
-
-    const secret = c.env.JWT_SECRET
-    if (!secret) {
-      return c.json({ success: false, message: "JWT_SECRET not configured" }, 500)
-    }
-
-    /* ---- Verify JWT ---- */
-    const payload = await verifyJWT(token, secret)
-
-    if (!payload) {
-      return c.json({ success: false, message: "Invalid or expired token" }, 401)
-    }
-
-    /* ---- Attach admin info to context ---- */
-    c.set("admin", payload)
-
-    await next()
+    // undefined return = middleware pass, next handler chalega
+    return undefined;
 
   } catch (err) {
-    console.error("adminAuth error:", err)
-    return c.json({ success: false, message: "Auth failed" }, 401)
+    const expired = err?.code === "ERR_JWT_EXPIRED";
+    return Response.json(
+      {
+        success: false,
+        message: expired
+          ? "Session expire ho gaya, dobara login karein"
+          : "Unauthorized: Invalid token",
+      },
+      { status: 401 }
+    );
   }
 }
 
-/* ================================================
-   Simple JWT verify (HS256)
-   Works in Cloudflare Workers (WebCrypto)
-================================================ */
-
-async function verifyJWT(token, secret) {
-  try {
-    const parts = token.split(".")
-    if (parts.length !== 3) return null
-
-    const [headerB64, payloadB64, sigB64] = parts
-
-    /* Verify signature */
-    const enc = new TextEncoder()
-    const keyData = enc.encode(secret)
-
-    const key = await crypto.subtle.importKey(
-      "raw", keyData,
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["verify"]
-    )
-
-    const sigBuf = base64UrlDecode(sigB64)
-    const data   = enc.encode(`${headerB64}.${payloadB64}`)
-
-    const valid = await crypto.subtle.verify("HMAC", key, sigBuf, data)
-    if (!valid) return null
-
-    /* Parse payload */
-    const payload = JSON.parse(
-      new TextDecoder().decode(base64UrlDecode(payloadB64))
-    )
-
-    /* Check expiry */
-    if (payload.exp && Date.now() / 1000 > payload.exp) return null
-
-    return payload
-
-  } catch {
-    return null
-  }
-}
-
-function base64UrlDecode(str) {
-  str = str.replace(/-/g, "+").replace(/_/g, "/")
-  while (str.length % 4) str += "="
-  const bin = atob(str)
-  const buf = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i)
-  return buf.buffer
+// ──────────────────────────────────────────────
+// Helper: Cookie header se token nikalna
+// ──────────────────────────────────────────────
+function getCookieToken(req) {
+  const cookieHeader = req.headers.get("cookie") ?? "";
+  const match = cookieHeader.match(/ah_token=([^;]+)/);
+  return match ? match[1] : null;
 }
