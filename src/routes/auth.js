@@ -13,8 +13,12 @@ async function sha256Hex(text) {
 // ──────────────────────────────────────────────
 // JWT sign (HS256) — pure Web Crypto, no jose
 // ──────────────────────────────────────────────
+// Unicode-safe base64url encode
 function b64url(str) {
-  return btoa(str).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_")
+  const bytes = new TextEncoder().encode(str)
+  let binary = ""
+  bytes.forEach(b => binary += String.fromCharCode(b))
+  return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_")
 }
 
 async function signJWT(payload, secret) {
