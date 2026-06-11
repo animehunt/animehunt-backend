@@ -1,10 +1,10 @@
 name = "animehunt-backend"
 main = "src/index.js"
 
-# âœ… IMPORTANT (latest runtime support)
+# ✅ IMPORTANT (latest runtime support)
 compatibility_date = "2024-11-01"
 
-# âœ… REQUIRED for jwt, bcrypt, buffer, crypto
+# ✅ REQUIRED for jwt, bcrypt, buffer, crypto
 compatibility_flags = ["nodejs_compat"]
 
 # ================= DATABASE (Primary - Cloudflare D1) =================
@@ -18,25 +18,27 @@ database_id = "95a1ed03-67a0-46e4-b82c-d153f4c6b8e3"
 
 [vars]
 
-# ðŸ” JWT SECRET
+# 🔑 JWT SECRET
 JWT_SECRET = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
 
-# ðŸ‘¤ ADMIN LOGIN
+# 👤 ADMIN LOGIN
 ADMIN_USERNAME = "anime_moderator_007"
 
-# ðŸ”‘ PASSWORD HASH (bcrypt)
-ADMIN_PASSWORD_HASH = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
+# 🔑 PASSWORD HASH (SHA-256 Hex format for Cloudflare Workers speed)
+# Niche diya gaya hash default password 'admin123' ka hai. 
+# Agar aap apna custom password rakhna chahte hain, toh uska SHA-256 Hex nikal kar yahan paste karein.
+ADMIN_PASSWORD_HASH = "352edf5b056da03fbc770b71915a71fb6b9e2c62777920c31814b5af2e976041"
 
-# ðŸ–¼ ImageKit
+# 🖼️ ImageKit
 IMAGEKIT_PUBLIC_KEY = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
 IMAGEKIT_URL_ENDPOINT = "https://ik.imagekit.io/av2cevzsyi"
 IMAGEKIT_PRIVATE_KEY = "private_5RhpDsMuLtxnkYONYmJtS9EiPlI="
 
-# ðŸ—„ Turso (Replica DB - LibSQL)
+# 🗄️ Turso (Replica DB - LibSQL) - [FIXED VARIABLE NAME HERE]
 TURSO_URL = "libsql://animehunt-animehunt1.aws-ap-south-1.turso.io"
-TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODA5OTQzMDYsImlkIjoiMDE5ZWFiODctYzgwMS03OWUyLWE4ZTgtZDdmZmYwYzJhOWFlIiwicmlkIjoiMmRmY2FkYzYtNDFjZC00NWMyLWI4NDUtOTZiOTNjYTg3OGVhIn0.ZRUFwzEjXzrHR6TTo8XZHcoZ3avCnnjb9GQhXKWiPqD7-xNgt51v3VpcXweVq5WPSSZEoAr2LXvU9ULaqPriBA"
+TURSO_AUTH_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODA5OTQzMDYsImlkIjoiMDE5ZWFiODctYzgwMS03OWUyLWE4ZTgtZDdmZmYwYzJhOWFlIiwicmlkIjoiMmRmY2FkYzYtNDFjZC00NWMyLWI4NDUtOTZiOTNjYTg3OGVhIn0.ZRUFwzEjXzrHR6TTo8XZHcoZ3avCnnjb9GQhXKWiPqD7-xNgt51v3VpcXweVq5WPSSZEoAr2LXvU9ULaqPriBA"
 
-# ðŸ—„ Supabase (Replica DB - PostgreSQL)
+# 🗄️ Supabase (Replica DB - PostgreSQL)
 SUPABASE_URL = "https://ahuwijnulrqsrdnzphds.supabase.co"
 SUPABASE_KEY = "sb_publishable_VHHITPpDdy_pKBvWDk2Iiw_7x0Bu51c"
 
