@@ -8,7 +8,7 @@ import { adminAuth } from "../middleware/adminAuth.js"
 
 const auth = new Hono()
 
-// ✅ FIX: Cross-origin authentication enable karne ke liye CORS apply kiya
+// ✅ FIX: Frontend aur Backend alag domains par hone se CORS error na aaye
 auth.use("*", cors())
 
 /* ================================================
