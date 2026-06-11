@@ -213,7 +213,10 @@ app.post("/dashboard/sync-check", async (c) => {
   /* Turso */
   if (c.env.TURSO_URL && c.env.TURSO_AUTH_TOKEN) {
     try {
-      const res = await fetch(`${c.env.TURSO_URL}/v2/pipeline`, {
+      // ✅ FIX: 'libsql://' protocol ko fetch direct support nahi karta, isliye isko 'https://' kiya gaya hai
+      const targetUrl = c.env.TURSO_URL.replace("libsql://", "https://")
+      
+      const res = await fetch(`${targetUrl}/v2/pipeline`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${c.env.TURSO_AUTH_TOKEN}`,
@@ -224,7 +227,10 @@ app.post("/dashboard/sync-check", async (c) => {
         })
       })
       results.turso = res.ok
-    } catch { /* turso failed */ }
+    } catch (e) {
+      console.error("Turso check error:", e)
+      results.turso = false
+    }
   }
 
   /* Supabase */
