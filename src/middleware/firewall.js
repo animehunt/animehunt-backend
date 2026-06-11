@@ -1,14 +1,9 @@
 async function autoBan(db, ip, reason) {
   try {
-    const existing = await db
-      .prepare("SELECT ip FROM blocked_ips WHERE ip = ? LIMIT 1")
-      .bind(ip).first().catch(() => null)
-
-    if (!existing) {
-      await db.prepare(
-        "INSERT INTO blocked_ips (ip, reason, created_at) VALUES (?, ?, datetime('now'))"
-      ).bind(ip, reason).run()
-    }
+    // Table name: banned_ips (securityAdmin.js ke saath sync)
+    await db.prepare(
+      "INSERT OR IGNORE INTO banned_ips (ip, reason, ban_count, created_at) VALUES (?, ?, 1, datetime('now'))"
+    ).bind(ip, reason).run()
   } catch (err) {
     console.error("autoBan error:", err)
   }
@@ -45,7 +40,7 @@ export async function firewall(c, next) {
     /* ================= BLOCKED IP ================= */
 
     const banned = await DB
-      .prepare("SELECT ip FROM blocked_ips WHERE ip=?")
+      .prepare("SELECT ip FROM banned_ips WHERE ip=?")
       .bind(ip)
       .first()
 
@@ -102,6 +97,7 @@ export async function firewall(c, next) {
 
     const now = Date.now()
     const key = "rate_" + ip
+    const WINDOW_MS = 60 * 1000  // 60 seconds window
 
     if (!globalThis.RATE) globalThis.RATE = {}
 
@@ -110,7 +106,7 @@ export async function firewall(c, next) {
     }
 
     globalThis.RATE[key] =
-      globalThis.RATE[key].filter(t => now - t < 1000)
+      globalThis.RATE[key].filter(t => now - t < WINDOW_MS)
 
     globalThis.RATE[key].push(now)
 
