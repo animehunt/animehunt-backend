@@ -109,10 +109,11 @@ app.route("/api", sitemap)
 app.route("/api", trending)
 
 /* ===================================================== */
-/* ================= AUTH ROUTE ======================= */
+/* ================= AUTH ROUTE (FIXED ✅) ============= */
 /* ===================================================== */
 
-app.route("/api/admin", auth)
+// Is line ko /api/admin se badal kar /api/auth kar diya hai
+app.route("/api/auth", auth)
 
 /* ===================================================== */
 /* ================= ADMIN ROUTES ===================== */
