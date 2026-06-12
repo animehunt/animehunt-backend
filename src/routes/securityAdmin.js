@@ -175,10 +175,11 @@ async function syncToReplicas(env, row) {
     row.vpn_block, row.tor_block,
     row.ai_auto_ban, row.ai_threat_detect, row.ai_anomaly, row.ai_ban_threshold,
     row.hsts, row.csp, row.xframe, row.nosniff, row.updated_at
-  ].map(v => {
-    const isNum = typeof v === "number" || (typeof v === "string" && v !== "" && !isNaN(Number(v)) && !v.includes("-"))
-    return { type: isNum ? "integer" : "text", value: String(v ?? "") }
-  })
+  ].map(v => ({
+    // ✅ FIX: sirf actual numbers ko integer — strings hamesha text
+    type: typeof v === "number" ? "integer" : "text",
+    value: String(v ?? "")
+  }))
 
   if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
     fetch(`${env.TURSO_URL}/v2/pipeline`, {
@@ -503,6 +504,20 @@ app.post("/security/ban", async (c) => {
   }
 })
 
+// ✅ FIX: /banned/all pehle — warna :ip "all" ko match kar leta
+/* ================================================
+   DELETE /security/banned/all — Clear all bans
+================================================ */
+
+app.delete("/security/banned/all", async (c) => {
+  try {
+    await c.env.DB.prepare("DELETE FROM banned_ips").run()
+    return c.json(success({ cleared: true }))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
 /* ================================================
    DELETE /security/ban/:ip — Unban an IP
 ================================================ */
@@ -513,19 +528,6 @@ app.delete("/security/ban/:ip", async (c) => {
     const ip = c.req.param("ip")
     await db.prepare("DELETE FROM banned_ips WHERE ip=?").bind(ip).run()
     return c.json(success({ ip, unbanned: true }))
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-/* ================================================
-   DELETE /security/banned/all — Clear all bans
-================================================ */
-
-app.delete("/security/banned/all", async (c) => {
-  try {
-    await c.env.DB.prepare("DELETE FROM banned_ips").run()
-    return c.json(success({ cleared: true }))
   } catch (err) {
     return c.json(failure(err.message), 500)
   }
