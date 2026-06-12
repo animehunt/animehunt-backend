@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "bcryptjs": "^2.4.3",
     "hono": "^4.0.0"
   }
 }
