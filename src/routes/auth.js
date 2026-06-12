@@ -1,20 +1,14 @@
-
 import { Hono } from "hono"
 
 const auth = new Hono()
 
-// ──────────────────────────────────────────────
-// SHA-256 hex
-// ──────────────────────────────────────────────
+// ── SHA-256 hex ──
 async function sha256Hex(text) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("")
 }
 
-// ──────────────────────────────────────────────
-// JWT sign (HS256) — pure Web Crypto, no jose
-// ──────────────────────────────────────────────
-// Unicode-safe base64url encode
+// ── base64url encode ──
 function b64url(str) {
   const bytes = new TextEncoder().encode(str)
   let binary = ""
@@ -22,10 +16,11 @@ function b64url(str) {
   return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_")
 }
 
+// ── JWT sign ──
 async function signJWT(payload, secret) {
-  const header  = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }))
-  const body    = b64url(JSON.stringify(payload))
-  const data    = `${header}.${body}`
+  const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }))
+  const body   = b64url(JSON.stringify(payload))
+  const data   = `${header}.${body}`
 
   const key = await crypto.subtle.importKey(
     "raw", new TextEncoder().encode(secret),
@@ -36,9 +31,7 @@ async function signJWT(payload, secret) {
   return `${data}.${sig}`
 }
 
-// ──────────────────────────────────────────────
-// JWT verify — exported for adminAuth.js
-// ──────────────────────────────────────────────
+// ── JWT verify — exported for use anywhere ──
 export async function verifyToken(token, secret) {
   const parts = token.split(".")
   if (parts.length !== 3) throw new Error("Invalid token format")
@@ -68,9 +61,7 @@ export async function verifyToken(token, secret) {
   return payload
 }
 
-// ──────────────────────────────────────────────
-// POST /login
-// ──────────────────────────────────────────────
+// ── POST /login ──
 auth.post("/login", async (c) => {
   let body
   try { body = await c.req.json() }
@@ -82,11 +73,20 @@ auth.post("/login", async (c) => {
     return c.json({ success: false, message: "Username aur password dono required hain" }, 400)
   }
 
+  // Debug log — Cloudflare logs mein dikhega
+  console.log("Login attempt:", username)
+  console.log("ENV USERNAME:", c.env.ADMIN_USERNAME)
+  console.log("Username match:", username === c.env.ADMIN_USERNAME)
+
   if (username !== c.env.ADMIN_USERNAME) {
     return c.json({ success: false, message: "Invalid credentials" }, 401)
   }
 
   const hash = await sha256Hex(password)
+  console.log("Password hash:", hash)
+  console.log("ENV HASH:", c.env.ADMIN_PASSWORD_HASH)
+  console.log("Hash match:", hash === c.env.ADMIN_PASSWORD_HASH)
+
   if (hash !== c.env.ADMIN_PASSWORD_HASH) {
     return c.json({ success: false, message: "Invalid credentials" }, 401)
   }
@@ -96,12 +96,11 @@ auth.post("/login", async (c) => {
       username,
       role: "admin",
       iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7  // 7 days
+      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7
     },
     c.env.JWT_SECRET
   )
 
-  // D1 login log (optional — table na ho toh crash nahi hoga)
   try {
     await c.env.DB.prepare(
       "INSERT INTO admin_login_logs (username, logged_in_at) VALUES (?, ?)"
@@ -111,16 +110,12 @@ auth.post("/login", async (c) => {
   return c.json({ success: true, message: "Login successful", data: { token, username } })
 })
 
-// ──────────────────────────────────────────────
-// POST /logout
-// ──────────────────────────────────────────────
+// ── POST /logout ──
 auth.post("/logout", (c) => {
   return c.json({ success: true, message: "Logged out" })
 })
 
-// ──────────────────────────────────────────────
-// GET /me
-// ──────────────────────────────────────────────
+// ── GET /me ──
 auth.get("/me", async (c) => {
   const authHeader = c.req.header("Authorization") ?? ""
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null
@@ -131,7 +126,7 @@ auth.get("/me", async (c) => {
     const payload = await verifyToken(token, c.env.JWT_SECRET)
     return c.json({ success: true, data: { username: payload.username, role: payload.role } })
   } catch (err) {
-    const msg = err.code === "ERR_JWT_EXPIRED" ? "Session expire ho gaya, dobara login karein" : "Invalid token"
+    const msg = err.code === "ERR_JWT_EXPIRED" ? "Session expire ho gaya" : "Invalid token"
     return c.json({ success: false, message: msg }, 401)
   }
 })
