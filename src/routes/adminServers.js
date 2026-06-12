@@ -70,7 +70,7 @@ async function syncToReplicas(env, action, data) {
     )
   }
 
-  Promise.all(promises)
+  return Promise.all(promises)
 }
 
 function buildTursoPayload(action, data) {
@@ -388,7 +388,7 @@ app.delete("/servers/:id", async (c) => {
 
 /* ================= BULK DELETE (by anime+episode) ================= */
 
-app.delete("/servers/bulk", async (c) => {
+app.delete("/servers/bulk-delete", async (c) => {
   try {
     const db   = c.env.DB
     const body = await c.req.json()
