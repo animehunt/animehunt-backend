@@ -40,10 +40,13 @@ export async function firewall(c, next) {
 
     /* ================= BLOCKED IP ================= */
 
-    const banned = await DB
-      .prepare("SELECT ip FROM banned_ips WHERE ip=?")
-      .bind(ip)
-      .first()
+    let banned = null
+    try {
+      banned = await DB
+        .prepare("SELECT ip FROM banned_ips WHERE ip=?")
+        .bind(ip)
+        .first()
+    } catch {}
 
     if (banned) {
       return c.text("Access Denied", 403)
