@@ -1,3 +1,4 @@
+
 /* ================================================
    dashboard.js — Admin Dashboard Stats + Health
    Auth handled by adminAuth middleware in index.js
