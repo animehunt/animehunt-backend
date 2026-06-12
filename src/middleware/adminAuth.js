@@ -1,6 +1,4 @@
-
-
-import { verifyToken } from "../routes/auth.js"
+// adminAuth.js — verifyToken directly yahan hai, koi import nahi
 
 export async function adminAuth(c, next) {
   if (c.req.method === "OPTIONS") return await next()
@@ -29,4 +27,34 @@ export async function adminAuth(c, next) {
       message: expired ? "Session expire ho gaya" : "Unauthorized: Invalid token"
     }, 401)
   }
+}
+
+// ── verifyToken directly yahan — koi bahari import nahi ──
+async function verifyToken(token, secret) {
+  const parts = token.split(".")
+  if (parts.length !== 3) throw new Error("Invalid token format")
+
+  const [header, body, sig] = parts
+  const data = `${header}.${body}`
+
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["verify"]
+  )
+
+  const sigBytes = Uint8Array.from(
+    atob(sig.replace(/-/g, "+").replace(/_/g, "/")),
+    c => c.charCodeAt(0)
+  )
+  const valid = await crypto.subtle.verify("HMAC", key, sigBytes, new TextEncoder().encode(data))
+  if (!valid) throw new Error("Invalid token signature")
+
+  const payload = JSON.parse(atob(body.replace(/-/g, "+").replace(/_/g, "/")))
+  if (payload.exp && Date.now() / 1000 > payload.exp) {
+    const err = new Error("Token expired")
+    err.code = "ERR_JWT_EXPIRED"
+    throw err
+  }
+
+  return payload
 }
