@@ -92,8 +92,14 @@ app.use("*", async (c, next) => {
 })
 
 /* ================= FIREWALL + SYSTEM GUARD ================= */
-app.use("*", firewall)
-app.use("*", systemGuard)
+app.use("*", async (c, next) => {
+  if (c.req.path.startsWith("/api/auth")) return await next()
+  return await firewall(c, next)
+})
+app.use("*", async (c, next) => {
+  if (c.req.path.startsWith("/api/auth")) return await next()
+  return await systemGuard(c, next)
+})
 
 /* ================= ROOT ================= */
 app.get("/", (c) => c.json({
