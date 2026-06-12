@@ -23,7 +23,11 @@ export async function runFooterAI(env) {
   ========================= */
 
   if (cfg.footerTheme === "Auto") {
-    const hour = new Date().getHours()
+    // ✅ FIX: IST timezone (UTC+5:30)
+  const now = new Date()
+  const istOffset = 5.5 * 60 * 60 * 1000
+  const istTime = new Date(now.getTime() + istOffset)
+  const hour = istTime.getUTCHours()
 
     const theme = (hour >= 18 || hour <= 6) ? "Dark" : "Light"
 
