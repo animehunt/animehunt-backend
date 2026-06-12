@@ -45,7 +45,7 @@ app.get("/api/anime/home", async (c) => {
     const { results } = await db.prepare(`
       SELECT id, title, slug, type, status, poster, banner, rating, year, genres, language, duration
       FROM anime
-      WHERE is_home=1 AND is_hidden=0 AND active=1
+      WHERE is_home=1 AND is_hidden=0
       ORDER BY rating DESC
       LIMIT 30
     `).all()
@@ -59,7 +59,7 @@ app.get("/api/anime/featured", async (c) => {
     const { results } = await db.prepare(`
       SELECT id, title, slug, type, status, poster, banner, rating, year, genres, description, language
       FROM anime
-      WHERE is_banner=1 AND is_hidden=0 AND active=1
+      WHERE is_banner=1 AND is_hidden=0
       ORDER BY rating DESC
       LIMIT 10
     `).all()
@@ -139,7 +139,7 @@ app.get("/api/anime/:slug", async (c) => {
              is_trending, is_home, is_banner, featured,
              created_at, updated_at
       FROM anime
-      WHERE slug=? AND is_hidden=0 AND active=1
+      WHERE slug=? AND is_hidden=0
       LIMIT 1
     `).bind(slug).first()
 
@@ -177,7 +177,7 @@ app.get("/api/public/episodes/:animeId", async (c) => {
     let query = `
       SELECT id, anime_id, season, episode, title, thumbnail, description, servers, air_date, active
       FROM episodes
-      WHERE anime_id=? AND active=1
+      WHERE anime_id=?
     `
     const binds = [aId]
 
@@ -214,7 +214,7 @@ app.get("/api/public/seasons/:animeId", async (c) => {
     const { results } = await db.prepare(`
       SELECT DISTINCT CAST(season AS INTEGER) as season
       FROM episodes
-      WHERE anime_id=? AND active=1
+      WHERE anime_id=?
       ORDER BY season ASC
     `).bind(aId).all()
 
@@ -340,28 +340,28 @@ app.get("/api/homepage/public", async (c) => {
         if (row.type === "trending") {
           const { results } = await db.prepare(`
             SELECT id, title, slug, poster, rating, year, type, status
-            FROM anime WHERE is_trending=1 AND is_hidden=0 AND active=1
+            FROM anime WHERE is_trending=1 AND is_hidden=0
             ORDER BY rating DESC LIMIT ?
           `).bind(limit).all()
           items = results
         } else if (row.type === "ongoing") {
           const { results } = await db.prepare(`
             SELECT id, title, slug, poster, rating, year, type, status
-            FROM anime WHERE status='ongoing' AND is_hidden=0 AND active=1
+            FROM anime WHERE status='ongoing' AND is_hidden=0
             ORDER BY updated_at DESC LIMIT ?
           `).bind(limit).all()
           items = results
         } else if (row.type === "movies") {
           const { results } = await db.prepare(`
             SELECT id, title, slug, poster, rating, year, type, status
-            FROM anime WHERE type='movie' AND is_hidden=0 AND active=1
+            FROM anime WHERE type='movie' AND is_hidden=0
             ORDER BY year DESC LIMIT ?
           `).bind(limit).all()
           items = results
         } else if (row.type === "cartoon") {
           const { results } = await db.prepare(`
             SELECT id, title, slug, poster, rating, year, type, status
-            FROM anime WHERE type='cartoon' AND is_hidden=0 AND active=1
+            FROM anime WHERE type='cartoon' AND is_hidden=0
             ORDER BY rating DESC LIMIT ?
           `).bind(limit).all()
           items = results
@@ -375,14 +375,14 @@ app.get("/api/homepage/public", async (c) => {
         } else if (row.type === "completed") {
           const { results } = await db.prepare(`
             SELECT id, title, slug, poster, rating, year, type, status
-            FROM anime WHERE status='completed' AND is_hidden=0 AND active=1
+            FROM anime WHERE status='completed' AND is_hidden=0
             ORDER BY rating DESC LIMIT ?
           `).bind(limit).all()
           items = results
         } else if (row.type === "genre" && row.source) {
           const { results } = await db.prepare(`
             SELECT id, title, slug, poster, rating, year, type, status
-            FROM anime WHERE genres LIKE ? AND is_hidden=0 AND active=1
+            FROM anime WHERE genres LIKE ? AND is_hidden=0
             ORDER BY rating DESC LIMIT ?
           `).bind("%" + row.source + "%", limit).all()
           items = results
@@ -522,7 +522,7 @@ app.get("/api/search", async (c) => {
     const { results } = await db.prepare(`
       SELECT id, title, slug, poster, type, status, rating, year
       FROM anime
-      WHERE is_hidden=0 AND active=1
+      WHERE is_hidden=0
       AND (title LIKE ? OR genres LIKE ?)
       ORDER BY
         CASE WHEN title LIKE ? THEN 1 ELSE 2 END,
