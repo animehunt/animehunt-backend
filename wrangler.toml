@@ -25,7 +25,7 @@ ENVIRONMENT         = "production"
 
 # 👤 Admin Login
 ADMIN_USERNAME      = "anime_moderator_007"
-ADMIN_PASSWORD_HASH = "$2a$12$te0iFDMKAjXwzlaxQro2y.v0YaeOKEjkyngihQQPMo/JofQmVhzda"
+ADMIN_PASSWORD_HASH = "352edf5b056da03fbc770b71915a71fb6b9e2c62777920c31814b5af2e976041"
 
 # 🖼️ ImageKit (Public)
 IMAGEKIT_PUBLIC_KEY   = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
