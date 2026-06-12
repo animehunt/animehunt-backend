@@ -13,12 +13,11 @@ export async function adminAuth(c, next) {
   const finalToken = token || cookieToken
 
   if (!finalToken) {
-    return c.json({ success: false, message: "Unauthorized: Token missing. Please log in." }, 401)
+    return c.json({ success: false, message: "Unauthorized: Token missing." }, 401)
   }
 
   try {
-    // Synchronized secret with fallback
-    const jwtSecret = c.env?.JWT_SECRET || "super_secret_animehunt_key_2026_secure"
+    const jwtSecret = c.env?.JWT_SECRET || "animehunt_secret_key_xyz_123"
     
     const payload = await verifyToken(finalToken, jwtSecret)
     c.set("admin", { username: payload.username, role: payload.role })
@@ -28,7 +27,7 @@ export async function adminAuth(c, next) {
     const expired = err?.code === "ERR_JWT_EXPIRED"
     return c.json({
       success: false,
-      message: expired ? "Session expire ho gaya, dobara login karein" : "Unauthorized: Invalid token"
+      message: expired ? "Session expire ho gaya" : "Unauthorized: Invalid token"
     }, 401)
   }
 }
