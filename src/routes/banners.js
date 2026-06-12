@@ -65,7 +65,7 @@ async function syncToReplicas(env, action, data) {
     )
   }
 
-  Promise.all(promises)
+  return Promise.all(promises)
 }
 
 function buildTursoPayload(action, data) {
@@ -406,4 +406,4 @@ app.post("/banners/reorder", async (c) => {
 })
 
 export default app
-        
+
