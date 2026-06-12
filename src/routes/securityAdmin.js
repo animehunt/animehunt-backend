@@ -555,4 +555,59 @@ app.get("/security/threats", async (c) => {
    DELETE /security/threats — Clear threat logs
 ================================================ */
 
-app.delete("/sec
+app.delete("/security/threats", async (c) => {
+  try {
+    await c.env.DB.prepare("DELETE FROM threat_logs").run()
+    return c.json(success({ cleared: true }))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   POST /security/threats/log — Log a threat (internal)
+================================================ */
+
+app.post("/security/threats/log", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json()
+    await ensureRow(db)
+
+    await db.prepare(`
+      INSERT INTO threat_logs (ip,type,path,ua,country,created_at)
+      VALUES (?,?,?,?,?,?)
+    `).bind(
+      body.ip      || "",
+      body.type    || "unknown",
+      body.path    || "",
+      body.ua      || "",
+      body.country || "",
+      now()
+    ).run()
+
+    /* Auto-ban if AI enabled and threshold crossed */
+    const settings = await db.prepare(
+      "SELECT ai_auto_ban,ai_ban_threshold FROM security_settings WHERE id=1"
+    ).first()
+
+    if (settings?.ai_auto_ban && body.ip) {
+      const count = await db.prepare(`
+        SELECT COUNT(*) as c FROM threat_logs WHERE ip=?
+      `).bind(body.ip).first()
+
+      if (count?.c >= (settings.ai_ban_threshold || 5)) {
+        await db.prepare(`
+          INSERT OR IGNORE INTO banned_ips (ip,reason,ban_count,created_at)
+          VALUES (?,?,?,?)
+        `).bind(body.ip, "ai_auto_ban", count.c, now()).run()
+      }
+    }
+
+    return c.json(success({ logged: true }))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+export default app
