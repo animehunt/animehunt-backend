@@ -173,9 +173,19 @@ async function syncToReplicas(env, settings) {
               ui_max,ui_thumb,ui_group,ui_highlight,
               safe_mode,track_popular,seo_urls,cache_seconds,updated_at
             ) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            args: Object.values(settings).map(v => ({
+            args: [
+              settings.enableSearch, settings.liveSearch,
+              settings.mode, settings.debounce,
+              settings.ranking_mode, settings.ranking_boost, settings.ranking_weight,
+              settings.src_anime, settings.src_episode,
+              settings.src_category, settings.src_pages,
+              settings.smart_typo, settings.smart_alias, settings.smart_language,
+              settings.ui_max, settings.ui_thumb, settings.ui_group, settings.ui_highlight,
+              settings.safe_mode, settings.track_popular,
+              settings.seo_urls, settings.cache_seconds, settings.updated_at
+            ].map(v => ({
               type: typeof v === "number" ? "integer" : "text",
-              value: v
+              value: String(v ?? "")
             }))
           }
         }]
