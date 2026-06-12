@@ -3,7 +3,7 @@
 // src/db.js  —  AnimeHunt Universal DB Client
 // ============================================================
 // Primary  : Cloudflare D1  (c.env.DB)
-// Replica 1: Turso / LibSQL (c.env.TURSO_URL + TURSO_TOKEN)
+// Replica 1: Turso / LibSQL (c.env.TURSO_URL + TURSO_AUTH_TOKEN)
 // Replica 2: Supabase REST  (c.env.SUPABASE_URL + SUPABASE_KEY)
 //
 // HOW IT WORKS:
@@ -16,7 +16,7 @@
    TURSO CLIENT  (LibSQL HTTP — no npm needed)
 ───────────────────────────────────────────── */
 async function tursoQuery(env, sql, args = []) {
-  if (!env.TURSO_URL || !env.TURSO_TOKEN) return null
+  if (!env.TURSO_URL || !env.TURSO_AUTH_TOKEN) return null
 
   const httpUrl = env.TURSO_URL.replace("libsql://", "https://")
 
@@ -24,7 +24,7 @@ async function tursoQuery(env, sql, args = []) {
     const res = await fetch(`${httpUrl}/v2/pipeline`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.TURSO_TOKEN}`,
+        "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
