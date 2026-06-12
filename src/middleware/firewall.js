@@ -1,3 +1,4 @@
+
 async function autoBan(db, ip, reason) {
   try {
     // Table name: banned_ips (securityAdmin.js ke saath sync)
