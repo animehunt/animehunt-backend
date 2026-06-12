@@ -1,4 +1,4 @@
-import { verifyToken } from "../routes/auth.js"
+import { verifyToken } from "./auth.js"
 
 export async function adminAuth(c, next) {
   if (c.req.method === "OPTIONS") return await next()
