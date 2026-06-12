@@ -1,46 +1,49 @@
+# ================================================
+#  ANIMEHUNT BACKEND — Wrangler Config
+#  File: wrangler.toml
+#  Cloudflare Workers
+# ================================================
+
 name = "animehunt-backend"
 main = "src/index.js"
 
-# ✅ IMPORTANT (latest runtime support)
-compatibility_date = "2024-11-01"
-
-# ✅ REQUIRED for jwt, bcrypt, buffer, crypto
+compatibility_date  = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
-# ================= DATABASE (Primary - Cloudflare D1) =================
+# ================= DATABASE (Primary — Cloudflare D1) =================
 
 [[d1_databases]]
-binding = "DB"
+binding       = "DB"
 database_name = "animehunt"
-database_id = "95a1ed03-67a0-46e4-b82c-d153f4c6b8e3"
+database_id   = "95a1ed03-67a0-46e4-b82c-d153f4c6b8e3"
 
 # ================= ENV VARIABLES =================
 
 [vars]
 
-# 🔑 JWT SECRET
-JWT_SECRET = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
+ENVIRONMENT         = "production"
 
-# 👤 ADMIN LOGIN
-ADMIN_USERNAME = "anime_moderator_007"
-
-# 🔑 PASSWORD HASH (SHA-256 Hex format for Cloudflare Workers speed)
-# Niche diya gaya hash default password 'admin123' ka hai. 
-# Agar aap apna custom password rakhna chahte hain, toh uska SHA-256 Hex nikal kar yahan paste karein.
+# 👤 Admin Login
+ADMIN_USERNAME      = "anime_moderator_007"
 ADMIN_PASSWORD_HASH = "352edf5b056da03fbc770b71915a71fb6b9e2c62777920c31814b5af2e976041"
 
-# 🖼️ ImageKit
-IMAGEKIT_PUBLIC_KEY = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
+# 🖼️ ImageKit (Public)
+IMAGEKIT_PUBLIC_KEY   = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
 IMAGEKIT_URL_ENDPOINT = "https://ik.imagekit.io/av2cevzsyi"
-IMAGEKIT_PRIVATE_KEY = "private_5RhpDsMuLtxnkYONYmJtS9EiPlI="
 
-# 🗄️ Turso (Replica DB - LibSQL) - [FIXED VARIABLE NAME HERE]
-TURSO_URL = "libsql://animehunt-animehunt1.aws-ap-south-1.turso.io"
+# 🗄️ Turso — Replica DB (LibSQL)
+TURSO_URL        = "libsql://animehunt-animehunt1.aws-ap-south-1.turso.io"
 TURSO_AUTH_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODA5OTQzMDYsImlkIjoiMDE5ZWFiODctYzgwMS03OWUyLWE4ZTgtZDdmZmYwYzJhOWFlIiwicmlkIjoiMmRmY2FkYzYtNDFjZC00NWMyLWI4NDUtOTZiOTNjYTg3OGVhIn0.ZRUFwzEjXzrHR6TTo8XZHcoZ3avCnnjb9GQhXKWiPqD7-xNgt51v3VpcXweVq5WPSSZEoAr2LXvU9ULaqPriBA"
 
-# 🗄️ Supabase (Replica DB - PostgreSQL)
+# 🗄️ Supabase — Replica DB (PostgreSQL)
 SUPABASE_URL = "https://ahuwijnulrqsrdnzphds.supabase.co"
 SUPABASE_KEY = "sb_publishable_VHHITPpDdy_pKBvWDk2Iiw_7x0Bu51c"
+
+# 🔑 JWT Secret
+JWT_SECRET = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
+
+# 🖼️ ImageKit (Private)
+IMAGEKIT_PRIVATE_KEY = "private_5RhpDsMuLtxnkYONYmJtS9EiPlI="
 
 # ================= CRON =================
 
