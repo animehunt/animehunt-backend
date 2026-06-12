@@ -26,8 +26,8 @@ ENVIRONMENT         = "production"
 ADMIN_USERNAME      = "anime_moderator_007"
 ADMIN_PASSWORD_HASH = "$2a$12$te0iFDMKAjXwzlaxQro2y.v0YaeOKEjkyngihQQPMo/JofQmVhzda"
 
-# 🔑 JWT Secret
-JWT_SECRET          = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
+# 🔑 JWT Secret (Isko hash se badal kar simple string kar diya hai taaki token crash na ho)
+JWT_SECRET          = "animehunt_secret_key_xyz_123"
 
 # 🖼️ ImageKit (Public & Private)
 IMAGEKIT_PUBLIC_KEY   = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
