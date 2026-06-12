@@ -1,11 +1,14 @@
-// adminAuth.js — verifyToken directly yahan hai, koi import nahi
+import { verifyToken } from "../routes/auth.js"
 
 export async function adminAuth(c, next) {
+  // CORS Preflight options check
   if (c.req.method === "OPTIONS") return await next()
 
+  // 1. Authorization Header check (Bearer <token>)
   const authHeader = c.req.header("Authorization") ?? ""
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null
 
+  // 2. Cookie fallback check
   const cookieHeader = c.req.header("cookie") ?? ""
   const cookieMatch = cookieHeader.match(/ah_token=([^;]+)/)
   const cookieToken = cookieMatch ? cookieMatch[1] : null
@@ -13,48 +16,24 @@ export async function adminAuth(c, next) {
   const finalToken = token || cookieToken
 
   if (!finalToken) {
-    return c.json({ success: false, message: "Unauthorized: Token missing" }, 401)
+    return c.json({ success: false, message: "Unauthorized: Token missing. Please log in." }, 401)
   }
 
   try {
-    const payload = await verifyToken(finalToken, c.env.JWT_SECRET)
+    // Secret sync with auth.js fallback
+    const jwtSecret = c.env?.JWT_SECRET || "default_ultra_secure_secret_key_2026"
+    
+    const payload = await verifyToken(finalToken, jwtSecret)
+    
+    // Set admin context
     c.set("admin", { username: payload.username, role: payload.role })
+    
     await next()
   } catch (err) {
     const expired = err?.code === "ERR_JWT_EXPIRED"
     return c.json({
       success: false,
-      message: expired ? "Session expire ho gaya" : "Unauthorized: Invalid token"
+      message: expired ? "Session expire ho gaya, dobara login karein" : "Unauthorized: Invalid token"
     }, 401)
   }
-}
-
-// ── verifyToken directly yahan — koi bahari import nahi ──
-async function verifyToken(token, secret) {
-  const parts = token.split(".")
-  if (parts.length !== 3) throw new Error("Invalid token format")
-
-  const [header, body, sig] = parts
-  const data = `${header}.${body}`
-
-  const key = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" }, false, ["verify"]
-  )
-
-  const sigBytes = Uint8Array.from(
-    atob(sig.replace(/-/g, "+").replace(/_/g, "/")),
-    c => c.charCodeAt(0)
-  )
-  const valid = await crypto.subtle.verify("HMAC", key, sigBytes, new TextEncoder().encode(data))
-  if (!valid) throw new Error("Invalid token signature")
-
-  const payload = JSON.parse(atob(body.replace(/-/g, "+").replace(/_/g, "/")))
-  if (payload.exp && Date.now() / 1000 > payload.exp) {
-    const err = new Error("Token expired")
-    err.code = "ERR_JWT_EXPIRED"
-    throw err
-  }
-
-  return payload
 }
