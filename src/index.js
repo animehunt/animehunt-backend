@@ -57,7 +57,6 @@ import { runFooterAI } from "./ai/footerAI.js"
 const app = new Hono()
 
 /* ================= CORS ================= */
-// Specific origins with credentials support
 app.use("*", cors({
   origin: [
     "https://animehunt.in",
@@ -71,11 +70,9 @@ app.use("*", cors({
   maxAge:        86400
 }))
 
-// OPTIONS preflight — har route ke liye 200 return karo
 app.options("*", (c) => c.text("", 200))
 
 /* ================= DB CHECK ================= */
-// Agar D1 DB bind nahi hai toh sabse pehle fail karo
 app.use("*", async (c, next) => {
   if (!c.env.DB) {
     return c.json({ success: false, message: "DB NOT CONFIGURED" }, 500)
@@ -83,11 +80,10 @@ app.use("*", async (c, next) => {
   await next()
 })
 
-/* ================= DB SYNC MIDDLEWARE ================= */
-// Turso + Supabase replica sync
+/* ================= DB SYNC ================= */
 app.use("*", dbSync)
 
-/* ================= REQUEST LOGGER ================= */
+/* ================= LOGGER ================= */
 app.use("*", async (c, next) => {
   const start = Date.now()
   await next()
@@ -95,16 +91,11 @@ app.use("*", async (c, next) => {
   console.log(`[${new Date().toISOString()}] ${c.req.method} ${c.req.path} ${c.res.status} — ${ms}ms`)
 })
 
-/* ================= SECURITY MIDDLEWARE ================= */
-// Firewall — IP ban, bot block, rate limit (sab routes pe)
-// SystemGuard — maintenance mode (public routes pe)
-// NOTE: /api/admin aur /api/auth ko systemGuard bypass karta hai (systemGuard.js mein defined)
+/* ================= FIREWALL + SYSTEM GUARD ================= */
 app.use("*", firewall)
 app.use("*", systemGuard)
 
-/* ================================================
-   ROOT
-================================================ */
+/* ================= ROOT ================= */
 app.get("/", (c) => c.json({
   success:   true,
   message:   "AnimeHunt Backend Running 🚀",
@@ -112,45 +103,30 @@ app.get("/", (c) => c.json({
   timestamp: new Date().toISOString()
 }))
 
-/* ================================================
-   HEALTH CHECK (public)
-================================================ */
+/* ================= HEALTH CHECK ================= */
 app.get("/health", async (c) => {
   let dbOk = false
-  try {
-    await c.env.DB.prepare("SELECT 1").run()
-    dbOk = true
-  } catch {}
-
+  try { await c.env.DB.prepare("SELECT 1").run(); dbOk = true } catch {}
   return c.json({
-    success:   true,
-    status:    dbOk ? "ok" : "degraded",
-    db:        dbOk ? "connected" : "error",
+    success: true,
+    status:  dbOk ? "ok" : "degraded",
+    db:      dbOk ? "connected" : "error",
     timestamp: new Date().toISOString()
   }, dbOk ? 200 : 503)
 })
 
-/* ================================================
-   API HEALTH (same as above, alternate path)
-================================================ */
 app.get("/api/health", async (c) => {
   let dbOk = false
-  try {
-    await c.env.DB.prepare("SELECT 1").run()
-    dbOk = true
-  } catch {}
-
+  try { await c.env.DB.prepare("SELECT 1").run(); dbOk = true } catch {}
   return c.json({
-    success:   true,
-    status:    dbOk ? "ok" : "degraded",
-    db:        dbOk ? "connected" : "error",
+    success: true,
+    status:  dbOk ? "ok" : "degraded",
+    db:      dbOk ? "connected" : "error",
     timestamp: new Date().toISOString()
   }, dbOk ? 200 : 503)
 })
 
-/* ================================================
-   PUBLIC ROUTES (auth not required)
-================================================ */
+/* ================= PUBLIC ROUTES ================= */
 app.route("/api", publicAnime)
 app.route("/api", player)
 app.route("/api", downloads)
@@ -162,17 +138,10 @@ app.route("/api", robots)
 app.route("/api", sitemap)
 app.route("/api", trending)
 
-/* ================================================
-   AUTH ROUTE — /api/auth/login, /api/auth/me, /api/auth/logout
-   ⚠️  CRITICAL: adminAuth middleware se pehle mount karo
-       warna login bhi 401 dega
-================================================ */
+/* ================= AUTH ROUTE (NO AUTH MIDDLEWARE) ================= */
 app.route("/api/auth", auth)
 
-/* ================================================
-   ADMIN ROUTES — /api/admin/* (auth required)
-   Sab admin routes adminAuth middleware se protect hain
-================================================ */
+/* ================= ADMIN ROUTES (AUTH REQUIRED) ================= */
 const adminRoutes = new Hono()
 adminRoutes.use("*", adminAuth)
 
@@ -200,29 +169,24 @@ adminRoutes.route("/", dbRestore)
 
 app.route("/api/admin", adminRoutes)
 
-/* ================================================
-   ERROR HANDLER
-================================================ */
+/* ================= ERROR HANDLER ================= */
 app.onError((err, c) => {
   console.error(`🔥 GLOBAL ERROR [${c.req.method} ${c.req.path}]:`, err)
   return c.json({
     success: false,
     message: err.message || "Internal Server Error",
-    // Stack trace sirf development mein dikhao
     ...(c.env.ENVIRONMENT === "development" && { stack: err.stack })
   }, err.status ?? 500)
 })
 
 app.notFound((c) => c.json({ success: false, message: "Route Not Found" }, 404))
 
-/* ================================================
-   EXPORT — fetch + scheduled (cron)
-================================================ */
+/* ================= EXPORT ================= */
 export default {
   fetch: app.fetch,
 
   async scheduled(event, env, ctx) {
-    console.log(`⏰ Cron triggered: ${event.cron} at ${new Date().toISOString()}`)
+    console.log(`⏰ Cron: ${event.cron} at ${new Date().toISOString()}`)
     ctx.waitUntil(runPlayerAI(env))
     ctx.waitUntil(runFooterAI(env))
   }
