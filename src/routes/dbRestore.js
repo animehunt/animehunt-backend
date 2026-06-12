@@ -46,7 +46,7 @@ router.get("/db/status", async (c) => {
     const res = await fetch(`${httpUrl}/v2/pipeline`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${c.env.TURSO_TOKEN}`,
+        "Authorization": `Bearer ${c.env.TURSO_AUTH_TOKEN}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -116,7 +116,7 @@ async function bulkInsertTurso(env, table, rows) {
       await fetch(`${httpUrl}/v2/pipeline`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${env.TURSO_TOKEN}`,
+          "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -216,7 +216,7 @@ router.post("/db/restore/d1-from-turso", async (c) => {
       const res = await fetch(`${httpUrl}/v2/pipeline`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${c.env.TURSO_TOKEN}`,
+          "Authorization": `Bearer ${c.env.TURSO_AUTH_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
