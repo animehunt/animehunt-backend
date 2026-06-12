@@ -20,14 +20,10 @@ database_id   = "95a1ed03-67a0-46e4-b82c-d153f4c6b8e3"
 # ================= ENV VARIABLES =================
 
 [vars]
-ENVIRONMENT         = "production"
+ENVIRONMENT = "production"
 
-# 👤 Admin Login
-ADMIN_USERNAME      = "anime_moderator_007"
-ADMIN_PASSWORD_HASH = "$2a$12$te0iFDMKAjXwzlaxQro2y.v0YaeOKEjkyngihQQPMo/JofQmVhzda"
-
-# 🔑 JWT Secret (Isko hash se badal kar simple string kar diya hai taaki token crash na ho)
-JWT_SECRET          = "animehunt_secret_key_xyz_123"
+# 🔑 JWT Secret
+JWT_SECRET = "animehunt_secret_key_xyz_123"
 
 # 🖼️ ImageKit (Public & Private)
 IMAGEKIT_PUBLIC_KEY   = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
