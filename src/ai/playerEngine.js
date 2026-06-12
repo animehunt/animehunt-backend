@@ -32,8 +32,18 @@ export async function runPlayerEngine(env, request){
 
       const referer = request.headers.get("referer") || ""
 
-      // ✅ FIX: safer domain check
-      if(!referer.includes("yourdomain.com")){
+      // ✅ FIX: request ke origin se domain detect karo — hardcode nahi
+      const origin = request.headers.get("origin") || ""
+      const host   = request.headers.get("host")   || ""
+      const refOrigin = referer ? new URL(referer).hostname : ""
+
+      const allowed =
+        refOrigin === host ||
+        refOrigin.endsWith(".pages.dev") ||
+        refOrigin.endsWith(".workers.dev") ||
+        origin.includes(host)
+
+      if(!allowed){
         return error("Embed only access",403)
       }
 
@@ -243,8 +253,9 @@ function buildStreamURL(server, request){
 
     if(!animeId || !ep) return null
 
-    // ✅ sanitize
-    if(!/^\d+$/.test(animeId) || !/^\d+$/.test(ep)){
+    // ✅ FIX: UUID aur numbers dono allow karo
+    const safeStr = /^[a-zA-Z0-9_\-]+$/
+    if(!safeStr.test(animeId) || !safeStr.test(ep)){
       return null
     }
 
