@@ -1,4 +1,4 @@
-import { verifyToken } from "./auth.js"
+import { verifyToken } from "../routes/auth.js"
 
 export async function adminAuth(c, next) {
   // CORS preflight — OPTIONS request ko seedha pass karo
