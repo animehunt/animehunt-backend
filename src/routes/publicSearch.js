@@ -110,7 +110,19 @@ app.get("/api/search/az/:letter", async (c) => {
   const offset = (page - 1) * limit
 
   try {
-    const pattern = letter === "#" ? "[^A-Za-z]%" : letter + "%"
+    // ✅ FIX: SQLite LIKE mein [] support nahi — # ke liye alag query
+  if (letter === "#") {
+    try {
+      const { results } = await db.prepare(`
+        SELECT ${COLS} FROM anime
+        WHERE is_hidden=0 AND active=1
+        AND SUBSTR(UPPER(title),1,1) NOT BETWEEN 'A' AND 'Z'
+        ORDER BY title ASC LIMIT ? OFFSET ?
+      `).bind(limit, offset).all()
+      return c.json(ok({ letter, page, limit, data: results }))
+    } catch (err) { return c.json(fail(err.message), 500) }
+  }
+  const pattern = letter + "%"
     const { results } = await db.prepare(`
       SELECT ${COLS} FROM anime
       WHERE title LIKE ? AND is_hidden=0 AND active=1
