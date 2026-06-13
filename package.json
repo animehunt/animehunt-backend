@@ -2,7 +2,21 @@
   "name": "animehunt-backend",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "dev":    "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 execute animehunt --file=schema.sql",
+    "db:migrate:remote": "wrangler d1 execute animehunt --remote --file=schema.sql",
+    "secret:jwt":     "wrangler secret put JWT_SECRET",
+    "secret:turso":   "wrangler secret put TURSO_AUTH_TOKEN",
+    "secret:supabase":"wrangler secret put SUPABASE_KEY",
+    "secret:imagekit":"wrangler secret put IMAGEKIT_PRIVATE_KEY",
+    "secrets:all": "npm run secret:jwt && npm run secret:turso && npm run secret:supabase && npm run secret:imagekit"
+  },
   "dependencies": {
     "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
   }
 }
