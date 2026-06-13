@@ -49,7 +49,7 @@ function format(row) {
 /* ================= VALIDATION ================= */
 
 function validate(body) {
-  if (!body || typeof body !== "object") return "Invalid request body"   // ✅ FIX: guard null/non-object body
+  if (!body || typeof body !== "object") return "Invalid request body"
   if (!body.name?.trim()) return "Name required"
   return null
 }
@@ -79,7 +79,7 @@ async function syncToReplicas(env, action, data) {
     )
   }
 
-  return Promise.all(promises)   // ✅ FIX: missing return — waitUntil() callers got undefined, CF Workers killed sync mid-flight
+  return Promise.all(promises)
 }
 
 function buildTursoPayload(action, data) {
@@ -99,14 +99,14 @@ function buildTursoPayload(action, data) {
             { type:"text",    value: String(data.name) },
             { type:"text",    value: String(data.slug) },
             { type:"text",    value: String(data.type) },
-            { type:"integer", value: String(data.category_order) },   // ✅ FIX: Turso requires string-encoded values
-            { type:"integer", value: String(data.priority) },         // ✅ FIX
-            { type:"integer", value: String(data.show_home) },        // ✅ FIX
-            { type:"integer", value: String(data.active) },           // ✅ FIX
-            { type:"integer", value: String(data.featured) },         // ✅ FIX
-            { type:"integer", value: String(data.ai_trending) },      // ✅ FIX
-            { type:"integer", value: String(data.ai_popular) },       // ✅ FIX
-            { type:"integer", value: String(data.ai_assign) },        // ✅ FIX
+            { type:"integer", value: String(data.category_order) },
+            { type:"integer", value: String(data.priority) },
+            { type:"integer", value: String(data.show_home) },
+            { type:"integer", value: String(data.active) },
+            { type:"integer", value: String(data.featured) },
+            { type:"integer", value: String(data.ai_trending) },
+            { type:"integer", value: String(data.ai_popular) },
+            { type:"integer", value: String(data.ai_assign) },
             { type:"text",    value: String(data.created_at) },
             { type:"text",    value: String(data.updated_at) }
           ]
@@ -120,7 +120,7 @@ function buildTursoPayload(action, data) {
         type: "execute",
         stmt: {
           sql:  "DELETE FROM categories WHERE id=?",
-          args: [{ type:"text", value: String(data.id) }]   // ✅ FIX: String() for safety
+          args: [{ type:"text", value: String(data.id) }]
         }
       }]
     }
@@ -140,13 +140,13 @@ async function syncSupabase(env, action, data) {
     const res = await fetch(base, { method:"POST", headers, body: JSON.stringify(data) })
     if (!res.ok) {
       const txt = await res.text()
-      console.error("Supabase categories insert failed:", res.status, txt)   // ✅ FIX: was silently swallowing errors
+      console.error("Supabase categories insert failed:", res.status, txt)
     }
   }
   if (action === "delete") {
-    const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, {   // ✅ FIX: encode id in URL
+    const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, {
       method:  "DELETE",
-      headers: { ...headers, Prefer: undefined }   // ✅ FIX: Prefer header invalid on DELETE
+      headers: { ...headers, Prefer: undefined }
     })
     if (!res.ok) {
       const txt = await res.text()
@@ -167,7 +167,7 @@ app.get("/categories/public", async (c) => {
       WHERE active=1
       ORDER BY priority ASC, category_order ASC
     `).all()
-    return c.json(success((results || []).map(format)))   // ✅ FIX: guard undefined results on empty table
+    return c.json(success((results || []).map(format)))
   } catch (err) {
     return c.json(failure(err.message), 500)
   }
@@ -181,7 +181,7 @@ app.get("/categories/home", async (c) => {
       WHERE active=1 AND show_home=1
       ORDER BY priority ASC, category_order ASC
     `).all()
-    return c.json(success((results || []).map(format)))   // ✅ FIX: guard undefined results on empty table
+    return c.json(success((results || []).map(format)))
   } catch (err) {
     return c.json(failure(err.message), 500)
   }
@@ -194,7 +194,7 @@ app.post("/categories", async (c) => {
     const db = c.env.DB
 
     let body
-    try { body = await c.req.json() }                           // ✅ FIX: guard malformed JSON body
+    try { body = await c.req.json() }
     catch { return c.json(failure("Invalid JSON body"), 400) }
 
     const err = validate(body)
@@ -211,7 +211,6 @@ app.post("/categories", async (c) => {
     ).bind(slug).first()
     if (exists) return c.json(failure("Slug already exists"), 400)
 
-    /* Auto order or manual */
     let order = Number(body.order)
     if (!order || order < 1) {
       const last = await db.prepare(
@@ -219,7 +218,6 @@ app.post("/categories", async (c) => {
       ).first()
       order = (last?.max || 0) + 1
     } else {
-      /* Shift others down */
       await db.prepare(`
         UPDATE categories
         SET category_order = category_order + 1
@@ -262,7 +260,6 @@ app.post("/categories", async (c) => {
       row.created_at, row.updated_at
     ).run()
 
-    // ✅ FIX: waitUntil so CF Workers doesn't kill sync after response sent
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
     } else {
@@ -297,7 +294,7 @@ app.get("/categories", async (c) => {
       ORDER BY priority ASC, category_order ASC
     `).bind(...params).all()
 
-    return c.json(success((results || []).map(format)))   // ✅ FIX: guard undefined results on empty table
+    return c.json(success((results || []).map(format)))
 
   } catch (err) {
     console.error("categories GET:", err)
@@ -331,13 +328,12 @@ app.put("/categories/:id", async (c) => {
     const id = c.req.param("id")
 
     let body
-    try { body = await c.req.json() }                           // ✅ FIX: guard malformed JSON
+    try { body = await c.req.json() }
     catch { return c.json(failure("Invalid JSON body"), 400) }
 
     const err = validate(body)
     if (err) return c.json(failure(err), 400)
 
-    // ✅ FIX: fetch created_at AND existing order to preserve them
     const existing = await db.prepare(
       "SELECT id, created_at, category_order FROM categories WHERE id=?"
     ).bind(id).first()
@@ -353,9 +349,7 @@ app.put("/categories/:id", async (c) => {
     if (conflict) return c.json(failure("Slug already used"), 400)
 
     const timestamp = now()
-
-    // ✅ FIX: was `Number(body.order || 0)` — 0 stored in DB when blank, now preserves existing order
-    const newOrder = Number(body.order) >= 1 ? Number(body.order) : existing.category_order
+    const newOrder  = Number(body.order) >= 1 ? Number(body.order) : existing.category_order
 
     const row = {
       id,
@@ -370,7 +364,7 @@ app.put("/categories/:id", async (c) => {
       ai_trending:    bool(body.aiTrending),
       ai_popular:     bool(body.aiPopular),
       ai_assign:      bool(body.aiAssign),
-      created_at:     existing.created_at || timestamp,   // ✅ FIX: preserve original created_at
+      created_at:     existing.created_at || timestamp,
       updated_at:     timestamp
     }
 
@@ -390,7 +384,6 @@ app.put("/categories/:id", async (c) => {
       row.updated_at, id
     ).run()
 
-    // ✅ FIX: waitUntil + pass correct created_at (was `created_at: now()` which overwrote original)
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
     } else {
@@ -419,7 +412,6 @@ app.delete("/categories/:id", async (c) => {
 
     await db.prepare("DELETE FROM categories WHERE id=?").bind(id).run()
 
-    // ✅ FIX: waitUntil so CF Workers doesn't kill sync after response sent
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "delete", { id }))
     } else {
@@ -441,21 +433,19 @@ app.post("/categories/reorder", async (c) => {
     const db = c.env.DB
 
     let body
-    try { body = await c.req.json() }                           // ✅ FIX: guard malformed JSON
+    try { body = await c.req.json() }
     catch { return c.json(failure("Invalid JSON body"), 400) }
 
     if (!Array.isArray(body.order) || !body.order.length) {
       return c.json(failure("order array required"), 400)
     }
 
-    // ✅ FIX: validate each item before touching DB
     for (const item of body.order) {
       if (!item.id)                         return c.json(failure("Each item needs an id"), 400)
       if (typeof item.order !== "number" ||
           item.order < 1)                   return c.json(failure("Each item needs a valid order >= 1"), 400)
     }
 
-    // ✅ FIX: parallel updates instead of sequential awaits (N DB round-trips → 1 batch)
     await Promise.all(
       body.order.map(item =>
         db.prepare(
@@ -479,7 +469,6 @@ app.patch("/categories/:id/toggle", async (c) => {
     const db  = c.env.DB
     const id  = c.req.param("id")
 
-    // ✅ FIX: fetch full row for sync (was only fetching id+active)
     const row = await db.prepare(
       "SELECT * FROM categories WHERE id=?"
     ).bind(id).first()
@@ -493,7 +482,6 @@ app.patch("/categories/:id/toggle", async (c) => {
       "UPDATE categories SET active=?, updated_at=? WHERE id=?"
     ).bind(newVal, timestamp, id).run()
 
-    // ✅ FIX: sync toggle to replicas — was completely missing, Turso/Supabase never got active state changes
     const syncRow = {
       id:             row.id,
       name:           row.name,
@@ -510,6 +498,7 @@ app.patch("/categories/:id/toggle", async (c) => {
       created_at:     row.created_at,
       updated_at:     timestamp
     }
+
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", syncRow))
     } else {
@@ -524,4 +513,3 @@ app.patch("/categories/:id/toggle", async (c) => {
 })
 
 export default app
-
