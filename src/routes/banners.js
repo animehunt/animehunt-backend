@@ -11,7 +11,7 @@ const app = new Hono()
 
 const success = (data) => ({ success: true,  data })
 const failure = (msg)  => ({ success: false, message: msg })
-const now     = ()     => new Date().toISOString()   /* FIX: was Date.now() (number) */
+const now     = ()     => new Date().toISOString()
 const bool    = (v)    => (v ? 1 : 0)
 
 function format(b) {
@@ -406,4 +406,3 @@ app.post("/banners/reorder", async (c) => {
 })
 
 export default app
-
