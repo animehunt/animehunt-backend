@@ -1,479 +1,592 @@
 /**
- * ads.js — AnimeHunt CMS  (Hono)
- * Handles: Ads Library, Shortlinks, Popups, Host Monetization,
- *          Page Ads Config, Poster Targeting, Ad Stats
+ * ads.js — AnimeHunt Backend
+ * ════════════════════════════════════════════════════════
+ * Ads & Monetization router (Hono + Cloudflare D1)
  *
- * Usage:
- *   import adsRoutes from './ads.js'
- *   app.route('/api', adsRoutes)
+ * index.js mein mount karo:
+ *   app.route("/api", ads)              ← public routes
+ *   adminRoutes.route("/", ads)         ← admin routes (adminAuth already applied)
  *
- * Expects:
- *   - ctx.var.db   → your DB instance (set via middleware)
- *   - ctx.var.user → set by your auth middleware
+ * Public  routes → /api/public/page-ads
+ * Admin   routes → /api/admin/ads-library, /api/admin/popup-library, etc.
+ * ════════════════════════════════════════════════════════
  */
 
-import { Hono } from 'hono'
+import { Hono } from "hono"
 
 const ads = new Hono()
 
-/* ─────────────────────────────────────────
-   HELPERS
-───────────────────────────────────────── */
+const ok   = (c, data)              => c.json({ success: true,  data })
+const fail = (c, msg, status = 400) => c.json({ success: false, message: msg }, status)
 
-function ok(c, data, status = 200) {
-  return c.json({ success: true, data }, status)
+function pickByMode(arr, mode, clicks = 0) {
+  if (!arr?.length) return null
+  if (mode === "direct")   return arr[0]
+  if (mode === "sequence") return arr[clicks % arr.length]
+  return arr[Math.floor(Math.random() * arr.length)]
 }
 
-function fail(c, message, status = 400) {
-  return c.json({ success: false, message: String(message) }, status)
-}
+/* ══════════════════════════════════════════════════════════
+   PUBLIC ROUTES
+   (index.js: app.route("/api", ads))
+══════════════════════════════════════════════════════════ */
 
-function db(c) {
-  const d = c.var.db ?? c.env?.db
-  if (!d) throw new Error('DB not initialised — set c.var.db in middleware')
-  return d
-}
+/* GET /api/public/page-ads?page=download */
+ads.get("/public/page-ads", async (c) => {
+  const db   = c.env.DB
+  const page = c.req.query("page") || "download"
+  try {
+    const config = await db.prepare(
+      "SELECT slot_config FROM page_monetization WHERE page_type=? AND enabled=1"
+    ).bind(page).first()
 
-/** Convert input to a JSON array string safely */
-function safeJsonArray(val) {
-  if (!val) return '[]'
-  if (Array.isArray(val)) return JSON.stringify(val)
-  if (typeof val === 'string') {
-    try { if (Array.isArray(JSON.parse(val))) return val } catch {}
-  }
-  return '[]'
-}
+    if (!config?.slot_config) return ok(c, {})
 
-/* ─────────────────────────────────────────
-   AUTH MIDDLEWARE (applied to all routes)
-───────────────────────────────────────── */
+    let slotConfig = {}
+    try { slotConfig = JSON.parse(config.slot_config) } catch {}
 
-ads.use('*', async (c, next) => {
-  const user = c.var.user ?? c.get('user')
-  if (!user) return fail(c, 'Unauthorized', 401)
-  await next()
+    const result = {}
+    for (const [slot, slotData] of Object.entries(slotConfig)) {
+      if (!slotData?.ads?.length) continue
+      const pickedId = pickByMode(slotData.ads, slotData.mode || "random")
+      if (!pickedId) continue
+      const ad = await db.prepare(
+        "SELECT code, type, name FROM ads_library WHERE id=? AND active=1"
+      ).bind(pickedId).first()
+      if (ad) result[slot] = { code: ad.code, type: ad.type, name: ad.name }
+    }
+    return ok(c, result)
+  } catch(e) { return fail(c, e.message) }
 })
 
-/* ═════════════════════════════════════════
-   ADS LIBRARY
-   GET    /ads-library
-   POST   /ads-library
-   PUT    /ads-library/:id
-   DELETE /ads-library/:id
-═════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════
+   ADMIN ROUTES
+   (index.js: adminRoutes.route("/", ads) — adminAuth already applied)
+   All routes: /api/admin/...
+══════════════════════════════════════════════════════════ */
 
-ads.get('/ads-library', async (c) => {
-  const rows = await db(c).all('SELECT * FROM ads_library ORDER BY id DESC')
-  return ok(c, rows)
+/* ── ADS LIBRARY ────────────────────────────────────────── */
+
+ads.get("/ads-library", async (c) => {
+  const db = c.env.DB
+  try {
+    const res = await db.prepare(
+      "SELECT id, name, type, code, delay, weight, active, created_at FROM ads_library ORDER BY id DESC"
+    ).all()
+    return ok(c, res.results)
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.post('/ads-library', async (c) => {
+ads.get("/ads-library/:id", async (c) => {
+  const db  = c.env.DB
+  const id  = parseInt(c.req.param("id"))
+  try {
+    const row = await db.prepare("SELECT * FROM ads_library WHERE id=?").bind(id).first()
+    if (!row) return fail(c, "Not found", 404)
+    return ok(c, row)
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.post("/ads-library", async (c) => {
+  const db   = c.env.DB
   const body = await c.req.json()
-  const { name, code, type, delay, weight, active } = body
-
-  if (!name?.trim()) return fail(c, 'name is required')
-  if (!code?.trim()) return fail(c, 'code is required')
-
-  const result = await db(c).run(
-    `INSERT INTO ads_library (name, code, type, delay, weight, active, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-    [
-      name.trim(), code.trim(),
-      type   || 'popup',
-      parseInt(delay)  || 0,
-      parseInt(weight) || 1,
-      active != null ? parseInt(active) : 1
-    ]
-  )
-  const row = await db(c).get('SELECT * FROM ads_library WHERE id = ?', [result.lastID])
-  return ok(c, row, 201)
+  const { name, type, code, delay, weight, active } = body
+  if (!name || !code) return fail(c, "name and code required")
+  try {
+    const res = await db.prepare(
+      `INSERT INTO ads_library (name, type, code, delay, weight, active, created_at)
+       VALUES (?,?,?,?,?,?,datetime('now'))`
+    ).bind(name, type || "banner", code, delay ?? 0, weight ?? 1, active ?? 1).run()
+    return ok(c, { id: res.meta.last_row_id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.put('/ads-library/:id', async (c) => {
-  const id       = c.req.param('id')
-  const existing = await db(c).get('SELECT id FROM ads_library WHERE id = ?', [id])
-  if (!existing) return fail(c, 'Ad not found', 404)
-
+ads.put("/ads-library/:id", async (c) => {
+  const db   = c.env.DB
+  const id   = parseInt(c.req.param("id"))
   const body = await c.req.json()
-  const { name, code, type, delay, weight, active } = body
-
-  if (!name?.trim()) return fail(c, 'name is required')
-  if (!code?.trim()) return fail(c, 'code is required')
-
-  await db(c).run(
-    `UPDATE ads_library
-     SET name=?, code=?, type=?, delay=?, weight=?, active=?, updated_at=datetime('now')
-     WHERE id=?`,
-    [
-      name.trim(), code.trim(),
-      type   || 'popup',
-      parseInt(delay)  || 0,
-      parseInt(weight) || 1,
-      active != null ? parseInt(active) : 1,
-      id
-    ]
-  )
-  const row = await db(c).get('SELECT * FROM ads_library WHERE id = ?', [id])
-  return ok(c, row)
+  const { name, type, code, delay, weight, active } = body
+  if (!name || !code) return fail(c, "name and code required")
+  try {
+    await db.prepare(
+      `UPDATE ads_library SET name=?, type=?, code=?, delay=?, weight=?, active=?, updated_at=datetime('now') WHERE id=?`
+    ).bind(name, type || "banner", code, delay ?? 0, weight ?? 1, active ?? 1, id).run()
+    return ok(c, { id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.delete('/ads-library/:id', async (c) => {
-  const id       = c.req.param('id')
-  const existing = await db(c).get('SELECT id FROM ads_library WHERE id = ?', [id])
-  if (!existing) return fail(c, 'Ad not found', 404)
-
-  await db(c).run('DELETE FROM ads_library WHERE id = ?', [id])
-  return ok(c, { deleted: true, id: parseInt(id) })
+ads.delete("/ads-library/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    await db.prepare("DELETE FROM ads_library WHERE id=?").bind(id).run()
+    return ok(c, { deleted: id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-/* ═════════════════════════════════════════
-   SHORTLINKS LIBRARY
-   GET    /shortlinks-library
-   POST   /shortlinks-library
-   PUT    /shortlinks-library/:id
-   DELETE /shortlinks-library/:id
-═════════════════════════════════════════ */
+/* ── POPUP LIBRARY ──────────────────────────────────────── */
 
-ads.get('/shortlinks-library', async (c) => {
-  const rows = await db(c).all('SELECT * FROM shortlinks_library ORDER BY id DESC')
-  return ok(c, rows)
+ads.get("/popup-library", async (c) => {
+  const db = c.env.DB
+  try {
+    const res = await db.prepare(
+      "SELECT id, name, script, trigger, active, created_at FROM popup_library ORDER BY id DESC"
+    ).all()
+    return ok(c, res.results)
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.post('/shortlinks-library', async (c) => {
+ads.get("/popup-library/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    const row = await db.prepare("SELECT * FROM popup_library WHERE id=?").bind(id).first()
+    if (!row) return fail(c, "Not found", 404)
+    return ok(c, row)
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.post("/popup-library", async (c) => {
+  const db   = c.env.DB
   const body = await c.req.json()
-  const { name, base_url, api_key, active, weight } = body
-
-  if (!name?.trim())     return fail(c, 'name is required')
-  if (!base_url?.trim()) return fail(c, 'base_url is required')
-
-  const result = await db(c).run(
-    `INSERT INTO shortlinks_library (name, base_url, api_key, active, weight, created_at)
-     VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-    [
-      name.trim(), base_url.trim(),
-      api_key || '',
-      active  != null ? parseInt(active)  : 1,
-      parseInt(weight) || 1
-    ]
-  )
-  const row = await db(c).get('SELECT * FROM shortlinks_library WHERE id = ?', [result.lastID])
-  return ok(c, row, 201)
+  const { name, script, trigger, active } = body
+  if (!name || !script) return fail(c, "name and script required")
+  try {
+    const res = await db.prepare(
+      `INSERT INTO popup_library (name, script, trigger, active, created_at)
+       VALUES (?,?,?,?,datetime('now'))`
+    ).bind(name, script, trigger || "onload", active ?? 1).run()
+    return ok(c, { id: res.meta.last_row_id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.put('/shortlinks-library/:id', async (c) => {
-  const id       = c.req.param('id')
-  const existing = await db(c).get('SELECT id FROM shortlinks_library WHERE id = ?', [id])
-  if (!existing) return fail(c, 'Shortlink not found', 404)
-
+ads.put("/popup-library/:id", async (c) => {
+  const db   = c.env.DB
+  const id   = parseInt(c.req.param("id"))
   const body = await c.req.json()
-  const { name, base_url, api_key, active, weight } = body
-
-  if (!name?.trim())     return fail(c, 'name is required')
-  if (!base_url?.trim()) return fail(c, 'base_url is required')
-
-  await db(c).run(
-    `UPDATE shortlinks_library
-     SET name=?, base_url=?, api_key=?, active=?, weight=?, updated_at=datetime('now')
-     WHERE id=?`,
-    [
-      name.trim(), base_url.trim(),
-      api_key || '',
-      active  != null ? parseInt(active)  : 1,
-      parseInt(weight) || 1,
-      id
-    ]
-  )
-  const row = await db(c).get('SELECT * FROM shortlinks_library WHERE id = ?', [id])
-  return ok(c, row)
+  const { name, script, trigger, active } = body
+  if (!name || !script) return fail(c, "name and script required")
+  try {
+    await db.prepare(
+      `UPDATE popup_library SET name=?, script=?, trigger=?, active=?, updated_at=datetime('now') WHERE id=?`
+    ).bind(name, script, trigger || "onload", active ?? 1, id).run()
+    return ok(c, { id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.delete('/shortlinks-library/:id', async (c) => {
-  const id       = c.req.param('id')
-  const existing = await db(c).get('SELECT id FROM shortlinks_library WHERE id = ?', [id])
-  if (!existing) return fail(c, 'Shortlink not found', 404)
-
-  await db(c).run('DELETE FROM shortlinks_library WHERE id = ?', [id])
-  return ok(c, { deleted: true, id: parseInt(id) })
+ads.delete("/popup-library/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    await db.prepare("DELETE FROM popup_library WHERE id=?").bind(id).run()
+    return ok(c, { deleted: id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-/* ═════════════════════════════════════════
-   POPUP LIBRARY
-   GET    /popup-library
-   POST   /popup-library
-   PUT    /popup-library/:id
-   DELETE /popup-library/:id
-═════════════════════════════════════════ */
+/* ── SHORTLINKS LIBRARY ─────────────────────────────────── */
 
-ads.get('/popup-library', async (c) => {
-  const rows = await db(c).all('SELECT * FROM popup_library ORDER BY id DESC')
-  return ok(c, rows)
+ads.get("/shortlinks-library", async (c) => {
+  const db = c.env.DB
+  try {
+    const res = await db.prepare(
+      "SELECT id, name, base_url, api_key, weight, active, created_at FROM shortlinks_library ORDER BY id DESC"
+    ).all()
+    return ok(c, res.results)
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.post('/popup-library', async (c) => {
+ads.get("/shortlinks-library/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    const row = await db.prepare("SELECT * FROM shortlinks_library WHERE id=?").bind(id).first()
+    if (!row) return fail(c, "Not found", 404)
+    return ok(c, row)
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.post("/shortlinks-library", async (c) => {
+  const db   = c.env.DB
   const body = await c.req.json()
-  const { name, script, active, trigger } = body
-
-  if (!name?.trim())   return fail(c, 'name is required')
-  if (!script?.trim()) return fail(c, 'script is required')
-
-  const result = await db(c).run(
-    `INSERT INTO popup_library (name, script, active, trigger, created_at)
-     VALUES (?, ?, ?, ?, datetime('now'))`,
-    [
-      name.trim(), script.trim(),
-      active  != null ? parseInt(active) : 1,
-      trigger || 'onload'
-    ]
-  )
-  const row = await db(c).get('SELECT * FROM popup_library WHERE id = ?', [result.lastID])
-  return ok(c, row, 201)
+  const { name, base_url, api_key, weight, active } = body
+  if (!name || !base_url) return fail(c, "name and base_url required")
+  try {
+    const res = await db.prepare(
+      `INSERT INTO shortlinks_library (name, base_url, api_key, weight, active, created_at)
+       VALUES (?,?,?,?,?,datetime('now'))`
+    ).bind(name, base_url, api_key || null, weight ?? 1, active ?? 1).run()
+    return ok(c, { id: res.meta.last_row_id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.put('/popup-library/:id', async (c) => {
-  const id       = c.req.param('id')
-  const existing = await db(c).get('SELECT id FROM popup_library WHERE id = ?', [id])
-  if (!existing) return fail(c, 'Popup not found', 404)
-
+ads.put("/shortlinks-library/:id", async (c) => {
+  const db   = c.env.DB
+  const id   = parseInt(c.req.param("id"))
   const body = await c.req.json()
-  const { name, script, active, trigger } = body
-
-  if (!name?.trim())   return fail(c, 'name is required')
-  if (!script?.trim()) return fail(c, 'script is required')
-
-  await db(c).run(
-    `UPDATE popup_library
-     SET name=?, script=?, active=?, trigger=?, updated_at=datetime('now')
-     WHERE id=?`,
-    [
-      name.trim(), script.trim(),
-      active != null ? parseInt(active) : 1,
-      trigger || 'onload',
-      id
-    ]
-  )
-  const row = await db(c).get('SELECT * FROM popup_library WHERE id = ?', [id])
-  return ok(c, row)
+  const { name, base_url, api_key, weight, active } = body
+  if (!name || !base_url) return fail(c, "name and base_url required")
+  try {
+    await db.prepare(
+      `UPDATE shortlinks_library SET name=?, base_url=?, api_key=?, weight=?, active=?, updated_at=datetime('now') WHERE id=?`
+    ).bind(name, base_url, api_key || null, weight ?? 1, active ?? 1, id).run()
+    return ok(c, { id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.delete('/popup-library/:id', async (c) => {
-  const id       = c.req.param('id')
-  const existing = await db(c).get('SELECT id FROM popup_library WHERE id = ?', [id])
-  if (!existing) return fail(c, 'Popup not found', 404)
-
-  await db(c).run('DELETE FROM popup_library WHERE id = ?', [id])
-  return ok(c, { deleted: true, id: parseInt(id) })
+ads.delete("/shortlinks-library/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    await db.prepare("DELETE FROM shortlinks_library WHERE id=?").bind(id).run()
+    return ok(c, { deleted: id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-/* ═════════════════════════════════════════
-   HOST MONETIZATION
-   GET    /host-monetization
-   POST   /host-monetization
-   PUT    /host-monetization/:id
-   DELETE /host-monetization/:id
-═════════════════════════════════════════ */
+/* ── REDIRECT LIBRARY ───────────────────────────────────── */
 
-ads.get('/host-monetization', async (c) => {
-  const rows = await db(c).all('SELECT * FROM host_monetization ORDER BY id DESC')
-  return ok(c, rows)
+ads.get("/redirect-library", async (c) => {
+  const db = c.env.DB
+  try {
+    const res = await db.prepare(
+      "SELECT id, name, url, delay, active, created_at FROM redirect_library ORDER BY id DESC"
+    ).all()
+    return ok(c, res.results)
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.post('/host-monetization', async (c) => {
+ads.get("/redirect-library/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    const row = await db.prepare("SELECT * FROM redirect_library WHERE id=?").bind(id).first()
+    if (!row) return fail(c, "Not found", 404)
+    return ok(c, row)
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.post("/redirect-library", async (c) => {
+  const db   = c.env.DB
   const body = await c.req.json()
-  const { host_id, mode, ads: adsArr, shortlinks, popups, active } = body
-
-  if (!host_id) return fail(c, 'host_id is required')
-
-  const host = await db(c).get('SELECT id FROM hosts WHERE id = ?', [host_id])
-  if (!host) return fail(c, 'Host not found', 404)
-
-  const dup = await db(c).get('SELECT id FROM host_monetization WHERE host_id = ?', [host_id])
-  if (dup) return fail(c, 'Config already exists for this host — use PUT to update')
-
-  const result = await db(c).run(
-    `INSERT INTO host_monetization (host_id, mode, ads, shortlinks, popups, active, clicks, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))`,
-    [
-      parseInt(host_id),
-      mode   || 'random',
-      safeJsonArray(adsArr),
-      safeJsonArray(shortlinks),
-      safeJsonArray(popups),
-      active != null ? parseInt(active) : 1
-    ]
-  )
-  const row = await db(c).get('SELECT * FROM host_monetization WHERE id = ?', [result.lastID])
-  return ok(c, row, 201)
+  const { name, url, delay, active } = body
+  if (!name || !url) return fail(c, "name and url required")
+  try {
+    const res = await db.prepare(
+      `INSERT INTO redirect_library (name, url, delay, active, created_at)
+       VALUES (?,?,?,?,datetime('now'))`
+    ).bind(name, url, delay ?? 0, active ?? 1).run()
+    return ok(c, { id: res.meta.last_row_id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.put('/host-monetization/:id', async (c) => {
-  const id       = c.req.param('id')
-  const existing = await db(c).get('SELECT id FROM host_monetization WHERE id = ?', [id])
-  if (!existing) return fail(c, 'Config not found', 404)
-
+ads.put("/redirect-library/:id", async (c) => {
+  const db   = c.env.DB
+  const id   = parseInt(c.req.param("id"))
   const body = await c.req.json()
-  const { host_id, mode, ads: adsArr, shortlinks, popups, active } = body
-
-  if (!host_id) return fail(c, 'host_id is required')
-
-  await db(c).run(
-    `UPDATE host_monetization
-     SET host_id=?, mode=?, ads=?, shortlinks=?, popups=?, active=?, updated_at=datetime('now')
-     WHERE id=?`,
-    [
-      parseInt(host_id),
-      mode || 'random',
-      safeJsonArray(adsArr),
-      safeJsonArray(shortlinks),
-      safeJsonArray(popups),
-      active != null ? parseInt(active) : 1,
-      id
-    ]
-  )
-  const row = await db(c).get('SELECT * FROM host_monetization WHERE id = ?', [id])
-  return ok(c, row)
+  const { name, url, delay, active } = body
+  if (!name || !url) return fail(c, "name and url required")
+  try {
+    await db.prepare(
+      `UPDATE redirect_library SET name=?, url=?, delay=?, active=?, updated_at=datetime('now') WHERE id=?`
+    ).bind(name, url, delay ?? 0, active ?? 1, id).run()
+    return ok(c, { id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.delete('/host-monetization/:id', async (c) => {
-  const id       = c.req.param('id')
-  const existing = await db(c).get('SELECT id FROM host_monetization WHERE id = ?', [id])
-  if (!existing) return fail(c, 'Config not found', 404)
-
-  await db(c).run('DELETE FROM host_monetization WHERE id = ?', [id])
-  return ok(c, { deleted: true, id: parseInt(id) })
+ads.delete("/redirect-library/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    await db.prepare("DELETE FROM redirect_library WHERE id=?").bind(id).run()
+    return ok(c, { deleted: id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-/* ═════════════════════════════════════════
-   PAGE ADS CONFIG
-   GET  /page-ads-config
-   POST /page-ads-config  (upsert)
-═════════════════════════════════════════ */
+/* ── HOST MONETIZATION ──────────────────────────────────── */
 
-const PAGE_ADS_BOOL = [
-  'home_enabled','detail_enabled','eplist_enabled','dl_enabled',
-  'knight_enabled','nav_enabled','go_popup','go_sl','go_ads',
-  'mobile_ads','mobile_extra'
-]
-const PAGE_ADS_STR = [
-  'home_position','detail_position','dl_position','knight_position',
-  'home_ad','detail_ad','eplist_ad','dl_ad','knight_ad','nav_ad'
-]
-const PAGE_ADS_NUM = [
-  'eplist_interval','nav_interval','redirect_delay',
-  'redirect_skip','popup_max','popup_cooldown'
-]
-
-ads.get('/page-ads-config', async (c) => {
-  const row = await db(c).get('SELECT config FROM page_ads_config WHERE id = 1')
-  if (!row) return ok(c, {})
-  try { return ok(c, JSON.parse(row.config)) } catch { return ok(c, {}) }
+ads.get("/host-monetization", async (c) => {
+  const db = c.env.DB
+  try {
+    const res = await db.prepare(
+      `SELECT hm.*, h.name as host_name
+       FROM host_monetization hm
+       LEFT JOIN hosts h ON h.id = hm.host_id
+       ORDER BY hm.host_id ASC`
+    ).all()
+    return ok(c, res.results)
+  } catch(e) { return fail(c, e.message) }
 })
 
-ads.post('/page-ads-config', async (c) => {
-  const body   = await c.req.json()
-  const config = {}
-
-  PAGE_ADS_BOOL.forEach(k => { if (k in body) config[k] = !!body[k] })
-  PAGE_ADS_STR.forEach(k  => { if (k in body) config[k] = String(body[k] ?? '') })
-  PAGE_ADS_NUM.forEach(k  => { if (k in body) config[k] = parseInt(body[k]) || 0 })
-
-  const existing = await db(c).get('SELECT id FROM page_ads_config WHERE id = 1')
-  if (existing) {
-    await db(c).run(
-      `UPDATE page_ads_config SET config=?, updated_at=datetime('now') WHERE id=1`,
-      [JSON.stringify(config)]
-    )
-  } else {
-    await db(c).run(
-      `INSERT INTO page_ads_config (id, config, created_at, updated_at)
-       VALUES (1, ?, datetime('now'), datetime('now'))`,
-      [JSON.stringify(config)]
-    )
-  }
-  return ok(c, config)
+ads.get("/host-monetization/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    const row = await db.prepare("SELECT * FROM host_monetization WHERE id=?").bind(id).first()
+    if (!row) return fail(c, "Not found", 404)
+    return ok(c, row)
+  } catch(e) { return fail(c, e.message) }
 })
 
-/* ═════════════════════════════════════════
-   POSTER AD TARGETS
-   GET  /poster-ad-targets
-   POST /poster-ad-targets  (bulk replace)
-═════════════════════════════════════════ */
-
-ads.get('/poster-ad-targets', async (c) => {
-  const rows = await db(c).all('SELECT anime_id, ad_id FROM poster_ad_targets')
-  return ok(c, rows)
-})
-
-ads.post('/poster-ad-targets', async (c) => {
-  const body    = await c.req.json()
-  const targets = body.targets
-
-  if (!Array.isArray(targets)) return fail(c, 'targets must be an array')
-
-  for (const t of targets) {
-    if (!t.anime_id) return fail(c, 'Each target must have anime_id')
-    if (!t.ad_id)    return fail(c, 'Each target must have ad_id')
-  }
-
-  await db(c).run('DELETE FROM poster_ad_targets')
-  for (const t of targets) {
-    await db(c).run(
-      `INSERT INTO poster_ad_targets (anime_id, ad_id, updated_at) VALUES (?, ?, datetime('now'))`,
-      [parseInt(t.anime_id), parseInt(t.ad_id)]
-    )
-  }
-  return ok(c, { saved: targets.length })
-})
-
-/* ═════════════════════════════════════════
-   AD STATS
-   GET  /ads/stats
-   POST /ads/stats/track
-═════════════════════════════════════════ */
-
-ads.get('/ads/stats', async (c) => {
-  const row = await db(c).get('SELECT * FROM ad_stats WHERE id = 1')
-  if (!row) return ok(c, { impressions: 0, ad_clicks: 0, shortlink_clicks: 0, popup_opens: 0 })
-  return ok(c, {
-    impressions:      row.impressions      || 0,
-    ad_clicks:        row.ad_clicks        || 0,
-    shortlink_clicks: row.shortlink_clicks || 0,
-    popup_opens:      row.popup_opens      || 0
-  })
-})
-
-ads.post('/ads/stats/track', async (c) => {
+ads.post("/host-monetization", async (c) => {
+  const db   = c.env.DB
   const body = await c.req.json()
-  const { event } = body
-
-  const colMap = {
-    impression:      'impressions',
-    ad_click:        'ad_clicks',
-    shortlink_click: 'shortlink_clicks',
-    popup_open:      'popup_opens'
-  }
-  const col = colMap[event]
-  if (!col) return fail(c, 'Unknown event type')
-
-  const existing = await db(c).get('SELECT id FROM ad_stats WHERE id = 1')
-  if (existing) {
-    await db(c).run(`UPDATE ad_stats SET ${col} = ${col} + 1 WHERE id = 1`)
-  } else {
-    const init = { impressions: 0, ad_clicks: 0, shortlink_clicks: 0, popup_opens: 0, [col]: 1 }
-    await db(c).run(
-      `INSERT INTO ad_stats (id, impressions, ad_clicks, shortlink_clicks, popup_opens)
-       VALUES (1, ?, ?, ?, ?)`,
-      [init.impressions, init.ad_clicks, init.shortlink_clicks, init.popup_opens]
-    )
-  }
-  return ok(c, { tracked: true })
+  const { host_id, mode, ads: adsJson, popups, shortlinks, redirects, max_popups } = body
+  if (!host_id) return fail(c, "host_id required")
+  try {
+    // Upsert — one row per host
+    const existing = await db.prepare("SELECT id FROM host_monetization WHERE host_id=?").bind(host_id).first()
+    if (existing) {
+      await db.prepare(
+        `UPDATE host_monetization SET mode=?, ads=?, popups=?, shortlinks=?, redirects=?, max_popups=?, updated_at=datetime('now') WHERE host_id=?`
+      ).bind(mode || "random", adsJson || "[]", popups || "[]", shortlinks || "[]", redirects || "[]", max_popups || 1, host_id).run()
+      return ok(c, { id: existing.id })
+    }
+    const res = await db.prepare(
+      `INSERT INTO host_monetization (host_id, mode, ads, popups, shortlinks, redirects, max_popups, clicks)
+       VALUES (?,?,?,?,?,?,?,0)`
+    ).bind(host_id, mode || "random", adsJson || "[]", popups || "[]", shortlinks || "[]", redirects || "[]", max_popups || 1).run()
+    return ok(c, { id: res.meta.last_row_id })
+  } catch(e) { return fail(c, e.message) }
 })
 
-/* ─────────────────────────────────────────
-   ERROR HANDLER
-───────────────────────────────────────── */
-ads.onError((err, c) => {
-  console.error('[ads.js]', err)
-  return c.json({ success: false, message: 'Internal server error' }, 500)
+ads.put("/host-monetization/:id", async (c) => {
+  const db   = c.env.DB
+  const id   = parseInt(c.req.param("id"))
+  const body = await c.req.json()
+  const { mode, ads: adsJson, popups, shortlinks, redirects, max_popups } = body
+  try {
+    await db.prepare(
+      `UPDATE host_monetization SET mode=?, ads=?, popups=?, shortlinks=?, redirects=?, max_popups=?, updated_at=datetime('now') WHERE id=?`
+    ).bind(mode || "random", adsJson || "[]", popups || "[]", shortlinks || "[]", redirects || "[]", max_popups || 1, id).run()
+    return ok(c, { id })
+  } catch(e) { return fail(c, e.message) }
+})
+
+/* ── PAGE MONETIZATION ──────────────────────────────────── */
+
+ads.get("/page-monetization", async (c) => {
+  const db = c.env.DB
+  try {
+    const res = await db.prepare(
+      "SELECT id, page_type, slot_config, frequency, enabled, updated_at FROM page_monetization ORDER BY page_type ASC"
+    ).all()
+    return ok(c, res.results)
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.get("/page-monetization/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    const row = await db.prepare("SELECT * FROM page_monetization WHERE id=?").bind(id).first()
+    if (!row) return fail(c, "Not found", 404)
+    return ok(c, row)
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.post("/page-monetization", async (c) => {
+  const db   = c.env.DB
+  const body = await c.req.json()
+  const { page_type, slot_config, frequency, enabled } = body
+  if (!page_type) return fail(c, "page_type required")
+  try {
+    // Upsert — one row per page_type
+    const existing = await db.prepare("SELECT id FROM page_monetization WHERE page_type=?").bind(page_type).first()
+    if (existing) {
+      await db.prepare(
+        `UPDATE page_monetization SET slot_config=?, frequency=?, enabled=?, updated_at=datetime('now') WHERE page_type=?`
+      ).bind(slot_config || "{}", frequency || "every_click", enabled ?? 1, page_type).run()
+      return ok(c, { id: existing.id })
+    }
+    const res = await db.prepare(
+      `INSERT INTO page_monetization (page_type, slot_config, frequency, enabled, updated_at)
+       VALUES (?,?,?,?,datetime('now'))`
+    ).bind(page_type, slot_config || "{}", frequency || "every_click", enabled ?? 1).run()
+    return ok(c, { id: res.meta.last_row_id })
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.put("/page-monetization/:id", async (c) => {
+  const db   = c.env.DB
+  const id   = parseInt(c.req.param("id"))
+  const body = await c.req.json()
+  const { slot_config, frequency, enabled } = body
+  try {
+    await db.prepare(
+      `UPDATE page_monetization SET slot_config=?, frequency=?, enabled=?, updated_at=datetime('now') WHERE id=?`
+    ).bind(slot_config || "{}", frequency || "every_click", enabled ?? 1, id).run()
+    return ok(c, { id })
+  } catch(e) { return fail(c, e.message) }
+})
+
+/* ── ANALYTICS SUMMARY ──────────────────────────────────── */
+
+ads.get("/analytics/summary", async (c) => {
+  const db = c.env.DB
+  try {
+    const row = await db.prepare("SELECT * FROM ad_stats WHERE id=1").first()
+    return ok(c, {
+      impressions:      row?.impressions      ?? 0,
+      ad_clicks:        row?.ad_clicks        ?? 0,
+      ad_views:         row?.ad_views         ?? 0,
+      shortlink_clicks: row?.shortlink_clicks ?? 0,
+      redirect_clicks:  row?.redirect_clicks  ?? 0,
+      popup_opens:      row?.popup_opens      ?? 0,
+      popup_views:      row?.popup_views      ?? 0,
+      popup_closes:     row?.popup_closes     ?? 0,
+      verify_clicks:    row?.verify_clicks    ?? 0,
+      go_link_clicks:   row?.go_link_clicks   ?? 0,
+      host_clicks:      row?.host_clicks      ?? 0,
+      downloads:        row?.downloads        ?? 0,
+      knight_downloads: row?.knight_downloads ?? 0,
+      page_ad_views:    row?.page_ad_views    ?? 0,
+      page_ad_clicks:   row?.page_ad_clicks   ?? 0,
+      revenue_events:   row?.revenue_events   ?? 0
+    })
+  } catch(e) { return fail(c, e.message) }
 })
 
 export default ads
+
+/* ── NAV MONETIZATION ───────────────────────────────────
+   Page Navigation events pe monetization
+   (Next Page, Prev Page, Pagination, Load More)
+────────────────────────────────────────────────────────── */
+
+ads.get("/nav-monetization", async (c) => {
+  const db = c.env.DB
+  try {
+    const res = await db.prepare(
+      "SELECT * FROM nav_monetization ORDER BY nav_event ASC"
+    ).all()
+    return ok(c, res.results)
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.post("/nav-monetization", async (c) => {
+  const db   = c.env.DB
+  const body = await c.req.json()
+  const { nav_event, ads: adsJson, popups, shortlinks, redirects, mode, frequency, enabled } = body
+  if (!nav_event) return fail(c, "nav_event required")
+  try {
+    // Upsert — one row per nav_event
+    const existing = await db.prepare(
+      "SELECT id FROM nav_monetization WHERE nav_event=?"
+    ).bind(nav_event).first()
+
+    if (existing) {
+      await db.prepare(
+        `UPDATE nav_monetization
+         SET ads=?, popups=?, shortlinks=?, redirects=?, mode=?, frequency=?, enabled=?, updated_at=datetime('now')
+         WHERE nav_event=?`
+      ).bind(
+        adsJson    || "[]",
+        popups     || "[]",
+        shortlinks || "[]",
+        redirects  || "[]",
+        mode       || "random",
+        frequency  || "every_click",
+        enabled ?? 1,
+        nav_event
+      ).run()
+      return ok(c, { id: existing.id })
+    }
+
+    const res = await db.prepare(
+      `INSERT INTO nav_monetization (nav_event, ads, popups, shortlinks, redirects, mode, frequency, enabled, created_at)
+       VALUES (?,?,?,?,?,?,?,?,datetime('now'))`
+    ).bind(
+      nav_event,
+      adsJson    || "[]",
+      popups     || "[]",
+      shortlinks || "[]",
+      redirects  || "[]",
+      mode       || "random",
+      frequency  || "every_click",
+      enabled ?? 1
+    ).run()
+    return ok(c, { id: res.meta.last_row_id })
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.put("/nav-monetization/:id", async (c) => {
+  const db   = c.env.DB
+  const id   = parseInt(c.req.param("id"))
+  const body = await c.req.json()
+  const { ads: adsJson, popups, shortlinks, redirects, mode, frequency, enabled } = body
+  try {
+    await db.prepare(
+      `UPDATE nav_monetization
+       SET ads=?, popups=?, shortlinks=?, redirects=?, mode=?, frequency=?, enabled=?, updated_at=datetime('now')
+       WHERE id=?`
+    ).bind(
+      adsJson    || "[]",
+      popups     || "[]",
+      shortlinks || "[]",
+      redirects  || "[]",
+      mode       || "random",
+      frequency  || "every_click",
+      enabled ?? 1,
+      id
+    ).run()
+    return ok(c, { id })
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.delete("/nav-monetization/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    await db.prepare("DELETE FROM nav_monetization WHERE id=?").bind(id).run()
+    return ok(c, { deleted: id })
+  } catch(e) { return fail(c, e.message) }
+})
+
+/* Public nav-monetization — called by frontend on navigation events */
+ads.post("/public/nav-fire", async (c) => {
+  const db   = c.env.DB
+  const body = await c.req.json()
+  const { nav_event } = body
+  if (!nav_event) return ok(c, { fire: false })
+  try {
+    const config = await db.prepare(
+      "SELECT * FROM nav_monetization WHERE nav_event=? AND enabled=1"
+    ).bind(nav_event).first()
+
+    if (!config) return ok(c, { fire: false })
+
+    let adIds=[], popupIds=[], slIds=[], rdIds=[]
+    try { adIds    = JSON.parse(config.ads        || "[]") } catch {}
+    try { popupIds = JSON.parse(config.popups     || "[]") } catch {}
+    try { slIds    = JSON.parse(config.shortlinks || "[]") } catch {}
+    try { rdIds    = JSON.parse(config.redirects  || "[]") } catch {}
+
+    const mode = config.mode || "random"
+    const pick = (arr) => {
+      if (!arr.length) return null
+      if (mode === "direct")   return arr[0]
+      if (mode === "sequence") return arr[0]
+      return arr[Math.floor(Math.random() * arr.length)]
+    }
+
+    const result = { fire: true, ad: null, popup: null, shortlink: null, redirect: null }
+
+    if (adIds.length) {
+      const ad = await db.prepare("SELECT code, type FROM ads_library WHERE id=? AND active=1").bind(pick(adIds)).first()
+      if (ad) result.ad = { code: ad.code, type: ad.type }
+    }
+    if (popupIds.length) {
+      const popup = await db.prepare("SELECT script FROM popup_library WHERE id=? AND active=1").bind(pick(popupIds)).first()
+      if (popup) result.popup = popup.script
+    }
+    if (slIds.length) {
+      const sl = await db.prepare("SELECT base_url, api_key FROM shortlinks_library WHERE id=? AND active=1").bind(pick(slIds)).first()
+      if (sl) result.shortlink = sl.base_url
+    }
+    if (rdIds.length) {
+      const rd = await db.prepare("SELECT url FROM redirect_library WHERE id=? AND active=1").bind(pick(rdIds)).first()
+      if (rd) result.redirect = rd.url
+    }
+
+    return ok(c, result)
+  } catch(e) { return fail(c, e.message) }
+})
