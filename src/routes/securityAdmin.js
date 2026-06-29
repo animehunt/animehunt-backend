@@ -17,7 +17,7 @@
 ================================================ */
 
 import { Hono } from "hono"
-import { blockIP, unblockIP } from "./firewall.js"
+import { blockIP, unblockIP } from "../middleware/firewall.js"
 
 const app = new Hono()
 
