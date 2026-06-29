@@ -37,11 +37,14 @@ export async function runPlayerEngine(env, request){
       const host   = request.headers.get("host")   || ""
       const refOrigin = referer ? new URL(referer).hostname : ""
 
+      // ✅ FIX (Line 44): origin.includes(host) security bypass fixed.
+      //    'evil.com/trusted.com' se bypass possible tha — exact match use karo.
       const allowed =
         refOrigin === host ||
         refOrigin.endsWith(".pages.dev") ||
         refOrigin.endsWith(".workers.dev") ||
-        origin.includes(host)
+        origin === `https://${host}` ||
+        origin === `http://${host}`
 
       if(!allowed){
         return error("Embed only access",403)
@@ -308,4 +311,178 @@ function error(msg,status=400){
     }
   })
 
+}
+
+/* =========================================================
+⚡ STREAM RATE LIMITING (MISSING FEATURE — ADDED)
+   Blueprint §2 Item 2: Spam stream requests block karo
+========================================================= */
+
+async function checkStreamRateLimit(env, userId) {
+  if (!env.KV) return { allowed: true } // KV not bound — skip gracefully
+
+  const key    = `stream_limit:${userId}`
+  const limit  = 10  // max 10 stream requests per minute per user
+  const window = 60  // seconds
+
+  const current = await env.KV.get(key)
+
+  if (!current) {
+    await env.KV.put(key, "1", { expirationTtl: window })
+    return { allowed: true }
+  }
+
+  const count = parseInt(current) || 0
+  if (count >= limit) return { allowed: false, count }
+
+  await env.KV.put(key, String(count + 1), { expirationTtl: window })
+  return { allowed: true, count: count + 1 }
+}
+
+/* =========================================================
+📺 WATCH PROGRESS (MISSING FEATURE — ADDED)
+   Blueprint §5 Item 4: Timestamp tracking per user per episode
+========================================================= */
+
+export async function saveWatchProgress(env, userId, episodeId, timestamp, duration) {
+  const db       = env.DB
+  const progress = duration > 0 ? Math.round((timestamp / duration) * 100) : 0
+  const now      = new Date().toISOString()
+
+  await db.prepare(`
+    INSERT INTO watch_progress (user_id, episode_id, timestamp, progress, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, episode_id)
+    DO UPDATE SET timestamp=?, progress=?, updated_at=?
+  `).bind(userId, episodeId, timestamp, progress, now,
+          timestamp, progress, now).run()
+
+  return { success: true, progress }
+}
+
+export async function getWatchProgress(env, userId, episodeId) {
+  return await env.DB.prepare(
+    "SELECT * FROM watch_progress WHERE user_id=? AND episode_id=?"
+  ).bind(userId, episodeId).first()
+}
+
+/* =========================================================
+🎛 PER-USER VIDEO CONFIG (MISSING FEATURE — ADDED)
+   Blueprint §5 Item 3: Playback speed, subtitle lang, quality etc.
+========================================================= */
+
+const VALID_CONFIG_KEYS = [
+  "playback_speed", "subtitle_lang", "audio_lang",
+  "quality", "autoplay", "subtitle_size"
+]
+
+export async function saveUserVideoConfig(env, userId, cfg) {
+  const safe = {}
+  for (const key of VALID_CONFIG_KEYS) {
+    if (cfg[key] !== undefined) safe[key] = cfg[key]
+  }
+
+  const now = new Date().toISOString()
+  await env.DB.prepare(`
+    INSERT INTO user_video_config (user_id, config, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id)
+    DO UPDATE SET config=?, updated_at=?
+  `).bind(userId, JSON.stringify(safe), now,
+          JSON.stringify(safe), now).run()
+
+  return { success: true }
+}
+
+/* =========================================================
+🚦 EXPORTED HTTP HANDLERS (for index.js to mount)
+   These are additional routes beyond runPlayerEngine()
+========================================================= */
+
+export function setupPlayerRoutes(router, env) {
+
+  // Rate-limited stream validate
+  router.post("/api/player/validate", async (req) => {
+    const origin = req.headers.get("Origin") || ""
+    const host   = req.headers.get("host")   || ""
+    if (origin && origin !== `https://${host}` && origin !== `http://${host}`) {
+      return new Response(JSON.stringify({ error: "Origin not allowed" }), {
+        status: 403, headers: { "Content-Type": "application/json" }
+      })
+    }
+    let body = {}
+    try { body = await req.json() } catch {}
+    const userId = body.userId || req.headers.get("CF-Connecting-IP") || "unknown"
+    const check  = await checkStreamRateLimit(env, userId)
+    if (!check.allowed) {
+      return new Response(JSON.stringify({ error: "Too many stream requests" }), {
+        status: 429, headers: { "Content-Type": "application/json" }
+      })
+    }
+    return new Response(JSON.stringify({ valid: true }), {
+      status: 200, headers: { "Content-Type": "application/json" }
+    })
+  })
+
+  // Save watch progress
+  router.post("/api/player/progress", async (req) => {
+    let body = {}
+    try { body = await req.json() } catch {}
+    const { userId, episodeId, timestamp, duration } = body
+    if (!userId || !episodeId || timestamp === undefined) {
+      return new Response(JSON.stringify({ error: "userId, episodeId, timestamp required" }), {
+        status: 400, headers: { "Content-Type": "application/json" }
+      })
+    }
+    const result = await saveWatchProgress(env, userId, episodeId, timestamp, duration || 0)
+    return new Response(JSON.stringify(result), {
+      status: 200, headers: { "Content-Type": "application/json" }
+    })
+  })
+
+  // Get watch progress
+  router.get("/api/player/progress/:userId/:episodeId", async (req) => {
+    const url       = new URL(req.url)
+    const parts     = url.pathname.split("/")
+    const userId    = parts[parts.length - 2]
+    const episodeId = parts[parts.length - 1]
+    const progress  = await getWatchProgress(env, userId, episodeId)
+    return new Response(JSON.stringify({
+      progress: progress || { timestamp: 0, progress: 0 }
+    }), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+
+  // Save user video config
+  router.post("/api/player/config", async (req) => {
+    let body = {}
+    try { body = await req.json() } catch {}
+    const { userId, config: cfg } = body
+    if (!userId || !cfg) {
+      return new Response(JSON.stringify({ error: "userId and config required" }), {
+        status: 400, headers: { "Content-Type": "application/json" }
+      })
+    }
+    const result = await saveUserVideoConfig(env, userId, cfg)
+    return new Response(JSON.stringify(result), {
+      status: 200, headers: { "Content-Type": "application/json" }
+    })
+  })
+
+  // Get user video config
+  router.get("/api/player/config/:userId", async (req) => {
+    const url    = new URL(req.url)
+    const userId = url.pathname.split("/").pop()
+    const row    = await env.DB.prepare(
+      "SELECT config FROM user_video_config WHERE user_id=?"
+    ).bind(userId).first()
+
+    const defaultConfig = {
+      playback_speed: 1, subtitle_lang: "en", quality: "auto",
+      autoplay: true, subtitle_size: "medium"
+    }
+
+    return new Response(JSON.stringify({
+      config: row ? JSON.parse(row.config) : defaultConfig
+    }), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
 }
