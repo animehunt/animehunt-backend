@@ -23,13 +23,17 @@ export async function runFooterAI(env) {
   ========================= */
 
   if (cfg.footerTheme === "Auto") {
-    // ✅ FIX: IST timezone (UTC+5:30)
-  const now = new Date()
-  const istOffset = 5.5 * 60 * 60 * 1000
-  const istTime = new Date(now.getTime() + istOffset)
-  const hour = istTime.getUTCHours()
+    // ✅ FIX (Blueprint Line 21): Manual offset calculation was CPU-delay sensitive
+    //    and could give wrong hour if Worker startup was slow.
+    //    Intl.DateTimeFormat is the safe, spec-correct way in CF Workers.
+    const hourStr = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Kolkata",   // IST = UTC+5:30
+      hour:     "numeric",
+      hour12:   false
+    }).format(new Date())
 
-    const theme = (hour >= 18 || hour <= 6) ? "Dark" : "Light"
+    const hour  = parseInt(hourStr) || 0
+    const theme = (hour >= 18 || hour < 6) ? "Dark" : "Light"
 
     await db.prepare(`
       UPDATE footer_config SET footerTheme=? WHERE id=1
@@ -41,10 +45,11 @@ export async function runFooterAI(env) {
   ========================= */
 
   if (cfg.mobileNav && cfg.mobileFloat && cfg.mobileBlur) {
-    // Too heavy → optimize
+    // Too many mobile effects active simultaneously → disable blur to save resources
     await db.prepare(`
       UPDATE footer_config SET mobileBlur=0 WHERE id=1
     `).run()
   }
 
 }
+
