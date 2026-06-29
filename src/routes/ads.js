@@ -445,8 +445,6 @@ ads.get("/analytics/summary", async (c) => {
   } catch(e) { return fail(c, e.message) }
 })
 
-export default ads
-
 /* ── NAV MONETIZATION ───────────────────────────────────
    Page Navigation events pe monetization
    (Next Page, Prev Page, Pagination, Load More)
@@ -590,3 +588,74 @@ ads.post("/public/nav-fire", async (c) => {
     return ok(c, result)
   } catch(e) { return fail(c, e.message) }
 })
+
+
+/* ── AD CLICK TRACKING — NULL FIX + UNIQUE TRACKING (FIXES + NEW) ──────────────
+   BUG FIX (Blueprint Line 20): ad.clicks null hone par crash → null-safe kiya
+   NEW FEATURE (Blueprint §2 Item 5): IP-based unique click dedupe via KV
+────────────────────────────────────────────────────────────────────────────── */
+
+// Helper: dedupe click by IP using KV (24h window)
+async function trackUniqueClick(env, adId, ip) {
+  if (!env.KV) return { unique: true }
+  const kvKey    = `ad_click:${adId}:${ip}`
+  const existing = await env.KV.get(kvKey)
+  if (existing) return { unique: false }
+  await env.KV.put(kvKey, "1", { expirationTtl: 86400 })
+  return { unique: true }
+}
+
+// POST /api/public/ads/:adId/click
+ads.post("/public/ads/:adId/click", async (c) => {
+  const db   = c.env.DB
+  const adId = parseInt(c.req.param("adId"))
+  const ip   = c.req.header("CF-Connecting-IP") || "unknown"
+  try {
+    const ad = await db.prepare("SELECT id, clicks FROM ads_library WHERE id=?").bind(adId).first()
+    if (!ad) return fail(c, "Ad not found", 404)
+
+    // ✅ BUG FIX (Line 20): null-safe
+    const currentClicks = ad?.clicks ?? 0
+
+    // ✅ NEW: Unique user tracking
+    const uniqueResult = await trackUniqueClick(c.env, adId, ip)
+
+    const updateSql = uniqueResult.unique
+      ? `UPDATE ads_library SET clicks=clicks+1, unique_clicks=COALESCE(unique_clicks,0)+1, updated_at=datetime('now') WHERE id=?`
+      : `UPDATE ads_library SET clicks=clicks+1, updated_at=datetime('now') WHERE id=?`
+
+    await db.prepare(updateSql).bind(adId).run()
+
+    return ok(c, { totalClicks: currentClicks + 1, unique: uniqueResult.unique })
+  } catch(e) { return fail(c, e.message) }
+})
+
+/* ── BULK ASSIGN ADS TO SLOTS (MISSING FEATURE — ADDED) ─────────────────────
+   Blueprint §2 Item 11 — assign one ad to multiple page slots at once
+────────────────────────────────────────────────────────────────────────────── */
+
+ads.post("/ads/bulk-assign", async (c) => {
+  const db   = c.env.DB
+  const body = await c.req.json()
+  const { adId, pageSlots } = body || {}
+  if (!adId || !Array.isArray(pageSlots) || pageSlots.length === 0) {
+    return fail(c, "adId and pageSlots array required")
+  }
+  try {
+    const ad = await db.prepare("SELECT id FROM ads_library WHERE id=?").bind(adId).first()
+    if (!ad) return fail(c, "Ad not found", 404)
+
+    // ✅ D1 batch — one round-trip
+    const stmts = pageSlots.map(slot =>
+      db.prepare(
+        `INSERT OR REPLACE INTO ad_assignments (ad_id, slot, updated_at) VALUES (?, ?, datetime('now'))`
+      ).bind(adId, slot)
+    )
+    await db.batch(stmts)
+    return ok(c, { assigned: pageSlots.length, adId })
+  } catch(e) { return fail(c, e.message) }
+})
+
+// ✅ FIX: export default correctly placed at true end of file
+//    (was mis-placed before nav-monetization routes — those routes were never registered)
+export default ads
