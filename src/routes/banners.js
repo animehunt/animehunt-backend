@@ -86,9 +86,9 @@ function buildTursoPayload(action, data) {
             { type:"text",    value: data.title },
             { type:"text",    value: data.image },
             { type:"text",    value: data.link },
-            { type:"integer", value: data.banner_order },
-            { type:"integer", value: data.active },
-            { type:"integer", value: data.auto_rotate },
+            { type:"integer", value: String(data.banner_order) },   // ✅ FIX: Turso needs string-encoded integers
+            { type:"integer", value: String(data.active) },         // ✅ FIX
+            { type:"integer", value: String(data.auto_rotate) },    // ✅ FIX
             { type:"text",    value: data.created_at },
             { type:"text",    value: data.updated_at }
           ]
@@ -383,24 +383,129 @@ app.delete("/banners/:id", async (c) => {
 
 /* ================= REORDER ================= */
 
+// ✅ BUG FIX (Blueprint Line 301): Loop mein sequential DB calls replaced
+//    with D1 batch — single round-trip instead of N sequential awaits
 app.post("/banners/reorder", async (c) => {
   try {
     const db   = c.env.DB
     const body = await c.req.json()
 
-    if (!Array.isArray(body.order)) {
+    if (!Array.isArray(body.order) || body.order.length === 0) {
       return c.json(failure("order array required"), 400)
     }
 
-    for (const item of body.order) {
-      await db.prepare(
-        "UPDATE banners SET banner_order=?,updated_at=? WHERE id=?"
-      ).bind(item.order, now(), item.id).run()
-    }
+    const timestamp = now()
+
+    // ✅ FIX: D1 batch replaces sequential for-await loop
+    const stmts = body.order.map(item =>
+      db.prepare(
+        "UPDATE banners SET banner_order=?, updated_at=? WHERE id=?"
+      ).bind(item.order, timestamp, item.id)
+    )
+
+    await db.batch(stmts)
 
     return c.json(success({ updated: body.order.length }))
 
   } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ── BANNER CLICK TRACKING (MISSING FEATURE — ADDED) ──────────────────────
+   Blueprint §2 Item 3 — track clicks on each banner
+────────────────────────────────────────────────────────────────────────────── */
+
+app.post("/banners/:id/click", async (c) => {
+  try {
+    const db  = c.env.DB
+    const id  = c.req.param("id")
+    const ip  = c.req.header("CF-Connecting-IP") || "unknown"
+
+    const banner = await db.prepare(
+      "SELECT id, link FROM banners WHERE id=?"
+    ).bind(id).first()
+
+    if (!banner) return c.json(failure("Banner not found"), 404)
+
+    // Record click
+    await db.prepare(
+      "INSERT INTO banner_clicks (banner_id, ip, clicked_at) VALUES (?, ?, datetime('now'))"
+    ).bind(id, ip).run()
+
+    return c.json(success({
+      clicked:     true,
+      redirectUrl: banner.link || null
+    }))
+
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ── BANNER STATS (batch fetch — avoids loop await bug) ────────────────────
+   GET /banners/stats?ids=id1,id2,id3
+────────────────────────────────────────────────────────────────────────────── */
+
+app.get("/banners/stats", async (c) => {
+  try {
+    const db  = c.env.DB
+    const raw = c.req.query("ids") || ""
+    const ids = raw.split(",").map(s => s.trim()).filter(Boolean)
+
+    if (!ids.length) return c.json(success([]))
+
+    const placeholders = ids.map(() => "?").join(",")
+
+    // ✅ FIX: Single batch query instead of loop — Blueprint Line 301
+    const stats = await db.prepare(
+      `SELECT banner_id, COUNT(*) as clicks
+       FROM banner_clicks
+       WHERE banner_id IN (${placeholders})
+       GROUP BY banner_id`
+    ).bind(...ids).all()
+
+    return c.json(success(stats.results))
+
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ── TRAILER AUTO-PLAY CONFIG (MISSING FEATURE — ADDED) ───────────────────
+   Blueprint §5 Item 6 — trailer_url, autoplay, muted per banner
+────────────────────────────────────────────────────────────────────────────── */
+
+app.post("/banners/:id/trailer", async (c) => {
+  try {
+    const db   = c.env.DB
+    const id   = c.req.param("id")
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
+    const { trailer_url, autoplay, muted } = body || {}
+
+    const existing = await db.prepare("SELECT id FROM banners WHERE id=?").bind(id).first()
+    if (!existing) return c.json(failure("Banner not found"), 404)
+
+    await db.prepare(
+      `UPDATE banners
+       SET trailer_url=?, trailer_autoplay=?, trailer_muted=?, updated_at=?
+       WHERE id=?`
+    ).bind(
+      trailer_url || null,
+      autoplay    ? 1 : 0,
+      muted       ? 1 : 0,
+      now(),
+      id
+    ).run()
+
+    return c.json(success({ updated: true, id }))
+
+  } catch (err) {
+    console.error("banners trailer:", err)
     return c.json(failure(err.message), 500)
   }
 })
