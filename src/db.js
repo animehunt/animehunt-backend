@@ -1,24 +1,21 @@
 // ============================================================
-// src/db.js  —  AnimeHunt Universal DB Client v2.0
+// src/db.js  —  AnimeHunt Universal DB Client v2.2
 // ============================================================
-// PRIMARY   : Cloudflare D1  (c.env.DB)
-// REPLICA 1 : Turso / LibSQL (c.env.TURSO_URL + TURSO_AUTH_TOKEN)
-// REPLICA 2 : Supabase REST  (c.env.SUPABASE_URL + SUPABASE_KEY)
+// PRIMARY   : Cloudflare D1  (env.DB)
+// REPLICA 1 : Turso / LibSQL (env.TURSO_URL + env.TURSO_AUTH_TOKEN)
+// REPLICA 2 : Supabase REST  (env.SUPABASE_URL + env.SUPABASE_KEY)
 //
-// v2 FEATURES:
-//   ✅ Append-only Event Log (source of truth)
-//   ✅ Loop prevention via origin + event_id headers
-//   ✅ Idempotent writes (event_id dedup)
-//   ✅ Automatic retry with exponential backoff
-//   ✅ Dead-letter queue for permanently failed events
-//   ✅ Row-level checksums (SHA-256)
-//   ✅ Conflict resolution (last-write-wins + vector clocks)
-//   ✅ Audit logs
-//   ✅ Rate limiting
-//   ✅ Encryption for sensitive columns
+// FIXES v2.2 (on top of v2.1):
+//   ✅ FIX 7: Database.queryOne() — was returning raw .first() value
+//             Now returns null explicitly when no row found (consistent)
+//   ✅ FIX 8: getDB().queryOne() — was returning {result, source} object
+//             Now returns raw value (same as Database.queryOne) so callers
+//             don't need to destructure. source available via getDB().query()
+//   ✅ FIX 9: replayEvent — env param removed (already in closure)
 // ============================================================
 
-import { createHash } from "crypto"
+// ❌ REMOVED: import { createHash } from "crypto"  ← Node.js module, crashes in Workers
+// ✅ Using crypto.subtle (built-in Web Crypto API in Cloudflare Workers)
 
 /* ─────────────────────────────────────────────────────────────
    CONSTANTS
@@ -27,44 +24,96 @@ const ORIGIN_D1       = "d1"
 const ORIGIN_TURSO    = "turso"
 const ORIGIN_SUPABASE = "supabase"
 const MAX_RETRIES     = 5
-const RETRY_BASE_MS   = 500   // exponential backoff: 500ms, 1s, 2s, 4s, 8s
+const RETRY_BASE_MS   = 500
 
 /* ─────────────────────────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────────────────────────── */
 function nowISO() { return new Date().toISOString() }
 
-// Generate deterministic event_id for idempotency
-// Same SQL + args + table will produce same event_id
 async function generateEventId(sql, args, table) {
-  const raw = `${table}::${sql}::${JSON.stringify(args)}::${Date.now()}`
-  // Use SubtleCrypto (available in CF Workers)
+  const raw     = `${table}::${sql}::${JSON.stringify(args)}::${Date.now()}`
   const encoded = new TextEncoder().encode(raw)
   const hashBuf = await crypto.subtle.digest("SHA-256", encoded)
-  const hashArr = Array.from(new Uint8Array(hashBuf))
-  return hashArr.map(b => b.toString(16).padStart(2, "0")).join("")
+  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("")
 }
 
-// Compute row checksum for integrity verification
-async function rowChecksum(row) {
-  const stable = JSON.stringify(row, Object.keys(row).sort())
+export async function rowChecksum(row) {
+  const stable  = JSON.stringify(row, Object.keys(row).sort())
   const encoded = new TextEncoder().encode(stable)
   const hashBuf = await crypto.subtle.digest("SHA-256", encoded)
-  const hashArr = Array.from(new Uint8Array(hashBuf))
-  return hashArr.map(b => b.toString(16).padStart(2, "0")).join("")
+  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("")
 }
 
-// Sleep utility
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
-// Exponential backoff delay
 function backoffMs(attempt) {
   return RETRY_BASE_MS * Math.pow(2, attempt) * (0.8 + Math.random() * 0.4)
 }
 
 /* ─────────────────────────────────────────────────────────────
-   EVENT LOG  —  append-only source of truth (stored in D1)
-   Schema: see dbSchema.js → sync_event_log table
+   PRIMARY DATABASE CLASS
+   Used by: dbSync.js, systemGuard.js, firewall.js,
+            system.js, securityAdmin.js, all Part 2/3 files
+   NOTE: All methods return raw values (not wrapped objects)
+───────────────────────────────────────────────────────────── */
+export class Database {
+  constructor(d1) {
+    this.d1 = d1
+  }
+
+  // Returns { results: [], meta: {} }
+  async query(sql, params = []) {
+    try {
+      const stmt  = this.d1.prepare(sql)
+      const bound = params.length > 0 ? stmt.bind(...params) : stmt
+      return await bound.all()
+    } catch (error) {
+      console.error("DB Error:", error)
+      throw new Error(`Database query failed: ${error.message}`)
+    }
+  }
+
+  // FIX v2.2: Returns raw row object or null (not wrapped)
+  // Callers: systemGuard.js, securityAdmin.js, adminAuth.js
+  async queryOne(sql, params = []) {
+    try {
+      const stmt  = this.d1.prepare(sql)
+      const bound = params.length > 0 ? stmt.bind(...params) : stmt
+      return await bound.first() ?? null
+    } catch (error) {
+      throw new Error(`Database fetch failed: ${error.message}`)
+    }
+  }
+
+  // Returns D1 run result with meta.changes
+  async run(sql, params = []) {
+    try {
+      const stmt  = this.d1.prepare(sql)
+      const bound = params.length > 0 ? stmt.bind(...params) : stmt
+      return await bound.run()
+    } catch (error) {
+      throw new Error(`Database run failed: ${error.message}`)
+    }
+  }
+
+  // D1 native batch — atomic, efficient
+  // statements = array of {sql, params}
+  async batch(statements) {
+    try {
+      const prepared = statements.map(({ sql, params = [] }) => {
+        const stmt = this.d1.prepare(sql)
+        return params.length > 0 ? stmt.bind(...params) : stmt
+      })
+      return await this.d1.batch(prepared)
+    } catch (error) {
+      throw new Error(`Database batch failed: ${error.message}`)
+    }
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   EVENT LOG
 ───────────────────────────────────────────────────────────── */
 async function appendEventLog(env, {
   event_id, origin, table_name, operation, sql, args, row_id
@@ -88,8 +137,7 @@ async function markEventStatus(env, event_id, status, error_msg = null) {
   if (!env.DB) return
   try {
     await env.DB.prepare(`
-      UPDATE sync_event_log
-      SET status = ?, error_msg = ?, updated_at = ?
+      UPDATE sync_event_log SET status = ?, error_msg = ?, updated_at = ?
       WHERE event_id = ?
     `).bind(status, error_msg, nowISO(), event_id).run()
   } catch (e) {
@@ -98,14 +146,13 @@ async function markEventStatus(env, event_id, status, error_msg = null) {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   DEAD LETTER QUEUE  —  permanently failed events
+   DEAD LETTER QUEUE
 ───────────────────────────────────────────────────────────── */
 async function sendToDeadLetter(env, event_id, reason) {
   if (!env.DB) return
   try {
     await env.DB.prepare(`
-      INSERT OR IGNORE INTO sync_dead_letter
-        (event_id, reason, created_at)
+      INSERT OR IGNORE INTO sync_dead_letter (event_id, reason, created_at)
       VALUES (?, ?, ?)
     `).bind(event_id, reason, nowISO()).run()
     await markEventStatus(env, event_id, "dead_letter", reason)
@@ -125,8 +172,7 @@ async function writeAuditLog(env, {
   try {
     await env.DB.prepare(`
       INSERT INTO sync_audit_log
-        (event_id, origin, table_name, operation, row_id,
-         status, error_msg, checksum, created_at)
+        (event_id, origin, table_name, operation, row_id, status, error_msg, checksum, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       event_id, origin, table_name, operation, row_id || null,
@@ -139,15 +185,12 @@ async function writeAuditLog(env, {
 
 /* ─────────────────────────────────────────────────────────────
    LOOP PREVENTION
-   Each write carries its event_id. Replicas check if they've
-   already processed this event_id → skip if yes.
 ───────────────────────────────────────────────────────────── */
 async function hasProcessedEvent(env, event_id, target) {
   if (!env.DB) return false
   try {
     const r = await env.DB.prepare(`
-      SELECT 1 FROM sync_processed_events
-      WHERE event_id = ? AND target = ?
+      SELECT 1 FROM sync_processed_events WHERE event_id = ? AND target = ?
     `).bind(event_id, target).first()
     return !!r
   } catch { return false }
@@ -157,8 +200,7 @@ async function markEventProcessed(env, event_id, target) {
   if (!env.DB) return
   try {
     await env.DB.prepare(`
-      INSERT OR IGNORE INTO sync_processed_events
-        (event_id, target, processed_at)
+      INSERT OR IGNORE INTO sync_processed_events (event_id, target, processed_at)
       VALUES (?, ?, ?)
     `).bind(event_id, target, nowISO()).run()
   } catch (e) {
@@ -167,7 +209,7 @@ async function markEventProcessed(env, event_id, target) {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   TURSO CLIENT  (LibSQL HTTP — no npm needed)
+   TURSO CLIENT
 ───────────────────────────────────────────────────────────── */
 function serializeArg(v) {
   if (v === null || v === undefined) return { type: "null" }
@@ -182,24 +224,15 @@ function parseTursoResult(result) {
   const rows = (result.rows || []).map(row =>
     Object.fromEntries(cols.map((col, i) => [col, row[i]?.value ?? null]))
   )
-  return {
-    results: rows,
-    meta: { rows_written: result.affected_row_count || 0 }
-  }
+  return { results: rows, meta: { rows_written: result.affected_row_count || 0 } }
 }
 
-async function tursoQuery(env, sql, args = [], {
-  event_id = null, is_sync = false
-} = {}) {
+async function tursoQuery(env, sql, args = [], { event_id = null, is_sync = false } = {}) {
   if (!env.TURSO_URL || !env.TURSO_AUTH_TOKEN) return null
 
-  // Loop prevention: skip if we already processed this event
   if (is_sync && event_id) {
     const already = await hasProcessedEvent(env, event_id, ORIGIN_TURSO)
-    if (already) {
-      console.log(`⏭️ Turso: skipping duplicate event ${event_id}`)
-      return { results: [], meta: {}, skipped: true }
-    }
+    if (already) return { results: [], meta: {}, skipped: true }
   }
 
   const httpUrl = env.TURSO_URL.replace("libsql://", "https://")
@@ -209,7 +242,7 @@ async function tursoQuery(env, sql, args = [], {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
-        "Content-Type": "application/json",
+        "Content-Type":  "application/json",
         ...(event_id ? { "X-Sync-Event-Id": event_id } : {})
       },
       body: JSON.stringify({
@@ -223,9 +256,7 @@ async function tursoQuery(env, sql, args = [], {
     if (!res.ok) throw new Error(`Turso HTTP ${res.status}`)
     const data = await res.json()
 
-    if (is_sync && event_id) {
-      await markEventProcessed(env, event_id, ORIGIN_TURSO)
-    }
+    if (is_sync && event_id) await markEventProcessed(env, event_id, ORIGIN_TURSO)
 
     return parseTursoResult(data.results?.[0]?.response?.result)
   } catch (e) {
@@ -235,52 +266,36 @@ async function tursoQuery(env, sql, args = [], {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   SUPABASE CLIENT  (REST API — no npm needed)
+   SUPABASE CLIENT
+   convertToPostgres() called ONLY here — never on D1 queries
 ───────────────────────────────────────────────────────────── */
-async function supabaseQuery(env, sql, args = [], {
-  event_id = null, is_sync = false
-} = {}) {
+async function supabaseQuery(env, sql, args = [], { event_id = null, is_sync = false } = {}) {
   if (!env.SUPABASE_URL || !env.SUPABASE_KEY) return null
 
-  // Loop prevention
   if (is_sync && event_id) {
     const already = await hasProcessedEvent(env, event_id, ORIGIN_SUPABASE)
-    if (already) {
-      console.log(`⏭️ Supabase: skipping duplicate event ${event_id}`)
-      return { results: [], meta: {}, skipped: true }
-    }
+    if (already) return { results: [], meta: {}, skipped: true }
   }
 
-  let finalSql = sql
-  args.forEach((v, i) => {
-    const escaped = v === null ? "NULL"
-      : typeof v === "number" ? String(v)
-      : `'${String(v).replace(/'/g, "''")}'`
-    finalSql = finalSql.replace(new RegExp(`\\$${i + 1}`, "g"), escaped)
-  })
-
-  // Convert SQLite placeholders ? to $1, $2 for Postgres
   let paramIdx = 0
-  const pgSql = convertToPostgres(finalSql)
+  const pgSql  = convertToPostgres(sql).replace(/\?/g, () => `$${++paramIdx}`)
 
   try {
     const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
       method: "POST",
       headers: {
-        "apikey": env.SUPABASE_KEY,
+        "apikey":        env.SUPABASE_KEY,
         "Authorization": `Bearer ${env.SUPABASE_KEY}`,
-        "Content-Type": "application/json",
+        "Content-Type":  "application/json",
         ...(event_id ? { "X-Sync-Event-Id": event_id } : {})
       },
-      body: JSON.stringify({ query: pgSql })
+      body: JSON.stringify({ query: pgSql, params: args })
     })
 
     if (!res.ok) throw new Error(`Supabase HTTP ${res.status}`)
     const data = await res.json()
 
-    if (is_sync && event_id) {
-      await markEventProcessed(env, event_id, ORIGIN_SUPABASE)
-    }
+    if (is_sync && event_id) await markEventProcessed(env, event_id, ORIGIN_SUPABASE)
 
     return { results: Array.isArray(data) ? data : [], meta: {} }
   } catch (e) {
@@ -290,7 +305,7 @@ async function supabaseQuery(env, sql, args = [], {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   RETRY WRAPPER  —  exponential backoff with dead-letter
+   RETRY WRAPPER
 ───────────────────────────────────────────────────────────── */
 async function withRetry(env, event_id, target, fn) {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -300,58 +315,38 @@ async function withRetry(env, event_id, target, fn) {
       throw new Error(`${target} returned null`)
     } catch (e) {
       if (attempt === MAX_RETRIES) {
-        console.error(`❌ ${target} permanently failed after ${MAX_RETRIES} retries:`, e.message)
         await sendToDeadLetter(env, event_id, `${target}: ${e.message}`)
         return null
       }
-      const delay = backoffMs(attempt)
-      console.warn(`⚠️ ${target} attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms`)
-      await sleep(delay)
+      await sleep(backoffMs(attempt))
     }
   }
   return null
 }
 
 /* ─────────────────────────────────────────────────────────────
-   CONFLICT RESOLUTION  —  last-write-wins with vector clock
-   Strategy:
-     1. Compare updated_at timestamps
-     2. If equal, higher lamport clock wins
-     3. If still equal, D1 wins (primary authority)
+   CONFLICT RESOLUTION
 ───────────────────────────────────────────────────────────── */
-function resolveConflict(localRow, incomingRow, localOrigin) {
+export function resolveConflict(localRow, incomingRow, localOrigin) {
   const localTs    = new Date(localRow?.updated_at || 0).getTime()
   const incomingTs = new Date(incomingRow?.updated_at || 0).getTime()
-
   if (incomingTs > localTs) return "incoming"
   if (localTs > incomingTs) return "local"
-
-  // Timestamps equal — D1 wins
-  if (localOrigin === ORIGIN_D1) return "local"
-  return "incoming"
+  return localOrigin === ORIGIN_D1 ? "local" : "incoming"
 }
 
 /* ─────────────────────────────────────────────────────────────
-   EXTRACT TABLE NAME from SQL (best-effort)
+   EXTRACT TABLE / OPERATION from SQL
 ───────────────────────────────────────────────────────────── */
 function extractTableName(sql) {
   const clean = sql.trim().toUpperCase()
   let match
-
-  if (clean.startsWith("INSERT")) {
-    match = sql.match(/INTO\s+([`"]?[\w]+[`"]?)/i)
-  } else if (clean.startsWith("UPDATE")) {
-    match = sql.match(/UPDATE\s+([`"]?[\w]+[`"]?)/i)
-  } else if (clean.startsWith("DELETE")) {
-    match = sql.match(/FROM\s+([`"]?[\w]+[`"]?)/i)
-  }
-
+  if (clean.startsWith("INSERT"))      match = sql.match(/INTO\s+([`"]?[\w]+[`"]?)/i)
+  else if (clean.startsWith("UPDATE")) match = sql.match(/UPDATE\s+([`"]?[\w]+[`"]?)/i)
+  else if (clean.startsWith("DELETE")) match = sql.match(/FROM\s+([`"]?[\w]+[`"]?)/i)
   return match ? match[1].replace(/[`"]/g, "") : "unknown"
 }
 
-/* ─────────────────────────────────────────────────────────────
-   EXTRACT OPERATION type from SQL
-───────────────────────────────────────────────────────────── */
 function extractOperation(sql) {
   const clean = sql.trim().toUpperCase()
   if (clean.startsWith("INSERT")) return "INSERT"
@@ -361,34 +356,30 @@ function extractOperation(sql) {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   SQLite → PostgreSQL basic converter
+   SQLite → PostgreSQL converter
+   ONLY called for Supabase replica — never on D1
 ───────────────────────────────────────────────────────────── */
-function convertToPostgres(sql) {
+export function convertToPostgres(sql) {
   return sql
     .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, "SERIAL PRIMARY KEY")
     .replace(/TEXT PRIMARY KEY/gi,                  "VARCHAR(255) PRIMARY KEY")
     .replace(/datetime\('now'\)/gi,                 "NOW()")
-    .replace(/\bIF NOT EXISTS\b/gi,                 "IF NOT EXISTS")
     .replace(/\bINSERT OR IGNORE\b/gi,              "INSERT")
     .replace(/\bINSERT OR REPLACE\b/gi,             "INSERT")
-    .replace(/ON CONFLICT\(([^)]+)\)\s*DO UPDATE SET/gi,
-             "ON CONFLICT($1) DO UPDATE SET")
+    .replace(/ON CONFLICT\(([^)]+)\)\s*DO UPDATE SET/gi, "ON CONFLICT($1) DO UPDATE SET")
     .replace(/PRAGMA [^;]+;?/gi,                    "")
-    .replace(/\?/g, () => {
-      // Note: Supabase exec_sql uses $1,$2 style
-      // Caller handles substitution before this call
-      return "?"
-    })
     .trim()
 }
 
 /* ─────────────────────────────────────────────────────────────
-   UNIVERSAL DB  —  main export
+   UNIVERSAL DB  —  getDB factory (full sync + event log)
+   FIX v2.2: queryOne returns raw row (not {result, source})
+             so callers don't need to destructure
 ───────────────────────────────────────────────────────────── */
 export function getDB(env) {
   return {
 
-    /* ── READ ── always from D1, fallback chain */
+    // Returns { results: [], meta: {}, source: "d1"|"turso"|"supabase" }
     async query(sql, args = []) {
       try {
         if (env.DB) {
@@ -404,119 +395,105 @@ export function getDB(env) {
       const turso = await tursoQuery(env, sql, args)
       if (turso) return { ...turso, source: ORIGIN_TURSO }
 
-      const supa = await supabaseQuery(env, convertToPostgres(sql), args)
-      if (supa) return { ...supa, source: ORIGIN_SUPABASE }
+      const supa = await supabaseQuery(env, sql, args)
+      if (supa)  return { ...supa,  source: ORIGIN_SUPABASE }
 
       throw new Error("All databases unavailable")
     },
 
-    /* ── READ ONE ── */
+    // FIX v2.2: Returns raw row object or null — consistent with Database.queryOne()
     async queryOne(sql, args = []) {
-      const { results, source } = await this.query(sql, args)
-      return { result: results?.[0] || null, source }
+      const { results } = await this.query(sql, args)
+      return results?.[0] ?? null
     },
 
-    /* ── WRITE ── D1 primary + replicas with event log + retry */
+    // Write with event log + replica sync
     async execute(sql, args = [], { origin = ORIGIN_D1, event_id = null } = {}) {
       const table     = extractTableName(sql)
       const operation = extractOperation(sql)
       const eid       = event_id || await generateEventId(sql, args, table)
 
-      // Append to event log
-      await appendEventLog(env, {
-        event_id: eid, origin, table_name: table,
-        operation, sql, args, row_id: null
-      })
+      await appendEventLog(env, { event_id: eid, origin, table_name: table, operation, sql, args, row_id: null })
 
-      let d1Result  = null
-      let d1Error   = null
+      let d1Result = null
+      let d1Error  = null
 
-      // 1️⃣ Write to D1 (primary)
       try {
         if (env.DB) {
-          // Idempotency check: skip if already applied
           if (origin !== ORIGIN_D1) {
             const already = await hasProcessedEvent(env, eid, ORIGIN_D1)
-            if (already) {
-              console.log(`⏭️ D1: skipping duplicate event ${eid}`)
-              return { skipped: true }
-            }
+            if (already) return { skipped: true }
           }
           const stmt  = env.DB.prepare(sql)
           const bound = args.length ? stmt.bind(...args) : stmt
           d1Result    = await bound.run()
-          if (origin !== ORIGIN_D1) {
-            await markEventProcessed(env, eid, ORIGIN_D1)
-          }
+          if (origin !== ORIGIN_D1) await markEventProcessed(env, eid, ORIGIN_D1)
         }
       } catch (e) {
         d1Error = e
         console.error("❌ D1 write failed:", e.message)
       }
 
-      // 2️⃣ Sync to Turso (with retry, non-blocking)
+      // Turso sync (non-blocking background)
       ;(async () => {
-        if (origin === ORIGIN_TURSO) return  // avoid loop
+        if (origin === ORIGIN_TURSO) return
         const result = await withRetry(env, eid, ORIGIN_TURSO, () =>
           tursoQuery(env, sql, args, { event_id: eid, is_sync: true })
         )
-        if (result) {
-          await writeAuditLog(env, {
-            event_id: eid, origin, table_name: table,
-            operation, row_id: null, status: "synced_turso"
-          })
-        }
+        if (result) await writeAuditLog(env, { event_id: eid, origin, table_name: table, operation, row_id: null, status: "synced_turso" })
       })().catch(e => console.error("Turso sync bg error:", e.message))
 
-      // 3️⃣ Sync to Supabase (with retry, non-blocking)
+      // Supabase sync (non-blocking background)
       ;(async () => {
-        if (origin === ORIGIN_SUPABASE) return  // avoid loop
-        const pgSql = convertToPostgres(sql)
+        if (origin === ORIGIN_SUPABASE) return
         const result = await withRetry(env, eid, ORIGIN_SUPABASE, () =>
-          supabaseQuery(env, pgSql, args, { event_id: eid, is_sync: true })
+          supabaseQuery(env, sql, args, { event_id: eid, is_sync: true })
         )
-        if (result) {
-          await writeAuditLog(env, {
-            event_id: eid, origin, table_name: table,
-            operation, row_id: null, status: "synced_supabase"
-          })
-        }
+        if (result) await writeAuditLog(env, { event_id: eid, origin, table_name: table, operation, row_id: null, status: "synced_supabase" })
       })().catch(e => console.error("Supabase sync bg error:", e.message))
 
       await markEventStatus(env, eid, "applied")
-      await writeAuditLog(env, {
-        event_id: eid, origin, table_name: table,
-        operation, row_id: null, status: "applied"
-      })
+      await writeAuditLog(env, { event_id: eid, origin, table_name: table, operation, row_id: null, status: "applied" })
 
       if (d1Error) throw d1Error
       return d1Result
     },
 
-    /* ── BATCH WRITE ── */
+    // Batch write — D1 native batch (fast path) or event-tracked (opt-in)
     async batch(statements, opts = {}) {
-      const results = []
-      for (const s of statements) {
-        const r = await this.execute(s.sql, s.args || [], opts)
-        results.push(r)
+      if (opts.trackEvents) {
+        const results = []
+        for (const s of statements) {
+          results.push(await this.execute(s.sql, s.args || [], opts))
+        }
+        return results
       }
-      return results
+
+      if (env.DB) {
+        try {
+          const prepared = statements.map(({ sql, params, args }) => {
+            const p    = params || args || []
+            const stmt = env.DB.prepare(sql)
+            return p.length ? stmt.bind(...p) : stmt
+          })
+          return await env.DB.batch(prepared)
+        } catch (e) {
+          console.error("❌ D1 batch failed:", e.message)
+          throw e
+        }
+      }
+
+      throw new Error("D1 database unavailable for batch operation")
     },
 
-    /* ── REPLAY EVENT ── replay from event log for recovery */
-    async replayEvent(env, event) {
+    // FIX v2.2: env removed from params — already in closure
+    async replayEvent(event) {
       console.log(`🔄 Replaying event ${event.event_id} on ${event.origin}`)
       const args = JSON.parse(event.args_json || "[]")
-      return this.execute(event.sql, args, {
-        origin: event.origin,
-        event_id: event.event_id
-      })
+      return this.execute(event.sql, args, { origin: event.origin, event_id: event.event_id })
     }
   }
 }
 
-export {
-  tursoQuery, supabaseQuery, convertToPostgres,
-  rowChecksum, resolveConflict, nowISO,
-  ORIGIN_D1, ORIGIN_TURSO, ORIGIN_SUPABASE
-}
+export { tursoQuery, supabaseQuery, nowISO, ORIGIN_D1, ORIGIN_TURSO, ORIGIN_SUPABASE }
+         
