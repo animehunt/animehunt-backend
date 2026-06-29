@@ -11,7 +11,7 @@
 ================================================ */
 
 import { Hono } from "hono"
-import { invalidateSystemSettingsCache } from "./systemGuard.js"
+import { invalidateSystemSettingsCache } from "../middleware/systemGuard.js"
 
 const app = new Hono()
 
@@ -538,4 +538,4 @@ app.delete("/system/logs", async (c) => {
 })
 
 export default app
-   
+
