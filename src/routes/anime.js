@@ -471,5 +471,66 @@ animeRoute.delete("/anime/:id", async (c) => {
   }
 })
 
+/* ========================= */
+/* SANITIZE PAGINATION HELPER*/
+/* (exported utility)        */
+/* ========================= */
+
+// ✅ FIX (Line 254): NaN from invalid `limit` param sanitized.
+//    Exported for use by other modules.
+export function sanitizePagination(params) {
+  const page  = Math.max(1, parseInt(params.get("page"))  || 1)
+  const limit = Math.min(Math.max(1, parseInt(params.get("limit")) || 20), 100)
+  return { page, limit, offset: (page - 1) * limit }
+}
+
+/* ========================= */
+/* BULK UPDATE STATUS        */
+/* (MISSING FEATURE — ADDED) */
+/* Blueprint §2 Item 4       */
+/* ========================= */
+
+// POST /api/admin/anime/bulk-status
+// Body: { animeIds: string[], status: string }
+animeRoute.post("/anime/bulk-status", async (c) => {
+  try {
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
+    const { animeIds, status } = body || {}
+
+    const validStatuses = ["airing", "completed", "upcoming", "dropped", "ongoing"]
+    if (!validStatuses.includes(status)) {
+      return c.json(failure(`Invalid status — must be one of: ${validStatuses.join(", ")}`), 400)
+    }
+
+    if (!Array.isArray(animeIds) || animeIds.length === 0) {
+      return c.json(failure("animeIds array required"), 400)
+    }
+
+    // Safety cap
+    const ids          = animeIds.slice(0, 100)
+    const placeholders = ids.map(() => "?").join(",")
+    const timestamp    = now()
+
+    const result = await db.prepare(
+      `UPDATE anime SET status=?, updated_at=? WHERE id IN (${placeholders})`
+    ).bind(status, timestamp, ...ids).run()
+
+    return c.json(success({
+      updated: result.meta?.changes || 0,
+      status
+    }))
+
+  } catch (err) {
+    console.error("anime bulk-status error:", err)
+    return c.json(failure(err.message), 500)
+  }
+})
+
+// ✅ FIX: export default at true end — bulk-status route registered BEFORE export
 export default animeRoute
 
