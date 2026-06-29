@@ -5,7 +5,7 @@
 // Alias for index.js scheduled cron
 export const runPlayerAI = runPlayerEngine
 
-export async function runPlayerEngine(env, request){
+export async function runPlayerEngine(env, request = null){
 
   const db = env.DB
 
@@ -30,11 +30,11 @@ export async function runPlayerEngine(env, request){
     /* EMBED LOCK */
     if(cfg.sec_embed_only){
 
-      const referer = request.headers.get("referer") || ""
+      const referer = request?.headers?.get("referer") || ""
 
       // ✅ FIX: request ke origin se domain detect karo — hardcode nahi
-      const origin = request.headers.get("origin") || ""
-      const host   = request.headers.get("host")   || ""
+      const origin = request?.headers?.get("origin") || ""
+      const host   = request?.headers?.get("host")   || ""
       const refOrigin = referer ? new URL(referer).hostname : ""
 
       // ✅ FIX (Line 44): origin.includes(host) security bypass fixed.
@@ -55,7 +55,7 @@ export async function runPlayerEngine(env, request){
     /* REGION BLOCK */
     if(cfg.sec_cloudflare){
 
-      const country = request.headers.get("cf-ipcountry") || ""
+      const country = request?.headers?.get("cf-ipcountry") || ""
 
       if(["CN","KP"].includes(country)){
         return error("Region blocked",403)
