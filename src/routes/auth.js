@@ -1,123 +1,106 @@
-/* ================================================================
-   auth.js — CENTRAL AUTHENTICATION MODULE
-   AnimeHunt Admin CMS
+/* =====================================================
+   auth.js — AnimeHunt Admin Panel
+   Global Auth object — CORRECT IMPLEMENTATION
+   Blueprint Part 4 — Bug Fix #15, #17
+===================================================== */
 
-   ⚠️  SINGLE SOURCE OF TRUTH — Ye file akeli auth handle karegi
-   ⚠️  Kisi bhi dusri file mein auth/token/session code NAHI hoga
+const Auth = {
+  TOKEN_KEY:   'admin_access_token',
+  REFRESH_KEY: 'admin_refresh_token',
 
-   Exports (global window.Auth):
-     Auth.protect()              — Page ko protect karo, nahi to Login.html
-     Auth.logout()               — Token clear + Login.html redirect
-     Auth.headers()              — API call ke liye Authorization headers
-     Auth.showUsername(elemId)   — Admin username element mein dikhao
-     Auth.getToken()             — (internal use) token return karo
-     Auth.isLoggedIn()           — Boolean check
-================================================================ */
+  // ✅ sessionStorage (clears on tab close, safer than localStorage for XSS)
+  getToken() {
+    return sessionStorage.getItem(this.TOKEN_KEY);
+  },
 
-;(function (global) {
-  "use strict"
+  setToken(token, refreshToken) {
+    sessionStorage.setItem(this.TOKEN_KEY, token);
+    if (refreshToken) sessionStorage.setItem(this.REFRESH_KEY, refreshToken);
+  },
 
-  /* ── CONFIG ─────────────────────────────────────────────────── */
-  const TOKEN_KEY    = "ah_token"
-  const USERNAME_KEY = "ah_username"
-  const LOGIN_PAGE   = "Login.html"
-  const ME_API       = "https://animehunt-backend.animehunt715.workers.dev/api/auth/me"
+  // ✅ Returns auth headers object
+  headers() {
+    const token = this.getToken();
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  },
 
-  /* ── HELPERS ─────────────────────────────────────────────────── */
-
-  function getToken() {
-    return localStorage.getItem(TOKEN_KEY) || null
-  }
-
-  function isLoggedIn() {
-    return !!getToken()
-  }
-
-  function redirectToLogin() {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(USERNAME_KEY)
-    window.location.href = LOGIN_PAGE
-  }
-
-  /* ── PROTECT ─────────────────────────────────────────────────── */
-  /*
-     Har protected page ke INIT mein sirf ek baar call karo:
-       Auth.protect()
-     Agar token nahi mila — Login.html pe bhej dega.
-  */
-  function protect() {
-    if (!isLoggedIn()) {
-      redirectToLogin()
+  // ✅ Verify token via /api/admin/auth/me, try refresh if expired
+  async init() {
+    const token = this.getToken();
+    if (!token) {
+      window.location.href = '/admin/Login.html';
+      return null;
     }
-  }
-
-  /* ── HEADERS ─────────────────────────────────────────────────── */
-  /*
-     Har API fetch call mein:
-       { headers: Auth.headers() }
-     Returns Authorization + Content-Type headers.
-  */
-  function headers() {
-    return {
-      "Content-Type":  "application/json",
-      "Authorization": `Bearer ${getToken()}`
-    }
-  }
-
-  /* ── SHOW USERNAME ───────────────────────────────────────────── */
-  /*
-     Admin name element mein dikhane ke liye:
-       Auth.showUsername("adminName")
-     Pehle localStorage se dikhata hai (fast),
-     phir /me API se verify + update karta hai.
-     Agar token invalid hua — Login.html.
-  */
-  async function showUsername(elemId) {
-    const el = document.getElementById(elemId)
-
-    /* Fast render from cache */
-    const cached = localStorage.getItem(USERNAME_KEY)
-    if (el && cached) el.textContent = cached
-
-    /* Verify with backend */
     try {
-      const res  = await fetch(ME_API, { headers: headers() })
-      const json = await res.json()
-
-      if (!json.success) {
-        redirectToLogin()
-        return
+      const res = await fetch('/api/admin/auth/me', { headers: this.headers() });
+      if (!res.ok) {
+        // Token expired — try refresh (Bug Fix #15)
+        const refreshed = await this.refreshToken();
+        if (!refreshed) { this.logout(); return null; }
+        // Retry with new token
+        const res2 = await fetch('/api/admin/auth/me', { headers: this.headers() });
+        if (!res2.ok) { this.logout(); return null; }
+        return await res2.json();
       }
-
-      const username = json.data?.username || cached || "Admin"
-      localStorage.setItem(USERNAME_KEY, username)
-      if (el) el.textContent = username
-
-    } catch {
-      /* Network error — token already shown from cache, don't redirect */
+      const data = await res.json();
+      return data.data || data;
+    } catch (err) {
+      this.logout();
+      return null;
     }
-  }
+  },
 
-  /* ── LOGOUT ──────────────────────────────────────────────────── */
-  /*
-     Logout button ke onclick mein:
-       Auth.logout()
-     Token + username clear karke Login.html pe bhej dega.
-  */
-  function logout() {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(USERNAME_KEY)
-    window.location.href = LOGIN_PAGE
-  }
+  // ✅ Refresh token via /api/admin/auth/refresh
+  async refreshToken() {
+    const refreshToken = sessionStorage.getItem(this.REFRESH_KEY);
+    if (!refreshToken) return false;
+    try {
+      const res = await fetch('/api/admin/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken })
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (data.accessToken) {
+        sessionStorage.setItem(this.TOKEN_KEY, data.accessToken);
+        return true;
+      }
+      return false;
+    } catch { return false; }
+  },
 
-  /* ── GLOBAL EXPORT ───────────────────────────────────────────── */
-  global.Auth = {
-    protect,
-    headers,
-    showUsername,
-    logout,
-    getToken,
-    isLoggedIn
-  }
+  // ✅ Check auth + redirect if not logged in
+  protect() {
+    this.init().then(user => {
+      if (!user) window.location.href = '/admin/Login.html';
+    });
+  },
 
-})(window)
+  // ✅ Logout and redirect
+  logout() {
+    sessionStorage.removeItem(this.TOKEN_KEY);
+    sessionStorage.removeItem(this.REFRESH_KEY);
+    window.location.href = '/admin/Login.html';
+  },
+
+  // ✅ Decode JWT payload to get user info
+  getUser() {
+    const token = this.getToken();
+    if (!token) return null;
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      return payload;
+    } catch { return null; }
+  },
+
+  // ✅ Helper — set username in a DOM element by id
+  showUsername(elementId) {
+    this.init().then(user => {
+      if (user) {
+        const el = document.getElementById(elementId);
+        if (el) el.textContent = user.username || user.sub || 'Admin';
+      }
+    });
+  }
+};
