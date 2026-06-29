@@ -17,7 +17,7 @@ import { cors }  from "hono/cors"
 import { dbSync }      from "./middleware/dbSync.js"
 import { firewall }    from "./middleware/firewall.js"
 import { systemGuard } from "./middleware/systemGuard.js"
-import { adminAuth }   from "./middleware/adminAuth.js"
+import adminAuthApp, { requireAuth } from "./middleware/adminAuth.js"
 
 /* ================= ROUTE IMPORTS ================= */
 
@@ -51,6 +51,7 @@ import robots          from "./routes/robots.js"
 import sitemap         from "./routes/sitemap.js"
 import trending        from "./routes/trending.js"
 import dbRestore       from "./routes/dbRestore.js"
+import bulkUpload      from "./routes/bulk-upload.js"    // ← CRITICAL FIX #4
 
 /* ================= AI ENGINES ================= */
 
@@ -159,10 +160,11 @@ app.route("/api", trending)
 
 /* ================= AUTH ROUTE (NO AUTH MIDDLEWARE) ================= */
 app.route("/api/auth", auth)
+app.route("/api/admin/auth", adminAuthApp)   // ← CRITICAL FIX #3: admin auth routes mounted
 
 /* ================= ADMIN ROUTES (AUTH REQUIRED) ================= */
 const adminRoutes = new Hono()
-adminRoutes.use("*", adminAuth)
+adminRoutes.use("*", (c, next) => requireAuth(c.env)(c, next))
 
 adminRoutes.route("/", dashboard)
 adminRoutes.route("/", anime)
@@ -185,6 +187,7 @@ adminRoutes.route("/", ai)
 adminRoutes.route("/", deploy)
 adminRoutes.route("/", upload)
 adminRoutes.route("/", dbRestore)
+adminRoutes.route("/", bulkUpload)   // ← CRITICAL FIX #4: bulk-upload admin routes
 
 app.route("/api/admin", adminRoutes)
 
