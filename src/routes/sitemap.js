@@ -8,7 +8,7 @@ app.get("/sitemap.xml", async (c) => {
     await c.env.DB.prepare(`
       SELECT slug, updated_at
       FROM anime
-      WHERE is_hidden = 0
+      WHERE is_hidden = 0 AND active = 1
     `).all()
 
   const urls = results.map(a => `
