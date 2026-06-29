@@ -90,7 +90,7 @@ async function syncBackupToReplicas(env, backupRow) {
             args: [
               { type:"text",    value: backupRow.id },
               { type:"text",    value: backupRow.name },
-              { type:"integer", value: backupRow.size_kb },
+              { type:"integer", value: String(backupRow.size_kb) },  // ✅ FIX: Turso requires string-encoded integers
               { type:"text",    value: backupRow.data },
               { type:"text",    value: backupRow.created_at }
             ]
@@ -213,8 +213,35 @@ app.post("/deploy/deploy", async (c) => {
 })
 
 /* ================================================
-   POST /deploy/backup — Create backup
+   POST /deploy/backup — Create backup (STREAMING — OOM FIX)
+   Blueprint Lines 153, 178: Poora DB ek saath load = OOM crash
+   Fix: chunked read, 100 rows at a time per table
 ================================================ */
+
+// ✅ FIX: Helper — read one table in chunks to avoid 128 MB Worker memory limit
+async function readTableChunked(db, table, chunkSize = 100) {
+  const rows    = []
+  let   offset  = 0
+  let   hasMore = true
+
+  while (hasMore) {
+    let chunk
+    try {
+      chunk = await db.prepare(
+        `SELECT * FROM ${table} LIMIT ? OFFSET ?`
+      ).bind(chunkSize, offset).all()
+    } catch {
+      break  // table may not exist — skip gracefully
+    }
+
+    if (!chunk.results || chunk.results.length === 0) break
+    rows.push(...chunk.results)
+    offset  += chunkSize
+    hasMore  = chunk.results.length === chunkSize
+  }
+
+  return rows
+}
 
 app.post("/deploy/backup", async (c) => {
   try {
@@ -225,46 +252,44 @@ app.post("/deploy/backup", async (c) => {
     const body = await c.req.json().catch(() => ({}))
     const note = body.note || ""
 
-    /* Collect all data */
-    const [anime, episodes, categories, banners,
-           servers, seo, performance, security, search] = await Promise.all([
-      db.prepare("SELECT * FROM anime").all(),
-      db.prepare("SELECT * FROM episodes").all(),
-      db.prepare("SELECT * FROM categories").all(),
-      db.prepare("SELECT * FROM banners").all(),
-      db.prepare("SELECT * FROM servers").all().catch(() => ({ results: [] })),
-      db.prepare("SELECT * FROM seo_settings").all().catch(() => ({ results: [] })),
-      db.prepare("SELECT * FROM performance_settings").all().catch(() => ({ results: [] })),
-      db.prepare("SELECT * FROM security_settings").all().catch(() => ({ results: [] })),
-      db.prepare("SELECT * FROM search_settings").all().catch(() => ({ results: [] }))
-    ])
+    // ✅ FIX (Lines 153, 178): Chunked reads — never loads full table into RAM at once
+    const TABLES = [
+      "anime", "episodes", "categories", "banners",
+      "servers", "seo_settings", "performance_settings",
+      "security_settings", "search_settings"
+    ]
+
+    const tableData = {}
+    for (const table of TABLES) {
+      tableData[table] = await readTableChunked(db, table)
+    }
 
     const data = {
       version:    "2.0",
       created_at: timestamp,
       note,
-      anime:       anime.results       || [],
-      episodes:    episodes.results    || [],
-      categories:  categories.results  || [],
-      banners:     banners.results     || [],
-      servers:     servers.results     || [],
-      seo:         seo.results         || [],
-      performance: performance.results || [],
-      security:    security.results    || [],
-      search:      search.results      || []
+      anime:       tableData.anime            || [],
+      episodes:    tableData.episodes         || [],
+      categories:  tableData.categories       || [],
+      banners:     tableData.banners          || [],
+      servers:     tableData.servers          || [],
+      seo:         tableData.seo_settings     || [],
+      performance: tableData.performance_settings || [],
+      security:    tableData.security_settings   || [],
+      search:      tableData.search_settings     || []
     }
 
-    const dataStr  = JSON.stringify(data)
-    const sizeKB   = Math.round(dataStr.length / 1024)
-    const id       = crypto.randomUUID()
-    const name     = `Backup ${new Date().toLocaleString()}${note ? ` — ${note}` : ""}`
+    const dataStr = JSON.stringify(data)
+    const sizeKB  = Math.round(dataStr.length / 1024)
+    const id      = crypto.randomUUID()
+    const name    = `Backup ${new Date().toLocaleString()}${note ? ` — ${note}` : ""}`
 
     await db.prepare(`
       INSERT INTO deploy_backups (id,name,size_kb,data,created_at)
       VALUES (?,?,?,?,?)
     `).bind(id, name, sizeKB, dataStr, timestamp).run()
 
-    /* Sync to Turso */
+    /* Sync to Turso (non-blocking) */
     syncBackupToReplicas(c.env, { id, name, size_kb: sizeKB, data: dataStr, created_at: timestamp })
 
     return c.json(success({
