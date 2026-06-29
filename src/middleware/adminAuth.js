@@ -1,16 +1,26 @@
 /* ================================================================
-   authAdmin.js — Admin Authentication API
+   adminAuth.js — Admin Authentication API
    AnimeHunt Backend — Cloudflare Workers (Hono)
 
    Routes:
-     POST /auth/login   — Login, JWT token return karo
-     GET  /auth/me      — Token verify + user info return karo
-     POST /auth/logout  — (optional) client-side logout confirm
-     POST /auth/change-password — Password change
+     POST /auth/login           — Login, JWT + refresh token return
+     GET  /auth/me              — Token verify + user info
+     POST /auth/refresh         — FIX: Refresh access token (was missing)
+     POST /auth/logout          — Invalidate refresh token in DB
+     POST /auth/change-password — Password change (min 12 chars)
 
    Password hashing: PBKDF2-SHA512 via Web Crypto API
-   JWT:              HMAC-SHA256 via Web Crypto API
-   No external libs needed — pure Workers runtime
+   JWT:              HMAC-SHA256 via Web Crypto API (URL-safe base64)
+   No external libs — pure Workers runtime
+
+   FIXES:
+     ✅ FIX 1: POST /auth/refresh route added (was missing — Line 229 bug)
+     ✅ FIX 2: refresh_token column added to admin_users table
+     ✅ FIX 3: login now stores refresh token in DB
+     ✅ FIX 4: logout now clears refresh token from DB (true invalidation)
+     ✅ FIX 5: requireAuth() exported for use by other modules
+     ✅ FIX 6: All Web Crypto API — no Node.js crypto
+     ✅ FIX 7: Token expiry — access: 15min, refresh: 7 days
 ================================================================ */
 
 import { Hono } from "hono"
@@ -21,23 +31,38 @@ const success = (data) => ({ success: true,  data })
 const failure = (msg)  => ({ success: false, message: msg })
 const now     = ()     => new Date().toISOString()
 
+/* ── Token expiry constants ── */
+const ACCESS_TOKEN_EXPIRY  = 15 * 60          // 15 minutes (seconds)
+const REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60 // 7 days (seconds)
+
 /* ================================================================
    ENSURE ADMIN TABLE
+   FIX: Added refresh_token column (needed for refresh + logout)
 ================================================================ */
 
 async function ensureAdminTable(db) {
   try {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS admin_users (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        username     TEXT    NOT NULL UNIQUE,
-        password     TEXT    NOT NULL,
-        role         TEXT    DEFAULT 'admin',
-        last_login   TEXT,
-        login_count  INTEGER DEFAULT 0,
-        created_at   TEXT
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        username      TEXT    NOT NULL UNIQUE,
+        password      TEXT    NOT NULL,
+        role          TEXT    DEFAULT 'admin',
+        refresh_token TEXT    DEFAULT NULL,
+        last_login    TEXT,
+        login_count   INTEGER DEFAULT 0,
+        created_at    TEXT
       )
     `).run()
+
+    // FIX: Add refresh_token column if table already exists (migration safety)
+    try {
+      await db.prepare(
+        "ALTER TABLE admin_users ADD COLUMN refresh_token TEXT DEFAULT NULL"
+      ).run()
+    } catch {
+      // Column already exists — ignore
+    }
   } catch (err) {
     console.error("ensureAdminTable:", err)
   }
@@ -45,12 +70,8 @@ async function ensureAdminTable(db) {
 
 /* ================================================================
    PBKDF2 HELPERS — Web Crypto API (Cloudflare Workers native)
+   Format: "pbkdf2:sha512:100000:<hex_salt>:<hex_hash>"
 ================================================================ */
-
-/*
-   Password stored format:
-   "pbkdf2:sha512:100000:<hex_salt>:<hex_hash>"
-*/
 
 async function hashPassword(password) {
   const encoder  = new TextEncoder()
@@ -118,7 +139,7 @@ async function verifyPassword(password, stored) {
     const computedHash = Array.from(new Uint8Array(bits))
       .map(b => b.toString(16).padStart(2, "0")).join("")
 
-    /* Constant-time comparison */
+    /* Constant-time comparison — prevents timing attacks */
     if (computedHash.length !== storedHash.length) return false
     let diff = 0
     for (let i = 0; i < computedHash.length; i++) {
@@ -132,7 +153,7 @@ async function verifyPassword(password, stored) {
 }
 
 /* ================================================================
-   JWT HELPERS — HMAC-SHA256 via Web Crypto
+   JWT HELPERS — HMAC-SHA256 via Web Crypto (URL-safe base64)
 ================================================================ */
 
 function b64url(str) {
@@ -244,7 +265,38 @@ async function seedDefaultAdmin(db) {
 }
 
 /* ================================================================
+   EXPORTED MIDDLEWARE — requireAuth
+   Used by: system.js, securityAdmin.js, firewall.js, and all
+            Part 2/3 files that need authentication
+================================================================ */
+
+export function requireAuth(env) {
+  return async (c, next) => {
+    const authHeader = c.req.header("Authorization") || ""
+    const token      = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : null
+
+    if (!token) {
+      return c.json(failure("Token required"), 401)
+    }
+
+    const secret  = env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+    const payload = await verifyJWT(token, secret)
+
+    if (!payload) {
+      return c.json(failure("Invalid or expired token"), 401)
+    }
+
+    // Attach decoded admin info to context
+    c.set("admin", payload)
+    return next()
+  }
+}
+
+/* ================================================================
    POST /auth/login
+   FIX: Now generates AND stores refresh token in DB
 ================================================================ */
 
 app.post("/auth/login", async (c) => {
@@ -267,7 +319,7 @@ app.post("/auth/login", async (c) => {
     ).bind(username.trim().toLowerCase()).first()
 
     if (!user) {
-      /* Timing-safe — still verify to prevent username enumeration */
+      /* Timing-safe — still hash to prevent username enumeration */
       await verifyPassword(password, "pbkdf2:sha512:100000:fake:fake")
       return c.json(failure("Invalid credentials"), 401)
     }
@@ -278,25 +330,37 @@ app.post("/auth/login", async (c) => {
       return c.json(failure("Invalid credentials"), 401)
     }
 
-    /* Generate JWT — 24 hour expiry */
-    const secret  = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
-    const payload = {
+    const secret = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+    const nowSec = Math.floor(Date.now() / 1000)
+
+    /* Generate access token — 15 minutes */
+    const accessPayload = {
       sub:      String(user.id),
       username: user.username,
       role:     user.role,
-      iat:      Math.floor(Date.now() / 1000),
-      exp:      Math.floor(Date.now() / 1000) + (24 * 60 * 60)
+      type:     "access",
+      iat:      nowSec,
+      exp:      nowSec + ACCESS_TOKEN_EXPIRY
     }
+    const accessToken = await signJWT(accessPayload, secret)
 
-    const token = await signJWT(payload, secret)
+    /* FIX: Generate refresh token — 7 days */
+    const refreshPayload = {
+      sub:  String(user.id),
+      type: "refresh",
+      iat:  nowSec,
+      exp:  nowSec + REFRESH_TOKEN_EXPIRY
+    }
+    const refreshToken = await signJWT(refreshPayload, secret)
 
-    /* Update last_login */
+    /* FIX: Store refresh token in DB + update last_login */
     await db.prepare(
-      "UPDATE admin_users SET last_login=?, login_count=login_count+1 WHERE id=?"
-    ).bind(now(), user.id).run()
+      "UPDATE admin_users SET refresh_token=?, last_login=?, login_count=login_count+1 WHERE id=?"
+    ).bind(refreshToken, now(), user.id).run()
 
     return c.json(success({
-      token,
+      accessToken,
+      refreshToken,
       username: user.username,
       role:     user.role
     }))
@@ -309,11 +373,11 @@ app.post("/auth/login", async (c) => {
 
 /* ================================================================
    GET /auth/me — Token verify + user info
+   Used by: Auth.protect() in frontend HTML files
 ================================================================ */
 
 app.get("/auth/me", async (c) => {
   try {
-    /* Extract Bearer token */
     const authHeader = c.req.header("Authorization") || ""
     const token      = authHeader.startsWith("Bearer ")
       ? authHeader.slice(7).trim()
@@ -330,8 +394,7 @@ app.get("/auth/me", async (c) => {
       return c.json(failure("Invalid or expired token"), 401)
     }
 
-    /* Optional: Verify user still exists in DB */
-    const db   = c.env.DB
+    const db = c.env.DB
     await ensureAdminTable(db)
 
     const user = await db.prepare(
@@ -356,20 +419,108 @@ app.get("/auth/me", async (c) => {
 })
 
 /* ================================================================
-   POST /auth/logout — Client-side confirm (optional)
+   POST /auth/refresh — FIX: This route was completely missing
+   Used by: auth.js in frontend (Auth.init() token refresh flow)
+   Dependency: Part 4 auth.js calls POST /api/admin/auth/refresh
+================================================================ */
+
+app.post("/auth/refresh", async (c) => {
+  try {
+    const body = await c.req.json()
+    const { refreshToken } = body
+
+    if (!refreshToken) {
+      return c.json(failure("Refresh token required"), 400)
+    }
+
+    const secret  = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+    const payload = await verifyJWT(refreshToken, secret)
+
+    if (!payload) {
+      return c.json(failure("Invalid or expired refresh token"), 401)
+    }
+
+    /* Verify this is actually a refresh token (not access token) */
+    if (payload.type !== "refresh") {
+      return c.json(failure("Invalid token type"), 401)
+    }
+
+    /* FIX: Verify refresh token matches what's stored in DB */
+    const db = c.env.DB
+    await ensureAdminTable(db)
+
+    const user = await db.prepare(
+      "SELECT * FROM admin_users WHERE id=? AND refresh_token=?"
+    ).bind(payload.sub, refreshToken).first()
+
+    if (!user) {
+      return c.json(failure("Refresh token revoked or invalid"), 401)
+    }
+
+    /* Generate new access token — 15 minutes */
+    const nowSec = Math.floor(Date.now() / 1000)
+    const newAccessPayload = {
+      sub:      String(user.id),
+      username: user.username,
+      role:     user.role,
+      type:     "access",
+      iat:      nowSec,
+      exp:      nowSec + ACCESS_TOKEN_EXPIRY
+    }
+    const newAccessToken = await signJWT(newAccessPayload, secret)
+
+    return c.json(success({
+      accessToken: newAccessToken
+    }))
+
+  } catch (err) {
+    console.error("auth/refresh:", err)
+    return c.json(failure("Token refresh failed"), 500)
+  }
+})
+
+/* ================================================================
+   POST /auth/logout
+   FIX: Now properly invalidates refresh token in DB
+        (Previously was just a "courtesy response" — no actual logout)
 ================================================================ */
 
 app.post("/auth/logout", async (c) => {
-  /* JWT is stateless — actual logout is client-side (token removal)
-     This endpoint is just a courtesy response */
-  return c.json(success({ loggedOut: true }))
+  try {
+    const authHeader = c.req.header("Authorization") || ""
+    const token      = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : null
+
+    if (token) {
+      const secret  = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+      const payload = await verifyJWT(token, secret)
+
+      if (payload?.sub) {
+        /* FIX: Clear refresh token from DB — actual session invalidation */
+        const db = c.env.DB
+        await ensureAdminTable(db)
+        await db.prepare(
+          "UPDATE admin_users SET refresh_token=NULL WHERE id=?"
+        ).bind(payload.sub).run()
+      }
+    }
+
+    return c.json(success({ loggedOut: true }))
+  } catch (err) {
+    console.error("auth/logout:", err)
+    return c.json(success({ loggedOut: true })) // Always return success on logout
+  }
 })
 
 /* ================================================================
    POST /auth/change-password
+   FIX: Route renamed from /auth/change-password to match
+        blueprint's /auth/reset-password path too
+        Both paths supported for compatibility
 ================================================================ */
 
-app.post("/auth/change-password", async (c) => {
+async function handleChangePassword(c) {
   try {
     /* Verify token */
     const authHeader = c.req.header("Authorization") || ""
@@ -405,11 +556,11 @@ app.post("/auth/change-password", async (c) => {
     const valid = await verifyPassword(body.currentPassword, user.password)
     if (!valid) return c.json(failure("Current password is incorrect"), 401)
 
-    /* Hash new password */
+    /* Hash new password and update */
     const newHash = await hashPassword(body.newPassword)
 
     await db.prepare(
-      "UPDATE admin_users SET password=? WHERE id=?"
+      "UPDATE admin_users SET password=?, refresh_token=NULL WHERE id=?"
     ).bind(newHash, user.id).run()
 
     return c.json(success({ changed: true }))
@@ -418,6 +569,9 @@ app.post("/auth/change-password", async (c) => {
     console.error("auth/change-password:", err)
     return c.json(failure("Password change failed"), 500)
   }
-})
+}
+
+app.post("/auth/change-password", handleChangePassword)
+app.post("/auth/reset-password",  handleChangePassword)
 
 export default app
