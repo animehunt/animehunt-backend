@@ -1,6 +1,28 @@
 /* ================================================
-   searchAdmin.js — Search Settings + Analytics
+   ANIMEHUNT — SEARCH ADMIN (FINAL — ALL ISSUES FIXED)
+   File: src/routes/searchAdmin.js
    Auth handled by adminAuth middleware in index.js
+
+   BUGS FIXED:
+   ✅ Bug #21: /search/log admin-only (middleware protects)
+   ✅ FIXED: FTS5 rebuild-index — D1 batch limit 100 max
+              Large anime sets split into chunks of 100
+   ✅ FIXED: FTS5 DELETE — used INSERT INTO anime_fts(anime_fts) VALUES('delete-all')
+              instead of plain DELETE which breaks content table
+   ✅ All settings/analytics routes preserved
+
+   ROUTES (all protected by adminAuth middleware):
+   GET    /search               — Get settings
+   POST   /search               — Save settings
+   POST   /search/reset         — Reset defaults
+   GET    /search/popular       — Popular queries
+   POST   /search/log           — Log search (admin only)
+   DELETE /search/popular       — Clear logs
+   GET    /search/test          — Test search
+   GET    /search/logs          — Paginated raw logs
+   GET    /search/top-queries   — Analytics
+   GET    /search/zero-results  — Zero-result queries
+   POST   /search/rebuild-index — Rebuild FTS5 (chunked)
 ================================================ */
 
 import { Hono } from "hono"
@@ -13,45 +35,45 @@ const now     = ()     => new Date().toISOString()
 const bool    = (v)    => (v ? 1 : 0)
 
 /* ================================================
-   DEFAULT SETTINGS — used when no row exists
+   DEFAULTS
 ================================================ */
 
 const DEFAULTS = {
-  enableSearch:    1,
-  liveSearch:      1,
-  mode:            "debounce",
-  debounce:        300,
-  ranking_mode:    "smart",
-  ranking_boost:   1,
-  ranking_weight:  5,
-  src_anime:       1,
-  src_episode:     1,
-  src_category:    1,
-  src_pages:       0,
-  smart_typo:      1,
-  smart_alias:     1,
-  smart_language:  "all",
-  ui_max:          8,
-  ui_thumb:        1,
-  ui_group:        1,
-  ui_highlight:    1,
-  safe_mode:       "medium",
-  track_popular:   1,
-  seo_urls:        1,
-  cache_seconds:   60,
-  updated_at:      now()
+  enableSearch:   1,
+  liveSearch:     1,
+  mode:           "debounce",
+  debounce:       300,
+  ranking_mode:   "smart",
+  ranking_boost:  1,
+  ranking_weight: 5,
+  src_anime:      1,
+  src_episode:    1,
+  src_category:   1,
+  src_pages:      0,
+  smart_typo:     1,
+  smart_alias:    1,
+  smart_language: "all",
+  ui_max:         8,
+  ui_thumb:       1,
+  ui_group:       1,
+  ui_highlight:   1,
+  safe_mode:      "medium",
+  track_popular:  1,
+  seo_urls:       1,
+  cache_seconds:  60,
+  updated_at:     ""
 }
 
 /* ================================================
-   FORMAT ROW → API response
+   FORMAT ROW
 ================================================ */
 
 function formatRow(row) {
   return {
     enableSearch: !!row.enableSearch,
     liveSearch:   !!row.liveSearch,
-    mode:         row.mode       || "debounce",
-    debounce:     row.debounce   || 300,
+    mode:         row.mode      || "debounce",
+    debounce:     row.debounce  || 300,
     ranking: {
       mode:   row.ranking_mode   || "smart",
       boost:  !!row.ranking_boost,
@@ -69,28 +91,27 @@ function formatRow(row) {
       language: row.smart_language || "all"
     },
     ui: {
-      max:       row.ui_max       || 8,
+      max:       row.ui_max      || 8,
       thumb:     !!row.ui_thumb,
       group:     !!row.ui_group,
       highlight: !!row.ui_highlight
     },
     safety: {
-      safe:  row.safe_mode      || "medium",
+      safe:  row.safe_mode     || "medium",
       track: !!row.track_popular,
       seo:   !!row.seo_urls,
-      cache: row.cache_seconds  || 60
+      cache: row.cache_seconds || 60
     },
     updated_at: row.updated_at
   }
 }
 
 /* ================================================
-   ENSURE TABLE + DEFAULT ROW EXISTS
+   ENSURE TABLES
 ================================================ */
 
-async function ensureRow(db) {
+async function ensureSettingsRow(db) {
   try {
-    /* Create table if not exists */
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS search_settings (
         id              INTEGER PRIMARY KEY DEFAULT 1,
@@ -120,7 +141,6 @@ async function ensureRow(db) {
       )
     `).run()
 
-    /* Insert default row if missing */
     const row = await db.prepare("SELECT id FROM search_settings WHERE id=1").first()
     if (!row) {
       await db.prepare(`
@@ -145,7 +165,23 @@ async function ensureRow(db) {
       ).run()
     }
   } catch (err) {
-    console.error("ensureRow error:", err)
+    console.error("ensureSettingsRow:", err)
+  }
+}
+
+async function ensureLogsTable(db) {
+  try {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS search_logs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        query      TEXT NOT NULL,
+        results    INTEGER DEFAULT 0,
+        ip         TEXT DEFAULT '',
+        created_at TEXT
+      )
+    `).run()
+  } catch (err) {
+    console.error("ensureLogsTable:", err)
   }
 }
 
@@ -153,7 +189,7 @@ async function ensureRow(db) {
    SYNC TO REPLICAS
 ================================================ */
 
-async function syncToReplicas(env, settings) {
+function syncToReplicas(env, settings) {
   if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
     fetch(`${env.TURSO_URL}/v2/pipeline`, {
       method: "POST",
@@ -184,7 +220,7 @@ async function syncToReplicas(env, settings) {
               settings.safe_mode, settings.track_popular,
               settings.seo_urls, settings.cache_seconds, settings.updated_at
             ].map(v => ({
-              type: typeof v === "number" ? "integer" : "text",
+              type:  typeof v === "number" ? "integer" : "text",
               value: String(v ?? "")
             }))
           }
@@ -195,7 +231,7 @@ async function syncToReplicas(env, settings) {
 
   if (env.SUPABASE_URL && env.SUPABASE_KEY) {
     fetch(`${env.SUPABASE_URL}/rest/v1/search_settings?id=eq.1`, {
-      method:  "PATCH",
+      method: "PATCH",
       headers: {
         "apikey":        env.SUPABASE_KEY,
         "Authorization": `Bearer ${env.SUPABASE_KEY}`,
@@ -208,26 +244,16 @@ async function syncToReplicas(env, settings) {
 }
 
 /* ================================================
-   GET /search — Get Settings
+   GET /search — Settings
 ================================================ */
 
 app.get("/search", async (c) => {
   try {
     const db = c.env.DB
-    await ensureRow(db)
-
-    const row = await db.prepare(
-      "SELECT * FROM search_settings WHERE id=1"
-    ).first()
-
-    if (!row) {
-      return c.json(success(formatRow(DEFAULTS)))
-    }
-
-    return c.json(success(formatRow(row)))
-
+    await ensureSettingsRow(db)
+    const row = await db.prepare("SELECT * FROM search_settings WHERE id=1").first()
+    return c.json(success(formatRow(row || DEFAULTS)))
   } catch (err) {
-    console.error("search GET:", err)
     return c.json(failure(err.message), 500)
   }
 })
@@ -240,17 +266,15 @@ app.post("/search", async (c) => {
   try {
     const db   = c.env.DB
     const body = await c.req.json()
-
-    await ensureRow(db)
+    await ensureSettingsRow(db)
 
     const timestamp = now()
-
-    const settings = {
+    const settings  = {
       enableSearch:   bool(body.enableSearch),
       liveSearch:     bool(body.liveSearch),
-      mode:           body.mode           || "debounce",
-      debounce:       Number(body.debounce   || 300),
-      ranking_mode:   body.ranking?.mode  || "smart",
+      mode:           body.mode            || "debounce",
+      debounce:       Number(body.debounce || 300),
+      ranking_mode:   body.ranking?.mode   || "smart",
       ranking_boost:  bool(body.ranking?.boost),
       ranking_weight: Number(body.ranking?.weight || 5),
       src_anime:      bool(body.sources?.anime),
@@ -260,11 +284,11 @@ app.post("/search", async (c) => {
       smart_typo:     bool(body.smart?.typo),
       smart_alias:    bool(body.smart?.alias),
       smart_language: body.smart?.language || "all",
-      ui_max:         Number(body.ui?.max     || 8),
+      ui_max:         Number(body.ui?.max  || 8),
       ui_thumb:       bool(body.ui?.thumb),
       ui_group:       bool(body.ui?.group),
       ui_highlight:   bool(body.ui?.highlight),
-      safe_mode:      body.safety?.safe  || "medium",
+      safe_mode:      body.safety?.safe   || "medium",
       track_popular:  bool(body.safety?.track),
       seo_urls:       bool(body.safety?.seo),
       cache_seconds:  Number(body.safety?.cache || 60),
@@ -290,30 +314,26 @@ app.post("/search", async (c) => {
       settings.smart_typo, settings.smart_alias, settings.smart_language,
       settings.ui_max, settings.ui_thumb, settings.ui_group, settings.ui_highlight,
       settings.safe_mode, settings.track_popular,
-      settings.seo_urls, settings.cache_seconds,
-      settings.updated_at
+      settings.seo_urls, settings.cache_seconds, settings.updated_at
     ).run()
 
     syncToReplicas(c.env, settings)
 
     return c.json(success({ saved: true, updated_at: timestamp }))
-
   } catch (err) {
-    console.error("search POST:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
 /* ================================================
-   POST /search/reset — Reset to defaults
+   POST /search/reset — Reset Defaults
 ================================================ */
 
 app.post("/search/reset", async (c) => {
   try {
     const db        = c.env.DB
     const timestamp = now()
-
-    await ensureRow(db)
+    await ensureSettingsRow(db)
 
     await db.prepare(`
       UPDATE search_settings SET
@@ -334,53 +354,47 @@ app.post("/search/reset", async (c) => {
       DEFAULTS.smart_typo, DEFAULTS.smart_alias, DEFAULTS.smart_language,
       DEFAULTS.ui_max, DEFAULTS.ui_thumb, DEFAULTS.ui_group, DEFAULTS.ui_highlight,
       DEFAULTS.safe_mode, DEFAULTS.track_popular,
-      DEFAULTS.seo_urls, DEFAULTS.cache_seconds,
-      timestamp
+      DEFAULTS.seo_urls, DEFAULTS.cache_seconds, timestamp
     ).run()
 
     return c.json(success({ reset: true, updated_at: timestamp }))
-
   } catch (err) {
     return c.json(failure(err.message), 500)
   }
 })
 
 /* ================================================
-   GET /search/popular — Popular search queries
+   GET /search/popular — Admin view (with days filter)
 ================================================ */
 
 app.get("/search/popular", async (c) => {
   try {
     const db    = c.env.DB
-    const limit = Number(c.req.query("limit") || 20)
+    const _lim  = parseInt(c.req.query("limit") || "50"); const limit = Math.min(100, isNaN(_lim) ? 50 : Math.max(1, _lim))
+    const _days = parseInt(c.req.query("days")  || "30"); const days  = Math.min(90,  isNaN(_days)? 30 : Math.max(1, _days))
 
-    /* Create table if not exists */
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS search_logs (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        query      TEXT NOT NULL,
-        results    INTEGER DEFAULT 0,
-        created_at TEXT
-      )
-    `).run()
+    await ensureLogsTable(db)
 
     const { results } = await db.prepare(`
-      SELECT query, COUNT(*) as count, MAX(created_at) as last_searched
+      SELECT query, COUNT(*) as count,
+             MAX(created_at) as last_searched,
+             AVG(results) as avg_results
       FROM search_logs
+      WHERE created_at >= datetime('now', '-' || ? || ' days')
       GROUP BY LOWER(query)
       ORDER BY count DESC
       LIMIT ?
-    `).bind(limit).all()
+    `).bind(days, limit).all()
 
     return c.json(success(results || []))
-
   } catch (err) {
     return c.json(failure(err.message), 500)
   }
 })
 
 /* ================================================
-   POST /search/log — Log a search query (public)
+   POST /search/log — ADMIN ONLY (Bug #21 Fix)
+   Protected by adminAuth middleware in index.js
 ================================================ */
 
 app.post("/search/log", async (c) => {
@@ -390,44 +404,37 @@ app.post("/search/log", async (c) => {
 
     if (!body.query?.trim()) return c.json(success({}))
 
-    /* Check tracking enabled */
     const settings = await db.prepare(
       "SELECT track_popular FROM search_settings WHERE id=1"
-    ).first()
+    ).first().catch(() => null)
 
-    if (!settings?.track_popular) return c.json(success({}))
+    if (!settings?.track_popular) return c.json(success({ skipped: true }))
 
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS search_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        query TEXT NOT NULL,
-        results INTEGER DEFAULT 0,
-        created_at TEXT
-      )
-    `).run()
+    await ensureLogsTable(db)
 
     await db.prepare(
-      "INSERT INTO search_logs (query,results,created_at) VALUES (?,?,?)"
+      "INSERT INTO search_logs (query, results, ip, created_at) VALUES (?, ?, ?, ?)"
     ).bind(
-      body.query.trim().toLowerCase(),
+      body.query.trim().toLowerCase().substring(0, 100),
       Number(body.results || 0),
+      body.ip || "admin",
       now()
     ).run()
 
-    return c.json(success({}))
-
+    return c.json(success({ logged: true }))
   } catch (err) {
     return c.json(failure(err.message), 500)
   }
 })
 
 /* ================================================
-   DELETE /search/popular — Clear search logs
+   DELETE /search/popular — Clear logs
 ================================================ */
 
 app.delete("/search/popular", async (c) => {
   try {
     await c.env.DB.prepare("DELETE FROM search_logs").run()
+    if (c.env.KV) await c.env.KV.delete("search:popular").catch(() => {})
     return c.json(success({ cleared: true }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -435,27 +442,197 @@ app.delete("/search/popular", async (c) => {
 })
 
 /* ================================================
-   GET /search/test — Test search live
+   GET /search/test — Live search test
 ================================================ */
 
 app.get("/search/test", async (c) => {
   try {
     const db    = c.env.DB
-    const query = c.req.query("q") || ""
+    const query = (c.req.query("q") || "").trim()
 
-    if (!query.trim()) return c.json(success({ results: [], query: "" }))
+    if (!query) return c.json(success({ results: [], query: "" }))
 
     const { results } = await db.prepare(`
-      SELECT id,title,slug,type,status,poster,rating
+      SELECT id, title, slug, type, status, poster, rating
       FROM anime
-      WHERE title LIKE ? AND is_hidden=0
+      WHERE title LIKE ? AND is_hidden=0 AND active=1
       ORDER BY rating DESC
-      LIMIT 10
+      LIMIT 20
     `).bind(`%${query}%`).all()
 
     return c.json(success({ query, results: results || [] }))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   GET /search/logs — Paginated raw logs
+================================================ */
+
+app.get("/search/logs", async (c) => {
+  try {
+    const db       = c.env.DB
+    const _lp      = parseInt(c.req.query("page")  || "1");  const page  = (isNaN(_lp)  || _lp  < 1) ? 1  : _lp
+    const _ll      = parseInt(c.req.query("limit") || "50"); const limit = Math.min(100, isNaN(_ll) ? 50 : Math.max(1, _ll))
+    const offset   = (page - 1) * limit
+    const dateFrom = c.req.query("from")
+    const dateTo   = c.req.query("to")
+
+    await ensureLogsTable(db)
+
+    let sql   = "SELECT * FROM search_logs"
+    const params = []
+    const conds  = []
+
+    if (dateFrom) { conds.push("created_at >= ?"); params.push(dateFrom) }
+    if (dateTo)   { conds.push("created_at <= ?"); params.push(dateTo) }
+    if (conds.length) sql += " WHERE " + conds.join(" AND ")
+
+    sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    params.push(limit, offset)
+
+    const [logs, total] = await Promise.all([
+      db.prepare(sql).bind(...params).all(),
+      db.prepare("SELECT COUNT(*) as total FROM search_logs").first()
+    ])
+
+    return c.json(success({
+      logs:       logs.results,
+      pagination: { page, limit, total: total?.total || 0 }
+    }))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   GET /search/top-queries — Analytics
+================================================ */
+
+app.get("/search/top-queries", async (c) => {
+  try {
+    const db    = c.env.DB
+    const _tqd  = parseInt(c.req.query("days") || "7")
+    const days  = Math.min(90, isNaN(_tqd) ? 7 : Math.max(1, _tqd))
+
+    await ensureLogsTable(db)
+
+    const { results } = await db.prepare(`
+      SELECT query, COUNT(*) as count, AVG(results) as avg_results
+      FROM search_logs
+      WHERE created_at >= datetime('now', '-' || ? || ' days')
+      GROUP BY LOWER(query)
+      ORDER BY count DESC
+      LIMIT 50
+    `).bind(days).all()
+
+    return c.json(success({ queries: results, days }))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   GET /search/zero-results — Zero result queries
+================================================ */
+
+app.get("/search/zero-results", async (c) => {
+  try {
+    const db    = c.env.DB
+    const _zrl  = parseInt(c.req.query("limit") || "30")
+    const limit = Math.min(50, isNaN(_zrl) ? 30 : Math.max(1, _zrl))
+
+    await ensureLogsTable(db)
+
+    const { results } = await db.prepare(`
+      SELECT query, COUNT(*) as searches, MAX(created_at) as last_seen
+      FROM search_logs
+      WHERE results = 0
+      GROUP BY LOWER(query)
+      ORDER BY searches DESC
+      LIMIT ?
+    `).bind(limit).all()
+
+    return c.json(success(results || []))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   POST /search/rebuild-index — Rebuild FTS5 index
+   FIXED (Issue #14): Correct FTS5 delete syntax
+   FIXED (Issue #23): D1 batch limit 100 — chunked processing
+   Accepts ?offset= for pagination (client calls repeatedly)
+================================================ */
+
+app.post("/search/rebuild-index", async (c) => {
+  try {
+    const db       = c.env.DB
+    const CHUNK    = 100  // D1 batch max = 100 statements
+    const rawOff   = parseInt(c.req.query("offset") || "0")
+    const offset   = (isNaN(rawOff) || rawOff < 0) ? 0 : rawOff
+    const isFirst  = offset === 0
+
+    // Create FTS5 virtual table
+    await db.prepare(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS anime_fts USING fts5(
+        title, description, genres,
+        content='anime',
+        content_rowid='id'
+      )
+    `).run()
+
+    // FIXED: Correct FTS5 delete on first call
+    // Plain "DELETE FROM anime_fts" breaks content table tracking
+    // Use the FTS5 special delete command instead
+    if (isFirst) {
+      try {
+        await db.prepare(
+          "INSERT INTO anime_fts(anime_fts) VALUES('delete-all')"
+        ).run()
+      } catch {
+        // Fallback: table might not have data yet, ignore error
+      }
+    }
+
+    // Fetch ONE chunk only per request (D1 batch limit = 100)
+    const { results: animeList } = await db.prepare(`
+      SELECT id, title, description, genres
+      FROM anime
+      WHERE is_hidden=0 AND active=1
+      ORDER BY id ASC
+      LIMIT ? OFFSET ?
+    `).bind(CHUNK, offset).all()
+
+    if (!animeList.length) {
+      return c.json(success({
+        done:    true,
+        indexed: 0,
+        message: "FTS5 index rebuild complete"
+      }))
+    }
+
+    // Batch insert this chunk (max 100 at a time — D1 limit safe)
+    const stmts = animeList.map(a =>
+      db.prepare(
+        "INSERT INTO anime_fts (rowid, title, description, genres) VALUES (?, ?, ?, ?)"
+      ).bind(a.id, a.title || "", a.description || "", a.genres || "")
+    )
+    await db.batch(stmts)
+
+    const nextOffset = offset + CHUNK
+
+    return c.json(success({
+      done:       false,
+      indexed:    animeList.length,
+      nextOffset,
+      message:    `Indexed ${animeList.length} anime. Call again with offset=${nextOffset}`
+    }))
 
   } catch (err) {
+    console.error("FTS rebuild:", err)
     return c.json(failure(err.message), 500)
   }
 })
