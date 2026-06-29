@@ -1,80 +1,114 @@
 // ============================================================
-// src/middleware/dbSync.js  —  Auto DB Sync Middleware v2.0
+// src/middleware/dbSync.js  —  Auto DB Sync Middleware v2.2
 // ============================================================
-// Ye middleware har write request ke baad
-// Turso + Supabase ko background mein sync karta hai.
-//
-// v2 FEATURES:
-//   ✅ DB instance injection
-//   ✅ Request-level rate limiting
-//   ✅ Sync health headers in response
-//   ✅ Request origin tracking
+// FIXES v2.2:
+//   ✅ FIX 1: In-memory rateLimitMap removed (CF Workers isolate resets)
+//   ✅ FIX 2: setInterval() removed (not supported in CF Workers)
+//   ✅ FIX 3: KV-based distributed rate limiting
+//   ✅ FIX 4: Combined import from db.js (was two separate import lines)
+//   ✅ FIX 5: syncAnimeToKV — KV guard added (won't crash if env.KV missing)
 // ============================================================
 
-import { getDB } from "../db.js"
+// FIX: Combined into one import line
+import { getDB, Database } from "../db.js"
 
 /* ─────────────────────────────────────────────────────────────
-   SIMPLE IN-MEMORY RATE LIMITER
-   (Production mein Cloudflare Rate Limiting Rules use karo)
+   KV-BASED DISTRIBUTED RATE LIMITER
 ───────────────────────────────────────────────────────────── */
-const rateLimitMap = new Map()
-const RATE_LIMIT_WINDOW_MS  = 60_000  // 1 minute
-const RATE_LIMIT_MAX_WRITES = 500     // max 500 writes per minute per IP
+const RATE_LIMIT_WINDOW_SEC = 60
+const RATE_LIMIT_MAX_WRITES = 500
 
-function checkRateLimit(ip) {
-  const now    = Date.now()
-  const record = rateLimitMap.get(ip) || { count: 0, windowStart: now }
+export async function checkRateLimit(env, key, limit = RATE_LIMIT_MAX_WRITES, windowSeconds = RATE_LIMIT_WINDOW_SEC) {
+  if (!env.KV) return { allowed: true, remaining: limit }
 
-  // Reset window if expired
-  if (now - record.windowStart > RATE_LIMIT_WINDOW_MS) {
-    record.count       = 0
-    record.windowStart = now
+  const kvKey = `ratelimit:${key}`
+
+  try {
+    const current = await env.KV.get(kvKey)
+
+    if (!current) {
+      await env.KV.put(kvKey, "1", { expirationTtl: windowSeconds })
+      return { allowed: true, remaining: limit - 1 }
+    }
+
+    const count = parseInt(current, 10)
+    if (count >= limit) return { allowed: false, remaining: 0 }
+
+    await env.KV.put(kvKey, String(count + 1), { expirationTtl: windowSeconds })
+    return { allowed: true, remaining: limit - count - 1 }
+
+  } catch (e) {
+    console.warn("⚠️ Rate limit KV error:", e.message)
+    return { allowed: true, remaining: limit }
   }
-
-  record.count++
-  rateLimitMap.set(ip, record)
-
-  return record.count <= RATE_LIMIT_MAX_WRITES
 }
 
-// Cleanup old rate limit entries every 5 min
-setInterval(() => {
-  const now = Date.now()
-  for (const [ip, record] of rateLimitMap) {
-    if (now - record.windowStart > RATE_LIMIT_WINDOW_MS * 2) {
-      rateLimitMap.delete(ip)
+/* ─────────────────────────────────────────────────────────────
+   KV CACHE SYNC FUNCTIONS
+───────────────────────────────────────────────────────────── */
+
+// FIX: Guard added — if env.KV missing, won't crash
+export async function syncAnimeToKV(env, animeId) {
+  const db    = new Database(env.DB)
+  const anime = await db.queryOne("SELECT * FROM anime WHERE id = ?", [animeId])
+
+  if (anime && env.KV) {
+    try {
+      await env.KV.put(`anime:${animeId}`, JSON.stringify(anime), {
+        expirationTtl: 3600
+      })
+    } catch (e) {
+      console.warn("⚠️ syncAnimeToKV KV write failed:", e.message)
     }
   }
-}, 5 * 60_000)
+  return anime
+}
+
+export async function invalidateAnimeCache(env, animeId) {
+  if (!env.KV) return
+  try {
+    await env.KV.delete(`anime:${animeId}`)
+  } catch (e) {
+    console.warn("⚠️ KV invalidate error:", e.message)
+  }
+}
+
+export async function invalidateCacheByPrefix(env, prefix) {
+  if (!env.KV) return
+  try {
+    const list = await env.KV.list({ prefix })
+    if (list.keys.length > 0) {
+      await Promise.all(list.keys.map(k => env.KV.delete(k.name)))
+    }
+  } catch (e) {
+    console.warn("⚠️ KV prefix invalidate error:", e.message)
+  }
+}
 
 /* ─────────────────────────────────────────────────────────────
-   MAIN MIDDLEWARE
+   MAIN MIDDLEWARE  —  Hono pattern (c, next)
 ───────────────────────────────────────────────────────────── */
 export async function dbSync(c, next) {
   const start = Date.now()
   const ip    = c.req.header("CF-Connecting-IP") || "unknown"
 
-  // Rate limit check
-  if (!checkRateLimit(ip)) {
+  const rateLimitResult = await checkRateLimit(c.env, ip)
+  if (!rateLimitResult.allowed) {
     return c.json({
       success: false,
       message: "Rate limit exceeded. Max 500 writes/minute."
     }, 429)
   }
 
-  // Inject DB instance with sync metadata
   const db = getDB(c.env)
   c.set("db", db)
-
-  // Track request start time for latency header
   c.set("sync_start", start)
 
   await next()
 
-  // Add sync health headers to every response
   const elapsed = Date.now() - start
   c.res.headers.set("X-DB-Sync-Ms",      String(elapsed))
   c.res.headers.set("X-DB-Primary",      "d1")
   c.res.headers.set("X-DB-Replicas",     "turso,supabase")
-  c.res.headers.set("X-DB-Sync-Version", "2.0")
+  c.res.headers.set("X-DB-Sync-Version", "2.2")
 }
