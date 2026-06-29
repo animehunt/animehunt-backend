@@ -569,4 +569,83 @@ async function trackEvent(db, event_type, extra = {}, raw_data = null) {
   } catch {}
 }
 
+/* ── BROKEN LINK REPORT (MISSING FEATURE — ADDED) ───────────────────────────
+   Blueprint §2 Item 6 — admin report broken download links
+   BUG FIX (Blueprint Line 463): shortlink null crash already fixed above
+   in buildShortlink() — if (!sl?.base_url) return null
+────────────────────────────────────────────────────────────────────────────── */
+
+// POST /api/admin/downloads/report-broken
+downloads.post("/downloads/report-broken", async (c) => {
+  const db   = c.env.DB
+  const body = await c.req.json()
+  const { downloadId, url, reason } = body || {}
+
+  if (!downloadId) return fail(c, "downloadId required")
+
+  try {
+    // Insert broken link report
+    await db.prepare(
+      `INSERT INTO broken_link_reports (download_id, url, reason, reported_at)
+       VALUES (?, ?, ?, datetime('now'))`
+    ).bind(
+      downloadId,
+      url     || null,
+      reason  || "Link not working"
+    ).run()
+
+    // Mark the host entry as reported_broken so admin sees it flagged
+    await db.prepare(
+      "UPDATE download_host_entries SET status='reported_broken', updated_at=datetime('now') WHERE id=?"
+    ).bind(downloadId).run()
+
+    return ok(c, { reported: true, downloadId })
+  } catch(e) { return fail(c, e.message) }
+})
+
+// GET /api/admin/downloads/broken  — list all broken link reports
+downloads.get("/downloads/broken", async (c) => {
+  const db = c.env.DB
+  try {
+    const page   = Math.max(1, parseInt(c.req.query("page")  || "1"))
+    const limit  = Math.min(100, parseInt(c.req.query("limit") || "50"))
+    const offset = (page - 1) * limit
+
+    const rows = await db.prepare(
+      `SELECT
+         blr.id, blr.download_id, blr.url, blr.reason, blr.reported_at,
+         dhe.direct_download,
+         h.name as host_name,
+         de.anime_id, de.content_type, de.season, de.episode, de.episode_title
+       FROM broken_link_reports blr
+       LEFT JOIN download_host_entries dhe ON dhe.id = blr.download_id
+       LEFT JOIN hosts h ON h.id = dhe.host_id
+       LEFT JOIN download_entries de ON de.id = dhe.entry_id
+       ORDER BY blr.reported_at DESC
+       LIMIT ? OFFSET ?`
+    ).bind(limit, offset).all()
+
+    const total = await db.prepare(
+      "SELECT COUNT(*) as n FROM broken_link_reports"
+    ).first()
+
+    return ok(c, {
+      reports: rows.results,
+      total:   total?.n ?? 0,
+      page,
+      limit
+    })
+  } catch(e) { return fail(c, e.message) }
+})
+
+// DELETE /api/admin/downloads/broken/:id  — dismiss a broken link report
+downloads.delete("/downloads/broken/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    await db.prepare("DELETE FROM broken_link_reports WHERE id=?").bind(id).run()
+    return ok(c, { deleted: id })
+  } catch(e) { return fail(c, e.message) }
+})
+
 export default downloads
