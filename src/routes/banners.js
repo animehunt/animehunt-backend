@@ -288,7 +288,7 @@ app.put("/banners/:id", async (c) => {
     const body = await c.req.json()
 
     const existing = await db.prepare(
-      "SELECT id FROM banners WHERE id=?"
+      "SELECT id, created_at FROM banners WHERE id=?"
     ).bind(id).first()
     if (!existing) return c.json(failure("Banner not found"), 404)
 
@@ -323,7 +323,7 @@ app.put("/banners/:id", async (c) => {
       row.updated_at, id
     ).run()
 
-    syncToReplicas(c.env, "insert", { ...row, created_at: now() })
+    syncToReplicas(c.env, "insert", { ...row, created_at: existing.created_at || timestamp })
 
     return c.json(success({ id }))
 
@@ -511,3 +511,4 @@ app.post("/banners/:id/trailer", async (c) => {
 })
 
 export default app
+         
