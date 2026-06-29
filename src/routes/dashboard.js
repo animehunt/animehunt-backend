@@ -1,4 +1,3 @@
-
 /* ================================================
    dashboard.js — Admin Dashboard Stats + Health
    Auth handled by adminAuth middleware in index.js
@@ -55,7 +54,7 @@ app.get("/dashboard", async (c) => {
       safeQuery(db, "SELECT COUNT(*) as total FROM categories"),
       safeQuery(db, "SELECT COUNT(*) as total FROM banners"),
       safeQuery(db, "SELECT COUNT(*) as total FROM servers"),
-      safeQuery(db, "SELECT COUNT(*) as total FROM downloads")
+      safeQuery(db, "SELECT COUNT(*) as total FROM download_entries")
     ])
 
     /* ---- ANIME BREAKDOWN ---- */
