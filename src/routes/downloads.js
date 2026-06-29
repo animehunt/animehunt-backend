@@ -268,6 +268,45 @@ downloads.post("/analytics", async (c) => {
   } catch { return ok(c, { tracked: false }) }
 })
 
+/* GET /api/download/:episodeId — MEDIUM FIX #5: missing public route
+   frontend fetchDownloadLinks() calls this endpoint
+   Returns: quality links for the episode via download_host_entries + download_links */
+downloads.get("/download/:episodeId", async (c) => {
+  const db         = c.env.DB
+  const episodeId  = c.req.param("episodeId")
+  if (!episodeId) return fail(c, "episodeId required")
+  try {
+    /* Find the download entry for this episode */
+    const entry = await db.prepare(
+      `SELECT id FROM download_entries WHERE episode=? AND content_type='episode' LIMIT 1`
+    ).bind(episodeId).first()
+
+    if (!entry) return ok(c, [])
+
+    /* Get all host entries with their quality links */
+    const { results: hostEntries } = await db.prepare(
+      `SELECT dhe.id, dhe.quality, dhe.direct_download, dhe.status,
+              h.name as host_name, h.storage, h.knight
+       FROM download_host_entries dhe
+       JOIN hosts h ON h.id = dhe.host_id
+       WHERE dhe.entry_id=? AND h.active=1 AND dhe.status != 'broken'
+       ORDER BY dhe.id ASC`
+    ).bind(entry.id).all()
+
+    if (!hostEntries.length) return ok(c, [])
+
+    /* Attach quality links for each host entry */
+    const results = await Promise.all(hostEntries.map(async (he) => {
+      const { results: links } = await db.prepare(
+        `SELECT quality, link FROM download_links WHERE host_entry_id=? ORDER BY quality DESC`
+      ).bind(he.id).all()
+      return { ...he, links }
+    }))
+
+    return ok(c, results)
+  } catch(e) { return fail(c, e.message) }
+})
+
 /* ══════════════════════════════════════════════════════════
    ADMIN ROUTES — /api/admin/...
    (index.js: adminRoutes.route("/", downloads) — adminAuth already applied)
