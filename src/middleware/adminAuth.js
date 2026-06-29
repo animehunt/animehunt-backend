@@ -234,7 +234,7 @@ async function verifyJWT(token, secret) {
 /* ================================================================
    SEED DEFAULT ADMIN — Agar table empty ho
    Username: admin
-   Password: Nim3Chanchal2026UltraSecure  (PBKDF2-SHA512 hashed)
+   Password: (set at deployment — change after first login!)
 ================================================================ */
 
 async function seedDefaultAdmin(db) {
@@ -245,8 +245,7 @@ async function seedDefaultAdmin(db) {
 
     if (!existing) {
       /*
-         Pre-computed hash of: Nim3Chanchal2026UltraSecure
-         Algorithm: PBKDF2-SHA512, 100000 iterations
+         Pre-computed PBKDF2-SHA512 hash (100000 iterations)
          Generated: 2026-06-13
          ⚠️  Change this password after first login!
       */
