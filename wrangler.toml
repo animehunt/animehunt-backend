@@ -17,30 +17,28 @@ binding       = "DB"
 database_name = "animehunt"
 database_id   = "95a1ed03-67a0-46e4-b82c-d153f4c6b8e3"
 
+# ================= KV NAMESPACE =================
+
+[[kv_namespaces]]
+binding = "KV"
+id      = "ea8c692f1cf94fcfb4cd3bcfa6fa29cc"
+
 # ================= ENV VARIABLES =================
 
 [vars]
 
-ENVIRONMENT         = "production"
-
+ENVIRONMENT           = "production"
+ALLOWED_ORIGINS       = "https://animehunt.in,https://www.animehunt.in,https://admin.animehunt.in"
 
 # 🖼️ ImageKit (Public)
 IMAGEKIT_PUBLIC_KEY   = "public_29SqhkCUDesPjYpcKrAS5aFuSkc="
 IMAGEKIT_URL_ENDPOINT = "https://ik.imagekit.io/av2cevzsyi"
 
-# 🗄️ Turso — Replica DB (LibSQL)
-TURSO_URL        = "libsql://animehunt-animehunt1.aws-ap-south-1.turso.io"
-TURSO_AUTH_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODA5OTQzMDYsImlkIjoiMDE5ZWFiODctYzgwMS03OWUyLWE4ZTgtZDdmZmYwYzJhOWFlIiwicmlkIjoiMmRmY2FkYzYtNDFjZC00NWMyLWI4NDUtOTZiOTNjYTg3OGVhIn0.ZRUFwzEjXzrHR6TTo8XZHcoZ3avCnnjb9GQhXKWiPqD7-xNgt51v3VpcXweVq5WPSSZEoAr2LXvU9ULaqPriBA"
+# 🗄️ Turso — Replica DB URL
+TURSO_URL = "libsql://animehunt-animehunt1.aws-ap-south-1.turso.io"
 
-# 🗄️ Supabase — Replica DB (PostgreSQL)
+# 🗄️ Supabase — URL only
 SUPABASE_URL = "https://ahuwijnulrqsrdnzphds.supabase.co"
-SUPABASE_KEY = "sb_publishable_VHHITPpDdy_pKBvWDk2Iiw_7x0Bu51c"
-
-# 🔑 JWT Secret
-JWT_SECRET = "$2a$12$JGDs8IjDGgHAV9swobV8gecyMQFcJwwtcvAXRgnqCntKG6nV8l2EC"
-
-# 🖼️ ImageKit (Private)
-IMAGEKIT_PRIVATE_KEY = "private_5RhpDsMuLtxnkYONYmJtS9EiPlI="
 
 # ================= CRON =================
 
