@@ -1,9 +1,23 @@
 /* ================================================
    securityAdmin.js — Security Settings + Threat Management
    Auth handled by adminAuth middleware in index.js
+
+   FIXES:
+     ✅ FIX 1: GET /security/threats — now has pagination
+               Previously returned raw LIMIT 50 with no pagination info
+               (security.html Line 860 mismatch)
+     ✅ FIX 2: GET /security/banned — now has pagination
+               Previously hard-coded LIMIT 100
+     ✅ FIX 3: POST /security/threats/log — now auto-blocks high severity
+               via KV blocklist (uses blockIP from firewall.js)
+     ✅ FIX 4: Imported blockIP/unblockIP from firewall.js
+               (no more duplicate ban logic)
+     ✅ FIX 5: GET /security/audit-logs — new route added
+               (was in blueprint but missing from file)
 ================================================ */
 
 import { Hono } from "hono"
+import { blockIP, unblockIP } from "./firewall.js"
 
 const app = new Hono()
 
@@ -76,9 +90,28 @@ async function ensureRow(db) {
         path       TEXT,
         ua         TEXT,
         country    TEXT,
+        severity   TEXT DEFAULT 'medium',
         created_at TEXT
       )
     `).run()
+
+    /* FIX: audit_logs table — needed for GET /security/audit-logs */
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        admin      TEXT,
+        action     TEXT,
+        target     TEXT,
+        detail     TEXT,
+        ip         TEXT,
+        created_at TEXT
+      )
+    `).run()
+
+    /* Add severity column to threat_logs if it doesn't exist (migration) */
+    try {
+      await db.prepare("ALTER TABLE threat_logs ADD COLUMN severity TEXT DEFAULT 'medium'").run()
+    } catch { /* column already exists */ }
 
     const row = await db.prepare(
       "SELECT id FROM security_settings WHERE id=1"
@@ -176,7 +209,6 @@ async function syncToReplicas(env, row) {
     row.ai_auto_ban, row.ai_threat_detect, row.ai_anomaly, row.ai_ban_threshold,
     row.hsts, row.csp, row.xframe, row.nosniff, row.updated_at
   ].map(v => ({
-    // ✅ FIX: sirf actual numbers ko integer — strings hamesha text
     type: typeof v === "number" ? "integer" : "text",
     value: String(v ?? "")
   }))
@@ -442,19 +474,38 @@ app.get("/security/stats", async (c) => {
 })
 
 /* ================================================
-   GET /security/banned — List banned IPs
+   GET /security/banned — List banned IPs WITH PAGINATION
+   FIX: Was hard-coded LIMIT 100 with no pagination data
+        Now returns page/limit/total/pages for frontend
 ================================================ */
 
 app.get("/security/banned", async (c) => {
   try {
-    const db = c.env.DB
+    const db     = c.env.DB
+    const page   = Math.max(1, parseInt(c.req.query("page")  || "1", 10))
+    const limit  = Math.min(100, parseInt(c.req.query("limit") || "50", 10))
+    const offset = (page - 1) * limit
+
     await ensureRow(db)
 
-    const { results } = await db.prepare(`
-      SELECT * FROM banned_ips ORDER BY created_at DESC LIMIT 100
-    `).all()
+    const [listResult, countResult] = await Promise.all([
+      db.prepare(
+        "SELECT * FROM banned_ips ORDER BY created_at DESC LIMIT ? OFFSET ?"
+      ).bind(limit, offset).all(),
+      db.prepare("SELECT COUNT(*) as total FROM banned_ips").first()
+    ])
 
-    return c.json(success(results || []))
+    const total = countResult?.total || 0
+
+    return c.json(success({
+      banned: listResult.results || [],
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    }))
   } catch (err) {
     return c.json(failure(err.message), 500)
   }
@@ -462,6 +513,7 @@ app.get("/security/banned", async (c) => {
 
 /* ================================================
    POST /security/ban — Ban an IP
+   FIX: Uses shared blockIP() from firewall.js (single source of truth)
 ================================================ */
 
 app.post("/security/ban", async (c) => {
@@ -478,25 +530,10 @@ app.post("/security/ban", async (c) => {
       return c.json(failure("Invalid IP format"), 400)
     }
 
-    const existing = await db.prepare(
-      "SELECT id,ban_count FROM banned_ips WHERE ip=?"
-    ).bind(body.ip.trim()).first()
+    const durationSeconds = body.duration || 86400
 
-    if (existing) {
-      await db.prepare(
-        "UPDATE banned_ips SET ban_count=ban_count+1,reason=?,expires_at=? WHERE ip=?"
-      ).bind(body.reason || "manual", body.expires_at || null, body.ip.trim()).run()
-    } else {
-      await db.prepare(`
-        INSERT INTO banned_ips (ip,reason,ban_count,expires_at,created_at)
-        VALUES (?,?,1,?,?)
-      `).bind(
-        body.ip.trim(),
-        body.reason    || "manual",
-        body.expires_at || null,
-        now()
-      ).run()
-    }
+    // FIX: Use shared blockIP from firewall.js (also updates KV blocklist)
+    await blockIP(c.env, body.ip.trim(), body.reason || "manual", durationSeconds)
 
     return c.json(success({ ip: body.ip.trim(), banned: true }))
   } catch (err) {
@@ -504,14 +541,29 @@ app.post("/security/ban", async (c) => {
   }
 })
 
-// ✅ FIX: /banned/all pehle — warna :ip "all" ko match kar leta
 /* ================================================
    DELETE /security/banned/all — Clear all bans
+   FIX: /banned/all pehle — warna :ip "all" ko match kar leta
+        Also clears KV blocklist entries
 ================================================ */
 
 app.delete("/security/banned/all", async (c) => {
   try {
-    await c.env.DB.prepare("DELETE FROM banned_ips").run()
+    const db = c.env.DB
+
+    // Get all IPs before deleting (to clean KV)
+    if (c.env.KV) {
+      try {
+        const kvList = await c.env.KV.list({ prefix: "blocklist:" })
+        if (kvList.keys.length > 0) {
+          await Promise.all(kvList.keys.map(k => c.env.KV.delete(k.name)))
+        }
+      } catch (e) {
+        console.warn("⚠️ KV blocklist clear failed:", e.message)
+      }
+    }
+
+    await db.prepare("DELETE FROM banned_ips").run()
     return c.json(success({ cleared: true }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -520,13 +572,14 @@ app.delete("/security/banned/all", async (c) => {
 
 /* ================================================
    DELETE /security/ban/:ip — Unban an IP
+   FIX: Uses shared unblockIP() from firewall.js (also clears KV)
 ================================================ */
 
 app.delete("/security/ban/:ip", async (c) => {
   try {
-    const db = c.env.DB
     const ip = c.req.param("ip")
-    await db.prepare("DELETE FROM banned_ips WHERE ip=?").bind(ip).run()
+    // FIX: Use shared unblockIP (clears DB + KV)
+    await unblockIP(c.env, ip)
     return c.json(success({ ip, unbanned: true }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -534,20 +587,38 @@ app.delete("/security/ban/:ip", async (c) => {
 })
 
 /* ================================================
-   GET /security/threats — Threat logs
+   GET /security/threats — Threat logs WITH PAGINATION
+   FIX: Was returning raw LIMIT 50 with no pagination
+        security.html Line 860 expected pagination object
 ================================================ */
 
 app.get("/security/threats", async (c) => {
   try {
-    const db    = c.env.DB
-    const limit = Number(c.req.query("limit") || 50)
+    const db     = c.env.DB
+    const page   = Math.max(1, parseInt(c.req.query("page")  || "1", 10))
+    const limit  = Math.min(100, parseInt(c.req.query("limit") || "30", 10))
+    const offset = (page - 1) * limit
+
     await ensureRow(db)
 
-    const { results } = await db.prepare(`
-      SELECT * FROM threat_logs ORDER BY created_at DESC LIMIT ?
-    `).bind(limit).all()
+    const [listResult, countResult] = await Promise.all([
+      db.prepare(
+        "SELECT * FROM threat_logs ORDER BY created_at DESC LIMIT ? OFFSET ?"
+      ).bind(limit, offset).all(),
+      db.prepare("SELECT COUNT(*) as total FROM threat_logs").first()
+    ])
 
-    return c.json(success(results || []))
+    const total = countResult?.total || 0
+
+    return c.json(success({
+      threats: listResult.results || [],
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    }))
   } catch (err) {
     return c.json(failure(err.message), 500)
   }
@@ -567,7 +638,10 @@ app.delete("/security/threats", async (c) => {
 })
 
 /* ================================================
-   POST /security/threats/log — Log a threat (internal)
+   POST /security/threats/log — Log a threat (internal use)
+   FIX: Auto-ban now uses blockIP() from firewall.js
+        (previously was a raw DB insert without KV sync)
+        High/critical severity auto-bans immediately
 ================================================ */
 
 app.post("/security/threats/log", async (c) => {
@@ -576,35 +650,109 @@ app.post("/security/threats/log", async (c) => {
     const body = await c.req.json()
     await ensureRow(db)
 
+    const severity = body.severity || "medium"
+
     await db.prepare(`
-      INSERT INTO threat_logs (ip,type,path,ua,country,created_at)
-      VALUES (?,?,?,?,?,?)
+      INSERT INTO threat_logs (ip,type,path,ua,country,severity,created_at)
+      VALUES (?,?,?,?,?,?,?)
     `).bind(
       body.ip      || "",
       body.type    || "unknown",
       body.path    || "",
       body.ua      || "",
       body.country || "",
+      severity,
       now()
     ).run()
 
-    /* Auto-ban if AI enabled and threshold crossed */
+    /* FIX: Auto-ban high/critical severity immediately */
+    if ((severity === "high" || severity === "critical") && body.ip) {
+      await blockIP(c.env, body.ip, `Auto-blocked: ${body.type} (${severity})`, 86400)
+      return c.json(success({ logged: true, autoBanned: true }))
+    }
+
+    /* Auto-ban if threshold crossed for medium/low severity */
     const settings = await db.prepare(
       "SELECT ai_auto_ban,ai_ban_threshold FROM security_settings WHERE id=1"
     ).first()
 
     if (settings?.ai_auto_ban && body.ip) {
-      const count = await db.prepare(`
-        SELECT COUNT(*) as c FROM threat_logs WHERE ip=?
-      `).bind(body.ip).first()
+      const count = await db.prepare(
+        "SELECT COUNT(*) as c FROM threat_logs WHERE ip=?"
+      ).bind(body.ip).first()
 
       if (count?.c >= (settings.ai_ban_threshold || 5)) {
-        await db.prepare(`
-          INSERT OR IGNORE INTO banned_ips (ip,reason,ban_count,created_at)
-          VALUES (?,?,?,?)
-        `).bind(body.ip, "ai_auto_ban", count.c, now()).run()
+        // FIX: Use blockIP() which also updates KV blocklist
+        await blockIP(c.env, body.ip, "ai_auto_ban", 86400)
+        return c.json(success({ logged: true, autoBanned: true }))
       }
     }
+
+    return c.json(success({ logged: true, autoBanned: false }))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   GET /security/audit-logs — Audit log WITH PAGINATION
+   FIX: This route was completely missing from the file
+        Blueprint specified it was needed
+================================================ */
+
+app.get("/security/audit-logs", async (c) => {
+  try {
+    const db     = c.env.DB
+    const page   = Math.max(1, parseInt(c.req.query("page")  || "1", 10))
+    const limit  = Math.min(100, parseInt(c.req.query("limit") || "50", 10))
+    const offset = (page - 1) * limit
+
+    await ensureRow(db)
+
+    const [listResult, countResult] = await Promise.all([
+      db.prepare(
+        "SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ? OFFSET ?"
+      ).bind(limit, offset).all(),
+      db.prepare("SELECT COUNT(*) as total FROM audit_logs").first()
+    ])
+
+    const total = countResult?.total || 0
+
+    return c.json(success({
+      logs: listResult.results || [],
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    }))
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   POST /security/audit-logs — Write audit log entry
+================================================ */
+
+app.post("/security/audit-logs", async (c) => {
+  try {
+    const db   = c.env.DB
+    const body = await c.req.json()
+    await ensureRow(db)
+
+    await db.prepare(`
+      INSERT INTO audit_logs (admin, action, target, detail, ip, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      body.admin  || "system",
+      body.action || "unknown",
+      body.target || "",
+      body.detail || "",
+      body.ip     || "",
+      now()
+    ).run()
 
     return c.json(success({ logged: true }))
   } catch (err) {
