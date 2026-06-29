@@ -398,10 +398,17 @@ app.delete("/servers/bulk-delete", async (c) => {
       return c.json(failure("ids array required"), 400)
     }
 
-    for (const id of body.ids) {
-      await db.prepare("DELETE FROM servers WHERE id=?").bind(id).run()
+    /* LOW FIX #3: Use db.batch() instead of sequential loop
+       Avoids hitting Cloudflare Workers 50 subrequest limit on large deletes */
+    const stmts = body.ids.map(id =>
+      db.prepare("DELETE FROM servers WHERE id=?").bind(id)
+    )
+    await db.batch(stmts)
+
+    /* Sync replicas in parallel */
+    await Promise.all(body.ids.map(id =>
       syncToReplicas(c.env, "delete", { id })
-    }
+    ))
 
     return c.json(success({ deleted: body.ids.length }))
 
