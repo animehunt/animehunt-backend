@@ -389,6 +389,101 @@ app.put("/episodes/:id", async (c) => {
   }
 })
 
+/* ================= BULK DELETE by IDs (ADDED — Blueprint §3) ================= */
+// ✅ ROUTE ORDER FIX: Must be registered BEFORE DELETE /episodes/:id
+//    Otherwise Hono matches "bulk" as :id param and returns 404
+// ✅ FIX: Was using parallel fetch calls that hit CF 50-subrequest limit.
+//        Now uses a single D1 IN() query instead.
+app.delete('/episodes/bulk', async (c) => {
+  try {
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure('Invalid JSON body'), 400) }
+
+    const episodeIds = body?.episodeIds
+    if (!Array.isArray(episodeIds) || episodeIds.length === 0) {
+      return c.json(failure('episodeIds array required'), 400)
+    }
+
+    // Safety cap — prevent runaway deletes
+    const ids = episodeIds.slice(0, 100)
+    const placeholders = ids.map(() => '?').join(',')
+
+    // Fetch IDs before delete so we can sync replicas
+    const { results: toDelete } = await db.prepare(
+      `SELECT id FROM episodes WHERE id IN (${placeholders})`
+    ).bind(...ids).all()
+
+    if (!toDelete.length) {
+      return c.json(success({ deleted: 0 }))
+    }
+
+    // ✅ Single D1 query — no loop, no subrequest overflow
+    const deleteIds = toDelete.map(r => r.id)
+    const delPlaceholders = deleteIds.map(() => '?').join(',')
+    const result = await db.prepare(
+      `DELETE FROM episodes WHERE id IN (${delPlaceholders})`
+    ).bind(...deleteIds).run()
+
+    // Sync replicas non-blocking
+    const syncAll = Promise.all(deleteIds.map(id => syncToReplicas(c.env, 'delete', { id })))
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(syncAll)
+    } else {
+      syncAll.catch(() => {})
+    }
+
+    return c.json(success({ deleted: result.meta?.changes || deleteIds.length }))
+
+  } catch (err) {
+    console.error('episodes bulk DELETE by IDs:', err)
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================= REORDER EPISODES (ADDED — Blueprint §5 Item 2) ================= */
+// ✅ ROUTE ORDER FIX: registered before :id routes to avoid param collision
+// Drag-and-drop reorder: accepts array of episode IDs in new order.
+// Uses D1 batch to update sort_order in a single round-trip.
+app.post('/episodes/reorder', async (c) => {
+  try {
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure('Invalid JSON body'), 400) }
+
+    const { animeId, orderedIds } = body || {}
+
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return c.json(failure('orderedIds array required'), 400)
+    }
+
+    if (!animeId) {
+      return c.json(failure('animeId required'), 400)
+    }
+
+    const timestamp = now()
+
+    // ✅ D1 batch — one network call for all updates
+    const statements = orderedIds.map((id, index) =>
+      db.prepare(
+        'UPDATE episodes SET sort_order=?, updated_at=? WHERE id=? AND anime_id=?'
+      ).bind(index + 1, timestamp, id, animeId)
+    )
+
+    await db.batch(statements)
+
+    return c.json(success({ reordered: orderedIds.length }))
+
+  } catch (err) {
+    console.error('episodes reorder:', err)
+    return c.json(failure(err.message), 500)
+  }
+})
+
 /* ================= DELETE ================= */
 
 app.delete("/episodes/:id", async (c) => {
@@ -527,3 +622,4 @@ app.get("/public/seasons/:animeId", async (c) => {
 
 export default app
 
+         
