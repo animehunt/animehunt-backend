@@ -160,7 +160,7 @@ app.route("/api", trending)
 
 /* ================= AUTH ROUTE (NO AUTH MIDDLEWARE) ================= */
 app.route("/api/auth", auth)
-app.route("/api/admin/auth", adminAuthApp)   // ← CRITICAL FIX #3: admin auth routes mounted
+app.route("/api/admin", adminAuthApp)        // ← FIX: adminAuthApp's internal routes already start with /auth/, so mount at /api/admin (not /api/admin/auth) to compose correctly: /api/admin + /auth/login = /api/admin/auth/login
 
 /* ================= ADMIN ROUTES (AUTH REQUIRED) ================= */
 const adminRoutes = new Hono()
