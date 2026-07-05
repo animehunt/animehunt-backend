@@ -12,6 +12,8 @@
    ✅ FIXED: seo/sitemap/regenerate — KV list prefix correct
    ✅ FIXED: metaDesc undefined?.slice bug via safeDesc helper
    ✅ FIXED: schema JSON — aggregateRating undefined removed with filter
+   ✅ FIXED: GET /seo/robots admin preview now reads system_settings.robots_txt
+              override (was hardcoded, disagreed with what publicSEO.js actually serves)
 
    ROUTES:
    GET  /seo                   — Get settings
@@ -613,8 +615,34 @@ app.get("/seo/sitemap", async (c) => {
 
 app.get("/seo/robots", async (c) => {
   try {
-    await ensureRow(c.env.DB)
-    const seoRow = await c.env.DB.prepare("SELECT canonical FROM seo_settings WHERE id=1").first()
+    const db = c.env.DB
+    await ensureRow(db)
+
+    // Read custom robots.txt if one was saved via /seo/robots/update.
+    // This mirrors exactly what publicSEO.js's public /robots.txt serves,
+    // so the admin preview never disagrees with what crawlers actually see.
+    let custom = null
+    try {
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS system_settings (
+          key        TEXT PRIMARY KEY,
+          value      TEXT,
+          updated_at TEXT
+        )
+      `).run()
+      const setting = await db.prepare(
+        "SELECT value FROM system_settings WHERE key='robots_txt'"
+      ).first()
+      if (setting?.value?.trim()) custom = setting.value.trim()
+    } catch {}
+
+    if (custom) {
+      return new Response(custom, {
+        headers: { "Content-Type": "text/plain; charset=utf-8" }
+      })
+    }
+
+    const seoRow = await db.prepare("SELECT canonical FROM seo_settings WHERE id=1").first()
     const base   = (seoRow?.canonical || DEFAULTS.canonical).replace(/\/$/, "")
 
     const robots = `User-agent: *
@@ -765,3 +793,4 @@ app.post("/seo/robots/update", async (c) => {
 })
 
 export default app
+
