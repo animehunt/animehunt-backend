@@ -462,3 +462,4 @@ app.get("/api/seo/schema/:animeId", async (c) => {
 })
 
 export default app
+
