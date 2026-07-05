@@ -638,3 +638,4 @@ app.post("/search/rebuild-index", async (c) => {
 })
 
 export default app
+
