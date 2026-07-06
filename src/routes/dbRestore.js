@@ -142,6 +142,10 @@ async function bulkWriteToD1(env, table, rows) {
 
 async function bulkWriteToTurso(env, table, rows) {
   if (!rows.length) return 0
+  if (!env.TURSO_URL || !env.TURSO_AUTH_TOKEN) {
+    console.warn(`Turso write skipped [${table}]: TURSO_URL/TURSO_AUTH_TOKEN not configured`)
+    return 0
+  }
   const httpUrl = env.TURSO_URL.replace("libsql://", "https://")
   let count = 0
   for (const row of rows) {
@@ -435,10 +439,6 @@ async function reconcileTable(env, table) {
 
     // Write winner to all three databases
     if (winner) {
-      const keys = Object.keys(winner)
-      const vals = Object.values(winner)
-      const sql  = `INSERT OR REPLACE INTO ${table} (${keys.join(",")}) VALUES (${keys.map(() => "?").join(",")})`
-
       await bulkWriteToD1(env, table, [winner])
       await bulkWriteToTurso(env, table, [winner])
       await bulkWriteToSupabase(env, table, [winner])
@@ -812,8 +812,6 @@ router.post("/db/replay-events", async (c) => {
         }
 
         if (event.origin !== ORIGIN_TURSO) {
-          await bulkWriteToTurso(c.env, event.table_name, [])
-          // use raw turso call for SQL
           const httpUrl = c.env.TURSO_URL.replace("libsql://", "https://")
           await fetch(`${httpUrl}/v2/pipeline`, {
             method: "POST",
@@ -1052,3 +1050,4 @@ router.get("/db/checksums", async (c) => {
 })
 
 export default router
+
