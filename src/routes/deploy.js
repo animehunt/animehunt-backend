@@ -336,7 +336,10 @@ app.post("/deploy/restore", async (c) => {
     await db.prepare("DELETE FROM categories").run()
     await db.prepare("DELETE FROM banners").run()
 
-    let restored = { anime: 0, episodes: 0, categories: 0, banners: 0 }
+    let restored = {
+      anime: 0, episodes: 0, categories: 0, banners: 0,
+      servers: 0, seo: 0, performance: 0, security: 0, search: 0
+    }
 
     /* Restore anime — explicit columns */
     for (const a of (data.anime || [])) {
@@ -421,6 +424,37 @@ app.post("/deploy/restore", async (c) => {
         restored.banners++
       } catch (err) {
         console.error("Restore banner row:", err)
+      }
+    }
+
+    // FIX: /deploy/backup captures servers, seo, performance, security, and
+    // search settings (see readTableChunked() above) but restore previously
+    // dropped all five silently — a "full backup" could not be fully restored.
+    // These are restored generically (dynamic columns from the row itself,
+    // same INSERT OR REPLACE pattern dbRestore.js already uses) since their
+    // schemas belong to other modules and aren't declared in this file.
+    const genericRestoreMap = [
+      { key: "servers",     table: "servers" },
+      { key: "seo",         table: "seo_settings" },
+      { key: "performance", table: "performance_settings" },
+      { key: "security",    table: "security_settings" },
+      { key: "search",      table: "search_settings" }
+    ]
+
+    for (const { key, table } of genericRestoreMap) {
+      for (const item of (data[key] || [])) {
+        if (!item || typeof item !== "object") continue
+        try {
+          const cols = Object.keys(item)
+          if (!cols.length) continue
+          const sql = `INSERT OR REPLACE INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`
+          await db.prepare(sql).bind(...cols.map(k => item[k])).run()
+          restored[key]++
+        } catch (err) {
+          // Table may not exist in this environment yet (owned by another
+          // module) — skip gracefully rather than failing the whole restore.
+          console.warn(`Restore ${table} row:`, err.message)
+        }
       }
     }
 
