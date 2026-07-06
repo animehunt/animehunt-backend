@@ -464,6 +464,31 @@ app.post("/system/config-versions/rollback", async (c) => {
   }
 })
 
+// FIX: /system/export was called by system-settings.html (exportConfig())
+//      but had no matching route — added to close the gap.
+app.get("/system/export", async (c) => {
+  try {
+    const db = c.env.DB
+    await ensureRow(db)
+    const row = await db.prepare("SELECT * FROM system_settings WHERE id=1").first()
+    // NOTE: exported flat (same shape as POST /system body / format()),
+    // so importConfig() -> POST /system round-trips without transformation.
+    const payload = format(row || {})
+
+    await logAction(db, "CONFIG_EXPORTED", "Config exported as JSON")
+
+    return new Response(JSON.stringify(payload, null, 2), {
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Disposition": `attachment; filename="config-export-${Date.now()}.json"`
+      }
+    })
+  } catch (err) {
+    console.error("system export:", err)
+    return c.json(failure(err.message), 500)
+  }
+})
+
 app.get("/system/health", async (c) => {
   const db     = c.env.DB
   const result = {
