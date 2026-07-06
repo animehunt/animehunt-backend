@@ -21,6 +21,15 @@
      ✅ FIX 5: requireAuth() exported for use by other modules
      ✅ FIX 6: All Web Crypto API — no Node.js crypto
      ✅ FIX 7: Token expiry — access: 15min, refresh: 7 days
+     ✅ FIX 8 (production-readiness pass): seedDefaultAdmin() no longer
+               ships a static pre-computed password hash in source code.
+               Every deployment of this file previously created the same
+               "admin" account with the same password everywhere it was
+               used. Now the seed password comes from the ADMIN_INITIAL_PASSWORD
+               secret (wrangler secret put ADMIN_INITIAL_PASSWORD) if set,
+               otherwise a fresh random password is generated per-deploy
+               and printed once to the Workers deploy log (never stored
+               in source, never returned over the API).
 ================================================================ */
 
 import { Hono } from "hono"
@@ -234,29 +243,51 @@ async function verifyJWT(token, secret) {
 /* ================================================================
    SEED DEFAULT ADMIN — Agar table empty ho
    Username: admin
-   Password: (set at deployment — change after first login!)
+   Password: from ADMIN_INITIAL_PASSWORD secret, or a fresh random
+             password generated per-deploy (never hardcoded in source —
+             a static hash here would mean every deployment of this
+             file shares one admin password until someone remembers
+             to change it). Change the password after first login
+             regardless of which path was used.
 ================================================================ */
 
-async function seedDefaultAdmin(db) {
+function generateRandomPassword(length = 20) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*"
+  const bytes    = crypto.getRandomValues(new Uint8Array(length))
+  return Array.from(bytes, b => alphabet[b % alphabet.length]).join("")
+}
+
+async function seedDefaultAdmin(db, env = {}) {
   try {
     const existing = await db.prepare(
       "SELECT id FROM admin_users WHERE username='admin'"
     ).first()
 
     if (!existing) {
-      /*
-         Pre-computed PBKDF2-SHA512 hash (100000 iterations)
-         Generated: 2026-06-13
-         ⚠️  Change this password after first login!
-      */
-      const storedPassword = "pbkdf2:sha512:100000:b3fd92b0200ec81f3c9c4cbea5cc23d6049cc9eda147b131207b13c012e6821d:74a8ca26ac534ecf885eeea06d5496b8b7aa932de58b2c91dddd775b11d212813e3b9c43dfadb14bace5542e289e8d25f7936e95c2317bb03ac2f8c0d4073dd4"
+      const usingProvidedSecret = !!env.ADMIN_INITIAL_PASSWORD
+      const plainPassword = usingProvidedSecret
+        ? env.ADMIN_INITIAL_PASSWORD
+        : generateRandomPassword()
+
+      const storedPassword = await hashPassword(plainPassword)
 
       await db.prepare(`
         INSERT INTO admin_users (username, password, role, created_at)
         VALUES ('admin', ?, 'admin', ?)
       `).bind(storedPassword, now()).run()
 
-      console.log("✅ Default admin seeded")
+      if (usingProvidedSecret) {
+        console.log("✅ Default admin seeded using ADMIN_INITIAL_PASSWORD secret")
+      } else {
+        // Printed once, only in the Workers runtime log at first request after deploy —
+        // never written to a file, never returned over the API, never stored anywhere else.
+        console.log(
+          "✅ Default admin seeded — ADMIN_INITIAL_PASSWORD was not set, " +
+          `so a random password was generated: ${plainPassword}\n` +
+          "   ⚠️  Save this now and change it after first login — it will not be shown again. " +
+          "   To set your own instead: wrangler secret put ADMIN_INITIAL_PASSWORD"
+        )
+      }
     }
   } catch (err) {
     console.error("seedDefaultAdmin:", err)
@@ -304,7 +335,7 @@ app.post("/auth/login", async (c) => {
     const body = await c.req.json()
 
     await ensureAdminTable(db)
-    await seedDefaultAdmin(db)
+    await seedDefaultAdmin(db, c.env)
 
     const { username, password } = body
 
@@ -574,3 +605,4 @@ app.post("/auth/change-password", handleChangePassword)
 app.post("/auth/reset-password",  handleChangePassword)
 
 export default app
+
