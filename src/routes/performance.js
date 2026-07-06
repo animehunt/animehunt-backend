@@ -391,11 +391,13 @@ app.get("/performance/score", async (c) => {
     let score = 0
     const tips = []
 
-    checks.forEach(c => {
-      if (row[c.key]) {
-        score += c.pts
+    // FIX: forEach param renamed (was `c`) — shadowed the outer
+    // Hono context variable `c` used elsewhere in this handler.
+    checks.forEach(check => {
+      if (row[check.key]) {
+        score += check.pts
       } else {
-        tips.push(c.tip)
+        tips.push(check.tip)
       }
     })
 
@@ -428,3 +430,4 @@ app.get("/performance/public", async (c) => {
 })
 
 export default app
+       
