@@ -695,9 +695,66 @@ app.post("/security/threats/log", async (c) => {
 })
 
 /* ================================================
-   GET /security/audit-logs — Audit log WITH PAGINATION
+   AUDIT LOG FILTER BUILDER
+   FIX: audit-logs.html (Part 4) sends admin/action/resource/from/to
+        query params expecting server-side filtering, but the route
+        below previously ignored all of them and always returned the
+        unfiltered table. Shared by GET /security/audit-logs and
+        GET /security/audit-logs/export so both stay in sync.
+
+        "resource" from the frontend maps to the `target` column —
+        the frontend's naming reflects the blueprint's intended schema
+        (resource_type/resource_id) but the table that actually got
+        created uses `target`/`detail`, so the mapping happens here.
+================================================ */
+
+function buildAuditLogFilter(c) {
+  const clauses = []
+  const params  = []
+
+  const admin  = (c.req.query("admin")  || "").trim()
+  const action = (c.req.query("action") || "").trim()
+  const target = (c.req.query("resource") || c.req.query("target") || "").trim()
+  const from   = (c.req.query("from")   || "").trim()
+  const to     = (c.req.query("to")     || "").trim()
+
+  if (admin) {
+    clauses.push("admin LIKE ?")
+    params.push(`%${admin}%`)
+  }
+  if (action) {
+    clauses.push("action = ?")
+    params.push(action)
+  }
+  if (target) {
+    clauses.push("target = ?")
+    params.push(target)
+  }
+  /* FIX: date-only <input type="date"> values ("YYYY-MM-DD") compared
+     directly against created_at ("YYYY-MM-DD HH:MM:SS") would exclude
+     the entire "from" day and include none of the "to" day under plain
+     string comparison — widen to full-day boundaries instead. */
+  if (from) {
+    clauses.push("created_at >= ?")
+    params.push(`${from} 00:00:00`)
+  }
+  if (to) {
+    clauses.push("created_at <= ?")
+    params.push(`${to} 23:59:59`)
+  }
+
+  return {
+    where:  clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params
+  }
+}
+
+/* ================================================
+   GET /security/audit-logs — Audit log WITH PAGINATION + FILTERS
    FIX: This route was completely missing from the file
         Blueprint specified it was needed
+   FIX: Now honours admin/action/resource/from/to query params
+        (previously accepted but silently ignored them)
 ================================================ */
 
 app.get("/security/audit-logs", async (c) => {
@@ -709,11 +766,15 @@ app.get("/security/audit-logs", async (c) => {
 
     await ensureRow(db)
 
+    const { where, params } = buildAuditLogFilter(c)
+
     const [listResult, countResult] = await Promise.all([
       db.prepare(
-        "SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ? OFFSET ?"
-      ).bind(limit, offset).all(),
-      db.prepare("SELECT COUNT(*) as total FROM audit_logs").first()
+        `SELECT * FROM audit_logs ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      ).bind(...params, limit, offset).all(),
+      db.prepare(
+        `SELECT COUNT(*) as total FROM audit_logs ${where}`
+      ).bind(...params).first()
     ])
 
     const total = countResult?.total || 0
@@ -733,8 +794,68 @@ app.get("/security/audit-logs", async (c) => {
 })
 
 /* ================================================
-   POST /security/audit-logs — Write audit log entry
+   GET /security/audit-logs/export — Export filtered logs as CSV
+   FIX: audit-logs.html's "Export CSV" button called this exact path
+        but the route did not exist anywhere, so every export attempt
+        404'd. Honours the same admin/action/resource/from/to filters
+        as the list route above so "export what I'm looking at" works
+        as the UI implies. Capped at 10,000 rows per export so a very
+        wide filter can't build an unbounded response in a Worker.
 ================================================ */
+
+app.get("/security/audit-logs/export", async (c) => {
+  try {
+    const db = c.env.DB
+    await ensureRow(db)
+
+    const { where, params } = buildAuditLogFilter(c)
+    const EXPORT_ROW_CAP = 10000
+
+    const { results } = await db.prepare(
+      `SELECT admin, action, target, detail, ip, created_at
+       FROM audit_logs ${where} ORDER BY created_at DESC LIMIT ?`
+    ).bind(...params, EXPORT_ROW_CAP).all()
+
+    const rows = results || []
+
+    const csvEscape = (val) => {
+      const s = String(val ?? "")
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    }
+
+    const header = ["Time", "Admin", "Action", "Target", "Detail", "IP"]
+    const lines  = [header.join(",")]
+
+    for (const r of rows) {
+      lines.push([
+        csvEscape(r.created_at),
+        csvEscape(r.admin),
+        csvEscape(r.action),
+        csvEscape(r.target),
+        csvEscape(r.detail),
+        csvEscape(r.ip)
+      ].join(","))
+    }
+
+    const csv = lines.join("\r\n")
+
+    c.header("Content-Type", "text/csv; charset=utf-8")
+    c.header("Content-Disposition", `attachment; filename="audit-logs-${Date.now()}.csv"`)
+    return c.body(csv)
+
+  } catch (err) {
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ================================================
+   POST /security/audit-logs — Write audit log entry
+   FIX: Added length caps on free-text fields — this endpoint can be
+        called by other internal modules on behalf of an admin action,
+        and unbounded text sent to it would otherwise be stored as-is.
+================================================ */
+
+const AUDIT_FIELD_MAX = 500
 
 app.post("/security/audit-logs", async (c) => {
   try {
@@ -742,15 +863,18 @@ app.post("/security/audit-logs", async (c) => {
     const body = await c.req.json()
     await ensureRow(db)
 
+    const clamp = (val, fallback) =>
+      String(val ?? fallback).slice(0, AUDIT_FIELD_MAX)
+
     await db.prepare(`
       INSERT INTO audit_logs (admin, action, target, detail, ip, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).bind(
-      body.admin  || "system",
-      body.action || "unknown",
-      body.target || "",
-      body.detail || "",
-      body.ip     || "",
+      clamp(body.admin,  "system"),
+      clamp(body.action, "unknown"),
+      clamp(body.target, ""),
+      clamp(body.detail, ""),
+      clamp(body.ip,     ""),
       now()
     ).run()
 
@@ -761,3 +885,4 @@ app.post("/security/audit-logs", async (c) => {
 })
 
 export default app
+
