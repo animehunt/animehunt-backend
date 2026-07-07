@@ -42,7 +42,7 @@ downloads.get("/public/download-hosts", async (c) => {
       `SELECT dhe.id, h.name as host_name, h.storage, h.knight
        FROM download_host_entries dhe
        JOIN hosts h ON h.id = dhe.host_id
-       WHERE dhe.entry_id=? AND h.active=1
+       WHERE dhe.entry_id=? AND h.active=1 AND dhe.status NOT IN ('broken','reported_broken')
        ORDER BY dhe.id ASC`
     ).bind(entryRow.id).all()
     return ok(c, rows.results)
@@ -177,9 +177,10 @@ downloads.post("/go", async (c) => {
       }
       if (rdIds.length > 1) {
         const chainRows = await db.prepare(
-          `SELECT url FROM redirect_library WHERE id IN (${rdIds.map(() => "?").join(",")}) AND active=1 ORDER BY id`
+          `SELECT id, url FROM redirect_library WHERE id IN (${rdIds.map(() => "?").join(",")}) AND active=1`
         ).bind(...rdIds).all()
-        sessionPayload.redirect_chain = JSON.stringify(chainRows.results.map(r => r.url))
+        const byId = new Map(chainRows.results.map(r => [r.id, r.url]))
+        sessionPayload.redirect_chain = JSON.stringify(rdIds.map(id => byId.get(id)).filter(Boolean))
       }
       await db.prepare("UPDATE host_monetization SET clicks=clicks+1 WHERE host_id=?").bind(hostEntry.host_id).run()
     }
@@ -191,7 +192,7 @@ downloads.post("/go", async (c) => {
     ).bind(sessionId, JSON.stringify(sessionPayload), expiresAt).run()
 
     await db.prepare("UPDATE download_host_entries SET clicks=clicks+1 WHERE id=?").bind(host_entry_id).run()
-    trackEvent(db, "host_click", { host_entry_id, host_id: hostEntry.host_id })
+    await trackEvent(db, "host_click", { host_entry_id, host_id: hostEntry.host_id })
 
     return ok(c, { session_id: sessionId })
   } catch(e) { return fail(c, e.message) }
@@ -285,11 +286,11 @@ downloads.get("/download/:episodeId", async (c) => {
 
     /* Get all host entries with their quality links */
     const { results: hostEntries } = await db.prepare(
-      `SELECT dhe.id, dhe.quality, dhe.direct_download, dhe.status,
+      `SELECT dhe.id, dhe.direct_download, dhe.status,
               h.name as host_name, h.storage, h.knight
        FROM download_host_entries dhe
        JOIN hosts h ON h.id = dhe.host_id
-       WHERE dhe.entry_id=? AND h.active=1 AND dhe.status != 'broken'
+       WHERE dhe.entry_id=? AND h.active=1 AND dhe.status NOT IN ('broken','reported_broken')
        ORDER BY dhe.id ASC`
     ).bind(entry.id).all()
 
@@ -436,6 +437,8 @@ downloads.post("/downloads/hosts", async (c) => {
   try {
     const host = await db.prepare("SELECT knight, storage FROM hosts WHERE id=?").bind(host_id).first()
     if (!host) return fail(c, "Host not found", 404)
+    if (host.knight && !(qualities?.length)) return fail(c, "At least one quality link required for knight hosts")
+    if (!host.knight && !direct_download) return fail(c, "direct_download required for non-knight hosts")
     const res = await db.prepare(
       `INSERT INTO download_host_entries (entry_id, host_id, knight, storage, direct_download, clicks, created_at)
        VALUES (?,?,?,?,?,0,datetime('now'))`
@@ -492,6 +495,8 @@ downloads.post("/downloads/quick-add", async (c) => {
   try {
     const host = await db.prepare("SELECT knight, storage FROM hosts WHERE id=?").bind(host_id).first()
     if (!host) return fail(c, "Host not found", 404)
+    if (host.knight && !(qualities?.length)) return fail(c, "At least one quality link required for knight hosts")
+    if (!host.knight && !direct_download) return fail(c, "direct_download required for non-knight hosts")
     const entryRes = await db.prepare(
       `INSERT INTO download_entries (anime_id, content_type, season, episode, episode_title, created_at)
        VALUES (?,?,?,?,?,datetime('now'))`
@@ -510,6 +515,140 @@ downloads.post("/downloads/quick-add", async (c) => {
     }
     return ok(c, { entry_id: entryId, host_entry_id: hostEntryId })
   } catch(e) { return fail(c, e.message) }
+})
+
+/* ── BULK CSV UPLOAD (MISSING FEATURE — ADDED) ───────────────────────────────
+   downloads.html "Import CSV" button posts multipart/form-data (field "csv")
+   POST /api/admin/bulk-upload/download-links
+   CSV columns: anime_id,content_type,season,episode,episode_title,host_id,direct_download,quality,link
+────────────────────────────────────────────────────────────────────────────── */
+function parseCsvLine(line) {
+  const out = []
+  let cur = "", inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (inQuotes) {
+      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++ } else inQuotes = false }
+      else cur += ch
+    } else {
+      if (ch === '"') inQuotes = true
+      else if (ch === ',') { out.push(cur); cur = "" }
+      else cur += ch
+    }
+  }
+  out.push(cur)
+  return out.map(s => s.trim())
+}
+
+downloads.post("/bulk-upload/download-links", async (c) => {
+  const db = c.env.DB
+  try {
+    const form = await c.req.formData()
+    const file = form.get("csv")
+    if (!file || typeof file === "string") {
+      return c.json({ success: false, error: "csv file required" }, 400)
+    }
+    const text  = await file.text()
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length)
+    if (lines.length < 2) return c.json({ success: false, error: "CSV has no data rows" }, 400)
+
+    const header = parseCsvLine(lines[0]).map(h => h.toLowerCase())
+    const col    = name => header.indexOf(name)
+    const iAnime = col("anime_id"), iType = col("content_type"), iSeason = col("season")
+    const iEp    = col("episode"),  iTitle = col("episode_title")
+    const iHost  = col("host_id"),  iDirect = col("direct_download")
+    const iQual  = col("quality"),  iLink = col("link")
+
+    if (iAnime < 0 || iType < 0 || iHost < 0) {
+      return c.json({ success: false, error: "CSV must include anime_id, content_type, host_id columns" }, 400)
+    }
+
+    const hostCache = new Map()
+    const entryCache = new Map()
+    let inserted = 0, errors = 0
+    const errorDetails = []
+
+    for (let r = 1; r < lines.length; r++) {
+      const row = parseCsvLine(lines[r])
+      if (!row.length || row.every(v => v === "")) continue
+
+      try {
+        const anime_id       = parseInt(row[iAnime])
+        const content_type   = row[iType] || "episode"
+        const season         = iSeason >= 0 && row[iSeason] ? parseInt(row[iSeason]) : null
+        const episode        = iEp     >= 0 && row[iEp]     ? parseInt(row[iEp])     : null
+        const episode_title  = iTitle  >= 0 ? (row[iTitle] || null) : null
+        const host_id        = parseInt(row[iHost])
+        const direct_download = iDirect >= 0 ? (row[iDirect] || null) : null
+        const quality          = iQual   >= 0 ? (row[iQual]   || null) : null
+        const link              = iLink   >= 0 ? (row[iLink]   || null) : null
+
+        if (!anime_id || !content_type || !host_id) {
+          errors++; errorDetails.push(`Row ${r + 1}: missing required fields`); continue
+        }
+
+        let host = hostCache.get(host_id)
+        if (!host) {
+          host = await db.prepare("SELECT id, knight, storage FROM hosts WHERE id=?").bind(host_id).first()
+          if (!host) { errors++; errorDetails.push(`Row ${r + 1}: host_id ${host_id} not found`); continue }
+          hostCache.set(host_id, host)
+        }
+
+        const entryKey = `${anime_id}|${content_type}|${season ?? ""}|${episode ?? ""}`
+        let entryId = entryCache.get(entryKey)
+        if (!entryId) {
+          const existing = await db.prepare(
+            `SELECT id FROM download_entries WHERE anime_id=? AND content_type=? AND season IS ? AND episode IS ? LIMIT 1`
+          ).bind(anime_id, content_type, season, episode).first()
+          if (existing) {
+            entryId = existing.id
+          } else {
+            const ins = await db.prepare(
+              `INSERT INTO download_entries (anime_id, content_type, season, episode, episode_title, created_at)
+               VALUES (?,?,?,?,?,datetime('now'))`
+            ).bind(anime_id, content_type, season, episode, episode_title).run()
+            entryId = ins.meta.last_row_id
+          }
+          entryCache.set(entryKey, entryId)
+        }
+
+        const hostEntry = await db.prepare(
+          "SELECT id FROM download_host_entries WHERE entry_id=? AND host_id=?"
+        ).bind(entryId, host_id).first()
+
+        let hostEntryId
+        if (hostEntry) {
+          hostEntryId = hostEntry.id
+          if (!host.knight && direct_download) {
+            await db.prepare(
+              "UPDATE download_host_entries SET direct_download=?, updated_at=datetime('now') WHERE id=?"
+            ).bind(direct_download, hostEntryId).run()
+          }
+        } else {
+          const insHost = await db.prepare(
+            `INSERT INTO download_host_entries (entry_id, host_id, knight, storage, direct_download, clicks, created_at)
+             VALUES (?,?,?,?,?,0,datetime('now'))`
+          ).bind(entryId, host_id, host.knight ? 1 : 0, host.storage || "", host.knight ? null : direct_download).run()
+          hostEntryId = insHost.meta.last_row_id
+        }
+
+        if (host.knight && quality && link) {
+          await db.prepare(
+            "INSERT INTO download_links (host_entry_id, quality, link) VALUES (?,?,?)"
+          ).bind(hostEntryId, quality, link).run()
+        }
+
+        inserted++
+      } catch (rowErr) {
+        errors++
+        errorDetails.push(`Row ${r + 1}: ${rowErr.message}`)
+      }
+    }
+
+    return c.json({ success: true, inserted, errors, errorDetails: errorDetails.slice(0, 20) })
+  } catch (e) {
+    return c.json({ success: false, error: e.message }, 500)
+  }
 })
 
 /* ── HOSTS CRUD (admin) ── */
@@ -678,11 +817,18 @@ downloads.get("/downloads/broken", async (c) => {
 })
 
 // DELETE /api/admin/downloads/broken/:id  — dismiss a broken link report
+// Dismissing also restores the host entry to 'active' so it's visible again.
 downloads.delete("/downloads/broken/:id", async (c) => {
   const db = c.env.DB
   const id = parseInt(c.req.param("id"))
   try {
+    const report = await db.prepare("SELECT download_id FROM broken_link_reports WHERE id=?").bind(id).first()
     await db.prepare("DELETE FROM broken_link_reports WHERE id=?").bind(id).run()
+    if (report?.download_id) {
+      await db.prepare(
+        "UPDATE download_host_entries SET status='active', updated_at=datetime('now') WHERE id=? AND status='reported_broken'"
+      ).bind(report.download_id).run()
+    }
     return ok(c, { deleted: id })
   } catch(e) { return fail(c, e.message) }
 })
