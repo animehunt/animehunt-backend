@@ -270,8 +270,12 @@ app.get("/footer/public", async (c) => {
 
 app.post("/footer", async (c) => {
   try {
-    const db   = c.env.DB
-    const body = await c.req.json()
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
     await ensureRow(db)
 
     const timestamp = now()
