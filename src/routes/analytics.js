@@ -20,16 +20,21 @@ const app = new Hono()
 const ok   = (data={}) => ({ success: true,  data })
 const fail = (msg="Error") => ({ success: false, message: msg })
 
-/* ── Date helpers ── */
+/* ── Date helpers — format must match SQLite datetime('now') for string compare ── */
+function toSqliteDatetime(d) {
+  const pad = n => String(n).padStart(2, "0")
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
+}
+
 function rangeStart(range) {
   const d = new Date()
   if (range === "today") {
-    d.setHours(0, 0, 0, 0)
-    return d.toISOString()
+    d.setUTCHours(0, 0, 0, 0)
+    return toSqliteDatetime(d)
   }
   const days = parseInt(range) || 7
-  d.setDate(d.getDate() - days)
-  return d.toISOString()
+  d.setUTCDate(d.getUTCDate() - days)
+  return toSqliteDatetime(d)
 }
 
 /* ============================================================
