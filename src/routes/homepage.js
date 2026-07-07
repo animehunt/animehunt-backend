@@ -1,4 +1,4 @@
-/* ================================================
+         /* ================================================
    homepage.js — Homepage Row Builder
    Auth handled by adminAuth middleware in index.js
 ================================================ */
@@ -85,11 +85,11 @@ async function syncToReplicas(env, action, row) {
             { type:"text",    value: row.type },
             { type:"text",    value: row.source },
             { type:"text",    value: row.layout },
-            { type:"integer", value: row.row_limit },
-            { type:"integer", value: row.row_order },
-            { type:"integer", value: row.active },
-            { type:"integer", value: row.autoUpdate },
-            { type:"integer", value: row.show_more },
+            { type:"integer", value: String(row.row_limit) },
+            { type:"integer", value: String(row.row_order) },
+            { type:"integer", value: String(row.active) },
+            { type:"integer", value: String(row.autoUpdate) },
+            { type:"integer", value: String(row.show_more) },
             { type:"text",    value: row.more_link },
             { type:"text",    value: row.icon },
             { type:"text",    value: row.bg_color },
@@ -378,8 +378,12 @@ app.get("/homepage/:id", async (c) => {
 
 app.post("/homepage", async (c) => {
   try {
-    const db   = c.env.DB
-    const body = await c.req.json()
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
     await ensureTable(db)
 
     if (!body.title?.trim()) return c.json(failure("Title required"), 400)
@@ -439,9 +443,12 @@ app.post("/homepage", async (c) => {
 
 app.patch("/homepage/:id", async (c) => {
   try {
-    const db   = c.env.DB
-    const id   = c.req.param("id")
-    const body = await c.req.json()
+    const db = c.env.DB
+    const id = c.req.param("id")
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
 
     if (!body.title?.trim()) return c.json(failure("Title required"), 400)
 
@@ -459,9 +466,9 @@ app.patch("/homepage/:id", async (c) => {
       layout:     body.layout  || "scroll",
       row_limit:  Number(body.limit || 10),
       row_order:  Number(body.order || 0),
-      active:     bool(body.active),
+      active:     bool(body.active !== false),
       autoUpdate: bool(body.autoUpdate),
-      show_more:  bool(body.showMore),
+      show_more:  bool(body.showMore !== false),
       more_link:  body.moreLink || "",
       icon:       body.icon    || "",
       bg_color:   body.bgColor || "",
@@ -547,18 +554,24 @@ app.delete("/homepage/:id", async (c) => {
 
 app.post("/homepage/reorder", async (c) => {
   try {
-    const db   = c.env.DB
-    const body = await c.req.json()
+    const db = c.env.DB
 
-    if (!Array.isArray(body.order)) {
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
+    if (!Array.isArray(body.order) || body.order.length === 0) {
       return c.json(failure("order array required"), 400)
     }
 
-    for (const item of body.order) {
-      await db.prepare(
+    const timestamp = now()
+    const stmts = body.order.map(item =>
+      db.prepare(
         "UPDATE homepage_rows SET row_order=?,updated_at=? WHERE id=?"
-      ).bind(item.order, now(), item.id).run()
-    }
+      ).bind(item.order, timestamp, item.id)
+    )
+
+    await db.batch(stmts)
 
     return c.json(success({ updated: body.order.length }))
 
