@@ -187,8 +187,10 @@ function formatRow(r) {
 ================================================ */
 
 async function syncToReplicas(env, row) {
+  const promises = []
+
   if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
-    fetch(`${env.TURSO_URL}/v2/pipeline`, {
+    promises.push(fetch(`${env.TURSO_URL}/v2/pipeline`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
@@ -235,11 +237,11 @@ async function syncToReplicas(env, row) {
           }
         }]
       })
-    }).catch(e => console.error("Turso player sync:", e))
+    }).catch(e => console.error("Turso player sync:", e)))
   }
 
   if (env.SUPABASE_URL && env.SUPABASE_KEY) {
-    fetch(`${env.SUPABASE_URL}/rest/v1/player_settings?id=eq.1`, {
+    promises.push(fetch(`${env.SUPABASE_URL}/rest/v1/player_settings?id=eq.1`, {
       method: "PATCH",
       headers: {
         "apikey":        env.SUPABASE_KEY,
@@ -248,8 +250,10 @@ async function syncToReplicas(env, row) {
         "Prefer":        "resolution=merge-duplicates"
       },
       body: JSON.stringify(row)
-    }).catch(e => console.error("Supabase player sync:", e))
+    }).catch(e => console.error("Supabase player sync:", e)))
   }
+
+  return Promise.all(promises)
 }
 
 /* ================================================
@@ -273,8 +277,12 @@ app.get("/player", async (c) => {
 
 app.post("/player", async (c) => {
   try {
-    const db   = c.env.DB
-    const body = await c.req.json()
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
     await ensureRow(db)
 
     const timestamp = now()
@@ -372,7 +380,11 @@ app.post("/player", async (c) => {
       row.updated_at
     ).run()
 
-    syncToReplicas(c.env, row)
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(syncToReplicas(c.env, row))
+    } else {
+      syncToReplicas(c.env, row)
+    }
 
     return c.json(success({ saved: true, updated_at: timestamp }))
 
