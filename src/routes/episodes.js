@@ -24,13 +24,13 @@ const toJSON = (val) =>
 /* ================= VALIDATION ================= */
 
 function validate(body) {
-  if (!body || typeof body !== "object") return "Invalid request body"   // ✅ FIX: guard null/non-object body
+  if (!body || typeof body !== "object") return "Invalid request body"
   if (!body.anime_id)                    return "anime_id required"
   if (body.episode === undefined || body.episode === null || body.episode === "")
     return "episode number required"
   const ep = Number(body.episode)
   if (isNaN(ep))  return "episode must be a number"
-  if (ep < 1)     return "episode must be 1 or more"    // ✅ FIX: episode 0 or negative was allowed
+  if (ep < 1)     return "episode must be 1 or more"
   return null
 }
 
@@ -59,7 +59,7 @@ async function syncToReplicas(env, action, data) {
     )
   }
 
-  return Promise.all(promises)   // ✅ FIX: was missing return — callers using waitUntil() got undefined instead of a Promise, causing sync to be killed early on CF Workers
+  return Promise.all(promises)
 }
 
 function buildTursoPayload(action, data) {
@@ -71,20 +71,21 @@ function buildTursoPayload(action, data) {
           sql: `INSERT OR REPLACE INTO episodes (
             id,anime_id,anime_title,season,episode,
             title,description,thumbnail,servers,
-            ongoing,featured,created_at,updated_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            ongoing,featured,sort_order,created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           args: [
             { type:"text",    value: String(data.id) },
             { type:"text",    value: String(data.anime_id) },
             { type:"text",    value: String(data.anime_title) },
             { type:"text",    value: String(data.season) },
-            { type:"integer", value: String(data.episode) },      // ✅ FIX: Turso requires string-encoded values
+            { type:"integer", value: String(data.episode) },
             { type:"text",    value: String(data.title) },
             { type:"text",    value: String(data.description) },
             { type:"text",    value: String(data.thumbnail) },
             { type:"text",    value: String(data.servers) },
-            { type:"integer", value: String(data.ongoing) },      // ✅ FIX: was passing raw number, not string
-            { type:"integer", value: String(data.featured) },     // ✅ FIX
+            { type:"integer", value: String(data.ongoing) },
+            { type:"integer", value: String(data.featured) },
+            { type:"integer", value: String(data.sort_order || 0) },
             { type:"text",    value: String(data.created_at) },
             { type:"text",    value: String(data.updated_at) }
           ]
@@ -118,13 +119,13 @@ async function syncSupabase(env, action, data) {
     const res = await fetch(base, { method:"POST", headers, body: JSON.stringify(data) })
     if (!res.ok) {
       const txt = await res.text()
-      console.error("Supabase episodes insert failed:", res.status, txt)   // ✅ FIX: was silently failing
+      console.error("Supabase episodes insert failed:", res.status, txt)
     }
   }
   if (action === "delete") {
-    const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, {   // ✅ FIX: encode id in URL
+    const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, {
       method:  "DELETE",
-      headers: { ...headers, Prefer: undefined }   // ✅ FIX: Prefer not valid for DELETE
+      headers: { ...headers, Prefer: undefined }
     })
     if (!res.ok) {
       const txt = await res.text()
@@ -140,7 +141,7 @@ app.post("/episodes", async (c) => {
     const db = c.env.DB
 
     let body
-    try { body = await c.req.json() }                           // ✅ FIX: guard malformed JSON body
+    try { body = await c.req.json() }
     catch { return c.json(failure("Invalid JSON body"), 400) }
 
     const err = validate(body)
@@ -149,7 +150,7 @@ app.post("/episodes", async (c) => {
     const dup = await db.prepare(`
       SELECT id FROM episodes
       WHERE anime_id=? AND season=? AND episode=?
-    `).bind(body.anime_id, String(body.season || "1"), Number(body.episode)).first()   // ✅ FIX: cast season to String to match stored type
+    `).bind(body.anime_id, String(body.season || "1"), Number(body.episode)).first()
 
     if (dup) return c.json(
       failure(`S${body.season}E${body.episode} already exists for this anime`), 400
@@ -157,6 +158,10 @@ app.post("/episodes", async (c) => {
 
     const id        = crypto.randomUUID()
     const timestamp = now()
+
+    const maxSort = await db.prepare(
+      "SELECT COALESCE(MAX(sort_order),0) as m FROM episodes WHERE anime_id=?"
+    ).bind(String(body.anime_id)).first()
 
     const row = {
       id,
@@ -170,6 +175,7 @@ app.post("/episodes", async (c) => {
       servers:     toJSON(body.servers),
       ongoing:     body.ongoing  ? 1 : 0,
       featured:    body.featured ? 1 : 0,
+      sort_order:  (maxSort?.m || 0) + 1,
       created_at:  timestamp,
       updated_at:  timestamp
     }
@@ -178,17 +184,16 @@ app.post("/episodes", async (c) => {
       INSERT INTO episodes (
         id,anime_id,anime_title,season,episode,
         title,description,thumbnail,servers,
-        ongoing,featured,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ongoing,featured,sort_order,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       row.id, row.anime_id, row.anime_title,
       row.season, row.episode, row.title, row.description,
       row.thumbnail, row.servers,
-      row.ongoing, row.featured,
+      row.ongoing, row.featured, row.sort_order,
       row.created_at, row.updated_at
     ).run()
 
-    // ✅ FIX: use waitUntil so sync completes after response is sent (was fire-and-forget with no waitUntil)
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
     } else {
@@ -236,7 +241,6 @@ app.get("/episodes", async (c) => {
       `SELECT COUNT(*) as total FROM episodes ${where}`
     ).bind(...params).first()
 
-    // ✅ FIX: fetch global stats (whole table) so frontend stat cards show accurate totals regardless of filter
     const globalStats = await db.prepare(`
       SELECT
         COUNT(*)                         as totalAll,
@@ -258,6 +262,7 @@ app.get("/episodes", async (c) => {
       servers:     safeJSON(e.servers),
       ongoing:     !!e.ongoing,
       featured:    !!e.featured,
+      sort_order:  e.sort_order || 0,
       created_at:  e.created_at,
       updated_at:  e.updated_at
     }))
@@ -267,7 +272,6 @@ app.get("/episodes", async (c) => {
       total: countRow?.total || 0,
       count: data.length,
       data,
-      // global stats for dashboard cards
       totalFeatured: Number(globalStats?.totalFeatured) || 0,
       totalOngoing:  Number(globalStats?.totalOngoing)  || 0,
       totalAnime:    Number(globalStats?.totalAnime)    || 0
@@ -301,6 +305,7 @@ app.get("/episodes/:id", async (c) => {
       servers:     safeJSON(row.servers),
       ongoing:     !!row.ongoing,
       featured:    !!row.featured,
+      sort_order:  row.sort_order || 0,
       created_at:  row.created_at,
       updated_at:  row.updated_at
     }))
@@ -318,22 +323,21 @@ app.put("/episodes/:id", async (c) => {
     const id = c.req.param("id")
 
     let body
-    try { body = await c.req.json() }                           // ✅ FIX: guard malformed JSON
+    try { body = await c.req.json() }
     catch { return c.json(failure("Invalid JSON body"), 400) }
 
     const err = validate(body)
     if (err) return c.json(failure(err), 400)
 
-    // ✅ FIX: fetch created_at to preserve it in sync (was using now() which overwrote original date)
     const existing = await db.prepare(
-      "SELECT id, created_at FROM episodes WHERE id=?"
+      "SELECT id, created_at, sort_order FROM episodes WHERE id=?"
     ).bind(id).first()
     if (!existing) return c.json(failure("Episode not found"), 404)
 
     const dup = await db.prepare(`
       SELECT id FROM episodes
       WHERE anime_id=? AND season=? AND episode=? AND id!=?
-    `).bind(body.anime_id, String(body.season || "1"), Number(body.episode), id).first()   // ✅ FIX: cast season to String
+    `).bind(body.anime_id, String(body.season || "1"), Number(body.episode), id).first()
 
     if (dup) return c.json(
       failure(`S${body.season}E${body.episode} already exists`), 400
@@ -352,7 +356,8 @@ app.put("/episodes/:id", async (c) => {
       servers:     toJSON(body.servers),
       ongoing:     body.ongoing  ? 1 : 0,
       featured:    body.featured ? 1 : 0,
-      created_at:  existing.created_at || timestamp,   // ✅ FIX: preserve original created_at
+      sort_order:  existing.sort_order || 0,
+      created_at:  existing.created_at || timestamp,
       updated_at:  timestamp
     }
 
@@ -374,7 +379,6 @@ app.put("/episodes/:id", async (c) => {
       row.updated_at, id
     ).run()
 
-    // ✅ FIX: use waitUntil + pass correct created_at (not now())
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
     } else {
@@ -389,11 +393,9 @@ app.put("/episodes/:id", async (c) => {
   }
 })
 
-/* ================= BULK DELETE by IDs (ADDED — Blueprint §3) ================= */
-// ✅ ROUTE ORDER FIX: Must be registered BEFORE DELETE /episodes/:id
-//    Otherwise Hono matches "bulk" as :id param and returns 404
-// ✅ FIX: Was using parallel fetch calls that hit CF 50-subrequest limit.
-//        Now uses a single D1 IN() query instead.
+/* ================= BULK DELETE by IDs ================= */
+/* ROUTE ORDER FIX: Must be registered BEFORE DELETE /episodes/:id
+   Otherwise Hono matches "bulk" as :id param and returns 404 */
 app.delete('/episodes/bulk', async (c) => {
   try {
     const db = c.env.DB
@@ -420,7 +422,7 @@ app.delete('/episodes/bulk', async (c) => {
       return c.json(success({ deleted: 0 }))
     }
 
-    // ✅ Single D1 query — no loop, no subrequest overflow
+    // Single D1 query — no loop, no subrequest overflow
     const deleteIds = toDelete.map(r => r.id)
     const delPlaceholders = deleteIds.map(() => '?').join(',')
     const result = await db.prepare(
@@ -443,10 +445,10 @@ app.delete('/episodes/bulk', async (c) => {
   }
 })
 
-/* ================= REORDER EPISODES (ADDED — Blueprint §5 Item 2) ================= */
-// ✅ ROUTE ORDER FIX: registered before :id routes to avoid param collision
-// Drag-and-drop reorder: accepts array of episode IDs in new order.
-// Uses D1 batch to update sort_order in a single round-trip.
+/* ================= REORDER EPISODES ================= */
+/* ROUTE ORDER FIX: registered before :id routes to avoid param collision
+   Drag-and-drop reorder: accepts array of episode IDs in new order.
+   Uses D1 batch to update sort_order in a single round-trip. */
 app.post('/episodes/reorder', async (c) => {
   try {
     const db = c.env.DB
@@ -467,7 +469,7 @@ app.post('/episodes/reorder', async (c) => {
 
     const timestamp = now()
 
-    // ✅ D1 batch — one network call for all updates
+    // D1 batch — one network call for all updates
     const statements = orderedIds.map((id, index) =>
       db.prepare(
         'UPDATE episodes SET sort_order=?, updated_at=? WHERE id=? AND anime_id=?'
@@ -498,7 +500,6 @@ app.delete("/episodes/:id", async (c) => {
 
     await db.prepare("DELETE FROM episodes WHERE id=?").bind(id).run()
 
-    // ✅ FIX: use waitUntil so sync doesn't get killed before completing on CF Workers
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "delete", { id }))
     } else {
@@ -524,13 +525,12 @@ app.delete("/episodes/anime/:animeId", async (c) => {
       "SELECT id FROM episodes WHERE anime_id=?"
     ).bind(animeId).all()
 
-    if (!results.length) return c.json(success({ deleted: 0 }))   // ✅ FIX: early return if nothing to delete
+    if (!results.length) return c.json(success({ deleted: 0 }))
 
     await db.prepare(
       "DELETE FROM episodes WHERE anime_id=?"
     ).bind(animeId).run()
 
-    // ✅ FIX: use Promise.all + waitUntil instead of forEach (fire-and-forget was killing syncs)
     const syncAll = Promise.all(results.map(r => syncToReplicas(c.env, "delete", { id: r.id })))
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncAll)
@@ -541,7 +541,7 @@ app.delete("/episodes/anime/:animeId", async (c) => {
     return c.json(success({ deleted: results.length }))
 
   } catch (err) {
-    console.error("episodes bulk DELETE:", err)   // ✅ FIX: was missing error log
+    console.error("episodes bulk DELETE:", err)
     return c.json(failure(err.message), 500)
   }
 })
@@ -621,5 +621,3 @@ app.get("/public/seasons/:animeId", async (c) => {
 })
 
 export default app
-
-         
