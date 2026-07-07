@@ -32,12 +32,13 @@ export async function runPlayerEngine(env, request = null){
 
       const referer = request?.headers?.get("referer") || ""
 
-      // ✅ FIX: request ke origin se domain detect karo — hardcode nahi
+      // request ke origin se domain detect karo — hardcode nahi
       const origin = request?.headers?.get("origin") || ""
       const host   = request?.headers?.get("host")   || ""
-      const refOrigin = referer ? new URL(referer).hostname : ""
+      let refOrigin = ""
+      try { refOrigin = referer ? new URL(referer).hostname : "" } catch { refOrigin = "" }
 
-      // ✅ FIX (Line 44): origin.includes(host) security bypass fixed.
+      // origin.includes(host) security bypass fixed.
       //    'evil.com/trusted.com' se bypass possible tha — exact match use karo.
       const allowed =
         refOrigin === host ||
@@ -61,6 +62,16 @@ export async function runPlayerEngine(env, request = null){
         return error("Region blocked",403)
       }
 
+    }
+
+    /* =========================
+    🚦 STREAM RATE LIMIT
+    ========================= */
+
+    const rateUserId = request?.headers?.get("cf-connecting-ip") || "unknown"
+    const rateCheck   = await checkStreamRateLimit(env, rateUserId)
+    if(!rateCheck.allowed){
+      return error("Too many stream requests — slow down",429)
     }
 
     /* =========================
@@ -91,7 +102,7 @@ export async function runPlayerEngine(env, request = null){
     ⚡ HEALTH CHECK + FAILOVER
     ========================= */
 
-    let alive = await checkServer(server.url)
+    let alive = await checkServer(server.embed)
 
     if(!alive && cfg.autoswitch){
 
@@ -120,7 +131,6 @@ export async function runPlayerEngine(env, request = null){
     🧠 TRACK SESSION (NON-BLOCKING)
     ========================= */
 
-    // ✅ FIX: don't block response
     trackSession(env, request, server.id).catch(()=>{})
 
     /* =========================
@@ -128,6 +138,8 @@ export async function runPlayerEngine(env, request = null){
     ========================= */
 
     return new Response(JSON.stringify({
+
+      success: true,
 
       stream: streamUrl,
 
@@ -187,7 +199,7 @@ async function getBestServer(db, excludeId=null){
   }
 
   query += `
-    ORDER BY priority DESC, last_used ASC
+    ORDER BY priority ASC, last_used ASC
     LIMIT 5
   `
 
@@ -195,7 +207,7 @@ async function getBestServer(db, excludeId=null){
 
   for(const s of results){
 
-    const ok = await checkServer(s.url)
+    const ok = await checkServer(s.embed)
 
     if(ok){
 
@@ -219,6 +231,8 @@ async function getBestServer(db, excludeId=null){
 
 async function checkServer(url){
 
+  if(!url) return false
+
   try{
 
     const controller = new AbortController()
@@ -233,7 +247,7 @@ async function checkServer(url){
 
     clearTimeout(timeout)
 
-    return res.ok
+    return res.ok || res.status === 405
 
   }catch{
     return false
@@ -256,13 +270,13 @@ function buildStreamURL(server, request){
 
     if(!animeId || !ep) return null
 
-    // ✅ FIX: UUID aur numbers dono allow karo
+    // UUID aur numbers dono allow karo
     const safeStr = /^[a-zA-Z0-9_\-]+$/
     if(!safeStr.test(animeId) || !safeStr.test(ep)){
       return null
     }
 
-    return `${server.url}/stream/${animeId}/${ep}`
+    return `${server.embed}/stream/${animeId}/${ep}`
 
   }catch{
     return null
@@ -314,8 +328,8 @@ function error(msg,status=400){
 }
 
 /* =========================================================
-⚡ STREAM RATE LIMITING (MISSING FEATURE — ADDED)
-   Blueprint §2 Item 2: Spam stream requests block karo
+⚡ STREAM RATE LIMITING
+   Spam stream requests block karo
 ========================================================= */
 
 async function checkStreamRateLimit(env, userId) {
@@ -340,8 +354,8 @@ async function checkStreamRateLimit(env, userId) {
 }
 
 /* =========================================================
-📺 WATCH PROGRESS (MISSING FEATURE — ADDED)
-   Blueprint §5 Item 4: Timestamp tracking per user per episode
+📺 WATCH PROGRESS
+   Timestamp tracking per user per episode
 ========================================================= */
 
 export async function saveWatchProgress(env, userId, episodeId, timestamp, duration) {
@@ -353,9 +367,8 @@ export async function saveWatchProgress(env, userId, episodeId, timestamp, durat
     INSERT INTO watch_progress (user_id, episode_id, timestamp, progress, updated_at)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(user_id, episode_id)
-    DO UPDATE SET timestamp=?, progress=?, updated_at=?
-  `).bind(userId, episodeId, timestamp, progress, now,
-          timestamp, progress, now).run()
+    DO UPDATE SET timestamp=excluded.timestamp, progress=excluded.progress, updated_at=excluded.updated_at
+  `).bind(userId, episodeId, timestamp, progress, now).run()
 
   return { success: true, progress }
 }
@@ -367,8 +380,8 @@ export async function getWatchProgress(env, userId, episodeId) {
 }
 
 /* =========================================================
-🎛 PER-USER VIDEO CONFIG (MISSING FEATURE — ADDED)
-   Blueprint §5 Item 3: Playback speed, subtitle lang, quality etc.
+🎛 PER-USER VIDEO CONFIG
+   Playback speed, subtitle lang, quality etc.
 ========================================================= */
 
 const VALID_CONFIG_KEYS = [
@@ -383,13 +396,13 @@ export async function saveUserVideoConfig(env, userId, cfg) {
   }
 
   const now = new Date().toISOString()
+  const json = JSON.stringify(safe)
   await env.DB.prepare(`
     INSERT INTO user_video_config (user_id, config, updated_at)
     VALUES (?, ?, ?)
     ON CONFLICT(user_id)
-    DO UPDATE SET config=?, updated_at=?
-  `).bind(userId, JSON.stringify(safe), now,
-          JSON.stringify(safe), now).run()
+    DO UPDATE SET config=excluded.config, updated_at=excluded.updated_at
+  `).bind(userId, json, now).run()
 
   return { success: true }
 }
@@ -481,8 +494,13 @@ export function setupPlayerRoutes(router, env) {
       autoplay: true, subtitle_size: "medium"
     }
 
+    let parsedConfig = defaultConfig
+    if (row) {
+      try { parsedConfig = JSON.parse(row.config) } catch { parsedConfig = defaultConfig }
+    }
+
     return new Response(JSON.stringify({
-      config: row ? JSON.parse(row.config) : defaultConfig
+      config: parsedConfig
     }), { status: 200, headers: { "Content-Type": "application/json" } })
   })
-}
+        }
