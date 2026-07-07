@@ -16,18 +16,21 @@ const bool    = (v)    => (v ? 1 : 0)
 
 function format(b) {
   return {
-    id:         b.id,
-    page:       b.page,
-    category:   b.category,
-    position:   b.position,
-    title:      b.title,
-    image:      b.image,
-    link:       b.link,
-    order:      b.banner_order,
-    active:     !!b.active,
-    rotate:     !!b.auto_rotate,
-    created_at: b.created_at,
-    updated_at: b.updated_at
+    id:              b.id,
+    page:            b.page,
+    category:        b.category,
+    position:        b.position,
+    title:           b.title,
+    image:           b.image,
+    link:            b.link,
+    order:           b.banner_order,
+    active:          !!b.active,
+    rotate:          !!b.auto_rotate,
+    trailerUrl:      b.trailer_url      || "",
+    trailerAutoplay: !!b.trailer_autoplay,
+    trailerMuted:    !!b.trailer_muted,
+    created_at:      b.created_at,
+    updated_at:      b.updated_at
   }
 }
 
@@ -119,10 +122,18 @@ async function syncSupabase(env, action, data) {
     "Prefer":        "resolution=merge-duplicates"
   }
   if (action === "insert") {
-    await fetch(base, { method:"POST", headers, body: JSON.stringify(data) })
+    const res = await fetch(base, { method:"POST", headers, body: JSON.stringify(data) })
+    if (!res.ok) {
+      const txt = await res.text()
+      console.error("Supabase banners insert failed:", res.status, txt)
+    }
   }
   if (action === "delete") {
-    await fetch(`${base}?id=eq.${data.id}`, { method:"DELETE", headers })
+    const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, { method:"DELETE", headers: { ...headers, Prefer: undefined } })
+    if (!res.ok) {
+      const txt = await res.text()
+      console.error("Supabase banners delete failed:", res.status, txt)
+    }
   }
 }
 
@@ -171,8 +182,11 @@ app.get("/banners/public", async (c) => {
 
 app.post("/banners", async (c) => {
   try {
-    const db   = c.env.DB
-    const body = await c.req.json()
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
 
     const err = validate(body)
     if (err) return c.json(failure(err), 400)
@@ -223,7 +237,11 @@ app.post("/banners", async (c) => {
       row.created_at, row.updated_at
     ).run()
 
-    syncToReplicas(c.env, "insert", row)
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
+    } else {
+      syncToReplicas(c.env, "insert", row)
+    }
 
     return c.json(success({ id }), 201)
 
@@ -283,9 +301,12 @@ app.get("/banners/:id", async (c) => {
 
 app.put("/banners/:id", async (c) => {
   try {
-    const db   = c.env.DB
-    const id   = c.req.param("id")
-    const body = await c.req.json()
+    const db = c.env.DB
+    const id = c.req.param("id")
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
 
     const existing = await db.prepare(
       "SELECT id, created_at FROM banners WHERE id=?"
@@ -323,7 +344,12 @@ app.put("/banners/:id", async (c) => {
       row.updated_at, id
     ).run()
 
-    syncToReplicas(c.env, "insert", { ...row, created_at: existing.created_at || timestamp })
+    const syncRow = { ...row, created_at: existing.created_at || timestamp }
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", syncRow))
+    } else {
+      syncToReplicas(c.env, "insert", syncRow)
+    }
 
     return c.json(success({ id }))
 
@@ -371,7 +397,11 @@ app.delete("/banners/:id", async (c) => {
 
     await db.prepare("DELETE FROM banners WHERE id=?").bind(id).run()
 
-    syncToReplicas(c.env, "delete", { id })
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(syncToReplicas(c.env, "delete", { id }))
+    } else {
+      syncToReplicas(c.env, "delete", { id })
+    }
 
     return c.json(success({ id, deleted: true }))
 
@@ -387,8 +417,11 @@ app.delete("/banners/:id", async (c) => {
 //    with D1 batch — single round-trip instead of N sequential awaits
 app.post("/banners/reorder", async (c) => {
   try {
-    const db   = c.env.DB
-    const body = await c.req.json()
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
 
     if (!Array.isArray(body.order) || body.order.length === 0) {
       return c.json(failure("order array required"), 400)
@@ -511,4 +544,4 @@ app.post("/banners/:id/trailer", async (c) => {
 })
 
 export default app
-         
+
