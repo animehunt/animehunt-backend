@@ -359,7 +359,7 @@ app.put("/categories/:id", async (c) => {
       category_order: newOrder,
       priority:       Number(body.priority || 1),
       show_home:      bool(body.showHome),
-      active:         bool(body.isActive),
+      active:         bool(body.isActive !== false),
       featured:       bool(body.isFeatured),
       ai_trending:    bool(body.aiTrending),
       ai_popular:     bool(body.aiPopular),
@@ -446,13 +446,14 @@ app.post("/categories/reorder", async (c) => {
           item.order < 1)                   return c.json(failure("Each item needs a valid order >= 1"), 400)
     }
 
-    await Promise.all(
-      body.order.map(item =>
-        db.prepare(
-          "UPDATE categories SET category_order=?, updated_at=? WHERE id=?"
-        ).bind(item.order, now(), item.id).run()
-      )
+    const timestamp = now()
+    const stmts = body.order.map(item =>
+      db.prepare(
+        "UPDATE categories SET category_order=?, updated_at=? WHERE id=?"
+      ).bind(item.order, timestamp, item.id)
     )
+
+    await db.batch(stmts)
 
     return c.json(success({ updated: body.order.length }))
 
