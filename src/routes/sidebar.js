@@ -250,8 +250,12 @@ app.get("/sidebar/stats", async (c) => {
 
 app.post("/sidebar", async (c) => {
   try {
-    const db   = c.env.DB
-    const body = await c.req.json()
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
     await ensureTable(db)
 
     const err = validate(body)
@@ -366,8 +370,11 @@ app.delete("/sidebar/:id", async (c) => {
 
 app.post("/sidebar/reorder", async (c) => {
   try {
-    const db   = c.env.DB
-    const body = await c.req.json()
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
 
     if (!Array.isArray(body.order) || body.order.length === 0) {
       return c.json(failure("order array required"), 400)
@@ -459,4 +466,4 @@ app.post("/sidebar/default", async (c) => {
 })
 
 export default app
-       
+
