@@ -26,6 +26,19 @@ function pickByMode(arr, mode, clicks = 0) {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
+// Persistent rotation counter (D1-backed) so "sequence" mode actually
+// cycles across requests for stateless public endpoints.
+async function nextSeq(db, key) {
+  try {
+    const row = await db.prepare(
+      `INSERT INTO impression_counters (key, counter) VALUES (?, 1)
+       ON CONFLICT(key) DO UPDATE SET counter = counter + 1
+       RETURNING counter`
+    ).bind(key).first()
+    return row?.counter ?? 0
+  } catch { return 0 }
+}
+
 /* ══════════════════════════════════════════════════════════
    PUBLIC ROUTES
    (index.js: app.route("/api", ads))
@@ -48,7 +61,14 @@ ads.get("/public/page-ads", async (c) => {
     const result = {}
     for (const [slot, slotData] of Object.entries(slotConfig)) {
       if (!slotData?.ads?.length) continue
-      const pickedId = pickByMode(slotData.ads, slotData.mode || "random")
+      const mode = slotData.mode || "random"
+      let pickedId
+      if (mode === "sequence") {
+        const seq = await nextSeq(db, `page:${page}:${slot}`)
+        pickedId = slotData.ads[seq % slotData.ads.length]
+      } else {
+        pickedId = pickByMode(slotData.ads, mode)
+      }
       if (!pickedId) continue
       const ad = await db.prepare(
         "SELECT code, type, name FROM ads_library WHERE id=? AND active=1"
@@ -130,7 +150,7 @@ ads.get("/popup-library", async (c) => {
   const db = c.env.DB
   try {
     const res = await db.prepare(
-      "SELECT id, name, script, trigger, active, created_at FROM popup_library ORDER BY id DESC"
+      "SELECT id, name, script, trigger, position, max_count, active, created_at FROM popup_library ORDER BY id DESC"
     ).all()
     return ok(c, res.results)
   } catch(e) { return fail(c, e.message) }
@@ -149,13 +169,13 @@ ads.get("/popup-library/:id", async (c) => {
 ads.post("/popup-library", async (c) => {
   const db   = c.env.DB
   const body = await c.req.json()
-  const { name, script, trigger, active } = body
+  const { name, script, trigger, position, max_count, active } = body
   if (!name || !script) return fail(c, "name and script required")
   try {
     const res = await db.prepare(
-      `INSERT INTO popup_library (name, script, trigger, active, created_at)
-       VALUES (?,?,?,?,datetime('now'))`
-    ).bind(name, script, trigger || "onload", active ?? 1).run()
+      `INSERT INTO popup_library (name, script, trigger, position, max_count, active, created_at)
+       VALUES (?,?,?,?,?,?,datetime('now'))`
+    ).bind(name, script, trigger || "onload", position || "center", max_count ?? 1, active ?? 1).run()
     return ok(c, { id: res.meta.last_row_id })
   } catch(e) { return fail(c, e.message) }
 })
@@ -164,12 +184,12 @@ ads.put("/popup-library/:id", async (c) => {
   const db   = c.env.DB
   const id   = parseInt(c.req.param("id"))
   const body = await c.req.json()
-  const { name, script, trigger, active } = body
+  const { name, script, trigger, position, max_count, active } = body
   if (!name || !script) return fail(c, "name and script required")
   try {
     await db.prepare(
-      `UPDATE popup_library SET name=?, script=?, trigger=?, active=?, updated_at=datetime('now') WHERE id=?`
-    ).bind(name, script, trigger || "onload", active ?? 1, id).run()
+      `UPDATE popup_library SET name=?, script=?, trigger=?, position=?, max_count=?, active=?, updated_at=datetime('now') WHERE id=?`
+    ).bind(name, script, trigger || "onload", position || "center", max_count ?? 1, active ?? 1, id).run()
     return ok(c, { id })
   } catch(e) { return fail(c, e.message) }
 })
@@ -361,6 +381,15 @@ ads.put("/host-monetization/:id", async (c) => {
   } catch(e) { return fail(c, e.message) }
 })
 
+ads.delete("/host-monetization/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    await db.prepare("DELETE FROM host_monetization WHERE id=?").bind(id).run()
+    return ok(c, { deleted: id })
+  } catch(e) { return fail(c, e.message) }
+})
+
 /* ── PAGE MONETIZATION ──────────────────────────────────── */
 
 ads.get("/page-monetization", async (c) => {
@@ -415,6 +444,15 @@ ads.put("/page-monetization/:id", async (c) => {
       `UPDATE page_monetization SET slot_config=?, frequency=?, enabled=?, updated_at=datetime('now') WHERE id=?`
     ).bind(slot_config || "{}", frequency || "every_click", enabled ?? 1, id).run()
     return ok(c, { id })
+  } catch(e) { return fail(c, e.message) }
+})
+
+ads.delete("/page-monetization/:id", async (c) => {
+  const db = c.env.DB
+  const id = parseInt(c.req.param("id"))
+  try {
+    await db.prepare("DELETE FROM page_monetization WHERE id=?").bind(id).run()
+    return ok(c, { deleted: id })
   } catch(e) { return fail(c, e.message) }
 })
 
@@ -559,29 +597,32 @@ ads.post("/public/nav-fire", async (c) => {
     try { rdIds    = JSON.parse(config.redirects  || "[]") } catch {}
 
     const mode = config.mode || "random"
-    const pick = (arr) => {
+    const pick = async (arr, kind) => {
       if (!arr.length) return null
       if (mode === "direct")   return arr[0]
-      if (mode === "sequence") return arr[0]
+      if (mode === "sequence") {
+        const seq = await nextSeq(db, `nav:${nav_event}:${kind}`)
+        return arr[seq % arr.length]
+      }
       return arr[Math.floor(Math.random() * arr.length)]
     }
 
     const result = { fire: true, ad: null, popup: null, shortlink: null, redirect: null }
 
     if (adIds.length) {
-      const ad = await db.prepare("SELECT code, type FROM ads_library WHERE id=? AND active=1").bind(pick(adIds)).first()
+      const ad = await db.prepare("SELECT code, type FROM ads_library WHERE id=? AND active=1").bind(await pick(adIds, "ad")).first()
       if (ad) result.ad = { code: ad.code, type: ad.type }
     }
     if (popupIds.length) {
-      const popup = await db.prepare("SELECT script FROM popup_library WHERE id=? AND active=1").bind(pick(popupIds)).first()
+      const popup = await db.prepare("SELECT script FROM popup_library WHERE id=? AND active=1").bind(await pick(popupIds, "popup")).first()
       if (popup) result.popup = popup.script
     }
     if (slIds.length) {
-      const sl = await db.prepare("SELECT base_url, api_key FROM shortlinks_library WHERE id=? AND active=1").bind(pick(slIds)).first()
+      const sl = await db.prepare("SELECT base_url, api_key FROM shortlinks_library WHERE id=? AND active=1").bind(await pick(slIds, "shortlink")).first()
       if (sl) result.shortlink = sl.base_url
     }
     if (rdIds.length) {
-      const rd = await db.prepare("SELECT url FROM redirect_library WHERE id=? AND active=1").bind(pick(rdIds)).first()
+      const rd = await db.prepare("SELECT url FROM redirect_library WHERE id=? AND active=1").bind(await pick(rdIds, "redirect")).first()
       if (rd) result.redirect = rd.url
     }
 
