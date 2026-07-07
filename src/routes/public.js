@@ -9,6 +9,9 @@
   ✅ FIXED: /api/footer/public returns raw DB row — now uses format() helper
   ✅ FIXED: /api/anime/:slug — tags safeJSON already applied before KV cache store,
             no double-parse when fetching from cache
+  ✅ FIXED: /api/public/servers/:episodeId now queries servers.episode_id
+            (column added in adminServers schema) before falling back to
+            episodes.servers JSON column
   ✅ KV cache on all high-traffic routes
   ✅ Parallel DB queries via Promise.all
 
@@ -222,7 +225,6 @@ app.get("/api/anime", async (c) => {
     return c.json(ok({
       page, limit,
       total: countRow?.total || 0,
-      count: rows.results.length,
       data:  rows.results.map(a => ({ ...a, genres: safeJSON(a.genres) }))
     }))
   } catch (err) {
@@ -308,7 +310,7 @@ app.get("/api/public/episodes/:animeId", async (c) => {
     const aId = anime?.id || animeId
 
     let sql   = `
-      SELECT id, anime_id, season, episode, title, thumbnail, description, servers, air_date, active
+      SELECT id, anime_id, season, episode, title, thumbnail, description, servers, sort_order
       FROM episodes
       WHERE anime_id=?`
     const binds = [aId]
@@ -352,6 +354,8 @@ app.get("/api/public/seasons/:animeId", async (c) => {
 
 /* ============================================================
   GET /api/public/servers/:episodeId
+  FIXED: dedicated servers table now filters on episode_id column
+  (added to servers schema) instead of a non-existent column
 ============================================================ */
 
 app.get("/api/public/servers/:episodeId", async (c) => {
