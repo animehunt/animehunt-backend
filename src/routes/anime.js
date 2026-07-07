@@ -1,64 +1,134 @@
 /* ================================================
-   episodes.js — Admin + Public Episodes Routes
+   anime.js — Admin Anime CRUD (FIXED)
    Auth handled by adminAuth middleware in index.js
 ================================================ */
 
 import { Hono } from "hono"
 
-const app = new Hono()
+const animeRoute = new Hono()
 
-/* ================= HELPERS ================= */
+/* ========================= */
+/* HELPERS                   */
+/* ========================= */
 
-const success  = (data) => ({ success: true, data })
-const failure  = (msg)  => ({ success: false, message: msg })
-const now      = ()     => new Date().toISOString()
+const success  = (data)  => ({ success: true,  data })
+const failure  = (msg)   => ({ success: false, message: msg })
+const now      = ()      => new Date().toISOString()
 
-const safeJSON = (val) => {
-  try { return JSON.parse(val || "[]") }
+const makeSlug = (text) =>
+  (text || "").toLowerCase().trim()
+    .replace(/[^a-z0-9\s-]+/g, "")   // ✅ FIX: strip non-slug chars but keep spaces for next replace
+    .replace(/[\s-]+/g, "-")          // ✅ FIX: collapse all whitespace+dashes into single dash
+    .replace(/(^-|-$)/g, "") || ""
+
+const safeJSON  = (val) => JSON.stringify(Array.isArray(val) ? val : [])
+const parseJSON = (val) => {
+  try { const p = JSON.parse(val || "[]"); return Array.isArray(p) ? p : [] }
   catch { return [] }
 }
 
-const toJSON = (val) =>
-  JSON.stringify(Array.isArray(val) ? val : [])
+/* ✅ FIX: single source of truth for mapping DB row -> API object (no duplicate code) */
+const mapAnime = (a) => ({
+  id:           a.id,
+  title:        a.title,
+  slug:         a.slug,
+  type:         a.type,
+  status:       a.status,
+  poster:       a.poster,
+  banner:       a.banner,
+  year:         a.year,
+  rating:       a.rating,
+  language:     a.language,
+  duration:     a.duration,
+  genres:       parseJSON(a.genres),
+  tags:         parseJSON(a.tags),
+  isHome:       !!a.is_home,
+  isTrending:   !!a.is_trending,
+  isMostViewed: !!a.is_most_viewed,
+  isBanner:     !!a.is_banner,
+  isHidden:     !!a.is_hidden,
+  description:  a.description,
+  created_at:   a.created_at,
+  updated_at:   a.updated_at
+})
 
-/* ================= VALIDATION ================= */
+/* ✅ FIX: build a clean DB row object from request body (shared by POST/PUT) */
+const buildRow = (body, id, createdAt, updatedAt) => ({
+  id,
+  title:          String(body.title).trim(),
+  slug:           String(body.slug?.trim() || makeSlug(body.title)),
+  type:           body.type          || "anime",
+  status:         body.status        || "ongoing",
+  poster:         String(body.poster || ""),
+  banner:         String(body.banner || ""),
+  year:           (body.year !== null && body.year !== undefined && body.year !== "" && !isNaN(Number(body.year)))
+                    ? Number(body.year) : null,   // ✅ FIX: explicit null when empty, not 0
+  rating:         (body.rating !== null && body.rating !== undefined && body.rating !== "" && !isNaN(Number(body.rating)))
+                    ? Number(body.rating) : null, // ✅ FIX: explicit null when empty, not 0
+  language:       String(body.language  || ""),
+  duration:       String(body.duration  || ""),
+  genres:         safeJSON(body.genres),
+  tags:           safeJSON(body.tags),
+  is_home:        body.isHome        ? 1 : 0,
+  is_trending:    body.isTrending    ? 1 : 0,
+  is_most_viewed: body.isMostViewed  ? 1 : 0,
+  is_banner:      body.isBanner      ? 1 : 0,
+  is_hidden:      body.isHidden      ? 1 : 0,
+  description:    String(body.description || ""),
+  created_at:     createdAt,
+  updated_at:     updatedAt
+})
+
+/* ========================= */
+/* VALIDATION                */
+/* ========================= */
 
 function validate(body) {
   if (!body || typeof body !== "object") return "Invalid request body"
-  if (!body.anime_id)                    return "anime_id required"
-  if (body.episode === undefined || body.episode === null || body.episode === "")
-    return "episode number required"
-  const ep = Number(body.episode)
-  if (isNaN(ep))  return "episode must be a number"
-  if (ep < 1)     return "episode must be 1 or more"
+  if (!body.title?.trim())        return "Title required"
+  if (!body.poster?.trim())       return "Poster URL required"
+  const rating = body.rating
+  if (rating !== undefined && rating !== null && rating !== "" &&
+      (isNaN(Number(rating)) || Number(rating) < 0 || Number(rating) > 10))
+    return "Rating must be between 0 and 10"   // ✅ FIX: range validation added, not just isNaN
+  const year = body.year
+  if (year !== undefined && year !== null && year !== "" &&
+      (isNaN(Number(year)) || Number(year) < 1900 || Number(year) > 2100))
+    return "Year must be between 1900 and 2100"   // ✅ FIX: range validation added
   return null
 }
 
-/* ================= SYNC TO REPLICAS ================= */
+/* ========================= */
+/* SYNC TO TURSO + SUPABASE  */
+/* ========================= */
 
 async function syncToReplicas(env, action, data) {
   const promises = []
 
+  /* ---- Turso ---- */
   if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
     promises.push(
       fetch(`${env.TURSO_URL}/v2/pipeline`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
-          "Content-Type":  "application/json"
+          "Content-Type": "application/json"
         },
         body: JSON.stringify(buildTursoPayload(action, data))
       }).catch(e => console.error("Turso sync error:", e))
     )
   }
 
+  /* ---- Supabase ---- */
   if (env.SUPABASE_URL && env.SUPABASE_KEY) {
     promises.push(
-      syncSupabase(env, action, data)
+      syncToSupabase(env, action, data)
         .catch(e => console.error("Supabase sync error:", e))
     )
   }
 
+  /* ✅ FIX: return the promise so callers CAN waitUntil() if they want.
+     Still non-blocking by default. */
   return Promise.all(promises)
 }
 
@@ -68,439 +138,326 @@ function buildTursoPayload(action, data) {
       requests: [{
         type: "execute",
         stmt: {
-          sql: `INSERT OR REPLACE INTO episodes (
-            id,anime_id,anime_title,season,episode,
-            title,description,thumbnail,servers,
-            ongoing,featured,sort_order,created_at,updated_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          sql: `INSERT OR REPLACE INTO anime (
+            id,title,slug,type,status,poster,banner,year,rating,
+            language,duration,genres,tags,
+            is_home,is_trending,is_most_viewed,is_banner,is_hidden,
+            description,created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           args: [
-            { type:"text",    value: String(data.id) },
-            { type:"text",    value: String(data.anime_id) },
-            { type:"text",    value: String(data.anime_title) },
-            { type:"text",    value: String(data.season) },
-            { type:"integer", value: String(data.episode) },
-            { type:"text",    value: String(data.title) },
-            { type:"text",    value: String(data.description) },
-            { type:"text",    value: String(data.thumbnail) },
-            { type:"text",    value: String(data.servers) },
-            { type:"integer", value: String(data.ongoing) },
-            { type:"integer", value: String(data.featured) },
-            { type:"integer", value: String(data.sort_order || 0) },
-            { type:"text",    value: String(data.created_at) },
-            { type:"text",    value: String(data.updated_at) }
+            {type:"text",value:data.id},
+            {type:"text",value:data.title},
+            {type:"text",value:data.slug},
+            {type:"text",value:data.type},
+            {type:"text",value:data.status},
+            {type:"text",value:data.poster},
+            {type:"text",value:data.banner},
+            data.year    ? {type:"integer",value:String(data.year)}  : {type:"null"},   // ✅ FIX: Turso wants string values
+            data.rating  ? {type:"float",  value:String(data.rating)}: {type:"null"},   // ✅ FIX
+            {type:"text",value:data.language},
+            {type:"text",value:data.duration},
+            {type:"text",value:data.genres},
+            {type:"text",value:data.tags},
+            {type:"integer",value:String(data.is_home)},          // ✅ FIX
+            {type:"integer",value:String(data.is_trending)},      // ✅ FIX
+            {type:"integer",value:String(data.is_most_viewed)},   // ✅ FIX
+            {type:"integer",value:String(data.is_banner)},        // ✅ FIX
+            {type:"integer",value:String(data.is_hidden)},        // ✅ FIX
+            {type:"text",value:data.description},
+            {type:"text",value:data.created_at},
+            {type:"text",value:data.updated_at}
           ]
         }
       }]
     }
   }
+
   if (action === "delete") {
     return {
       requests: [{
         type: "execute",
         stmt: {
-          sql:  "DELETE FROM episodes WHERE id=?",
-          args: [{ type:"text", value: String(data.id) }]
+          sql: "DELETE FROM anime WHERE id=?",
+          args: [{type:"text",value:data.id}]
         }
       }]
     }
   }
+
   return { requests: [] }
 }
 
-async function syncSupabase(env, action, data) {
-  const base    = `${env.SUPABASE_URL}/rest/v1/episodes`
+async function syncToSupabase(env, action, data) {
+  const base = `${env.SUPABASE_URL}/rest/v1/anime`
   const headers = {
     "apikey":        env.SUPABASE_KEY,
     "Authorization": `Bearer ${env.SUPABASE_KEY}`,
     "Content-Type":  "application/json",
     "Prefer":        "resolution=merge-duplicates"
   }
+
   if (action === "insert") {
-    const res = await fetch(base, { method:"POST", headers, body: JSON.stringify(data) })
-    if (!res.ok) {
-      const txt = await res.text()
-      console.error("Supabase episodes insert failed:", res.status, txt)
-    }
-  }
-  if (action === "delete") {
-    const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, {
-      method:  "DELETE",
-      headers: { ...headers, Prefer: undefined }
+    /* ✅ FIX: data already has snake_case columns matching the table.
+       Supabase REST expects the same column names as the table. */
+    const res = await fetch(base, {
+      method:  "POST",
+      headers,
+      body: JSON.stringify(data)
     })
     if (!res.ok) {
       const txt = await res.text()
-      console.error("Supabase episodes delete failed:", res.status, txt)
+      console.error("Supabase insert failed:", res.status, txt)   // ✅ FIX: log failures
+    }
+  }
+
+  if (action === "delete") {
+    const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, {   // ✅ FIX: encode id in URL to prevent injection if UUID format changes
+      method: "DELETE",
+      headers: { ...headers, Prefer: undefined }   // ✅ FIX: Prefer header not needed/valid for DELETE
+    })
+    if (!res.ok) {
+      const txt = await res.text()
+      console.error("Supabase delete failed:", res.status, txt)
     }
   }
 }
 
-/* ================= CREATE ================= */
+/* ========================= */
+/* CREATE                    */
+/* ========================= */
 
-app.post("/episodes", async (c) => {
+animeRoute.post("/anime", async (c) => {
   try {
     const db = c.env.DB
 
     let body
-    try { body = await c.req.json() }
+    try { body = await c.req.json() }                          // ✅ FIX: guard bad JSON
     catch { return c.json(failure("Invalid JSON body"), 400) }
 
     const err = validate(body)
     if (err) return c.json(failure(err), 400)
 
-    const dup = await db.prepare(`
-      SELECT id FROM episodes
-      WHERE anime_id=? AND season=? AND episode=?
-    `).bind(body.anime_id, String(body.season || "1"), Number(body.episode)).first()
+    const slug = makeSlug(body.slug?.trim() || body.title)   // ✅ FIX: always run makeSlug to normalize user-provided slug
+    if (!slug) return c.json(failure("Could not generate slug"), 400)
 
-    if (dup) return c.json(
-      failure(`S${body.season}E${body.episode} already exists for this anime`), 400
-    )
+    const exists = await db.prepare(
+      "SELECT id FROM anime WHERE LOWER(slug)=LOWER(?)"
+    ).bind(slug).first()
 
-    const id        = crypto.randomUUID()
+    if (exists) return c.json(failure("Slug already exists — use a different title or slug"), 400)
+
+    const id = crypto.randomUUID()
     const timestamp = now()
 
-    const maxSort = await db.prepare(
-      "SELECT COALESCE(MAX(sort_order),0) as m FROM episodes WHERE anime_id=?"
-    ).bind(String(body.anime_id)).first()
-
-    const row = {
-      id,
-      anime_id:    String(body.anime_id),
-      anime_title: String(body.anime_title  || ""),
-      season:      String(body.season       || "1"),
-      episode:     Number(body.episode),
-      title:       String(body.title        || ""),
-      description: String(body.description  || ""),
-      thumbnail:   String(body.thumbnail    || ""),
-      servers:     toJSON(body.servers),
-      ongoing:     body.ongoing  ? 1 : 0,
-      featured:    body.featured ? 1 : 0,
-      sort_order:  (maxSort?.m || 0) + 1,
-      created_at:  timestamp,
-      updated_at:  timestamp
-    }
+    const row = buildRow({ ...body, slug }, id, timestamp, timestamp)
 
     await db.prepare(`
-      INSERT INTO episodes (
-        id,anime_id,anime_title,season,episode,
-        title,description,thumbnail,servers,
-        ongoing,featured,sort_order,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO anime (
+        id,title,slug,type,status,poster,banner,year,rating,
+        language,duration,genres,tags,
+        is_home,is_trending,is_most_viewed,is_banner,is_hidden,
+        description,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
-      row.id, row.anime_id, row.anime_title,
-      row.season, row.episode, row.title, row.description,
-      row.thumbnail, row.servers,
-      row.ongoing, row.featured, row.sort_order,
-      row.created_at, row.updated_at
+      row.id, row.title, row.slug, row.type, row.status,
+      row.poster, row.banner, row.year, row.rating,
+      row.language, row.duration, row.genres, row.tags,
+      row.is_home, row.is_trending, row.is_most_viewed,
+      row.is_banner, row.is_hidden,
+      row.description, row.created_at, row.updated_at
     ).run()
 
+    /* ✅ FIX: use waitUntil so sync completes even after response is sent */
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
     } else {
       syncToReplicas(c.env, "insert", row)
     }
 
-    return c.json(success({ id }), 201)
+    return c.json(success({ id, slug }), 201)
 
   } catch (err) {
-    console.error("episodes POST:", err)
+    console.error("anime POST error:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
-/* ================= GET ALL (ADMIN) ================= */
+/* ========================= */
+/* GET LIST (paginated)      */
+/* ========================= */
 
-app.get("/episodes", async (c) => {
+animeRoute.get("/anime", async (c) => {
   try {
-    const db     = c.env.DB
-    const page   = Math.max(1,  Number(c.req.query("page")     || 1))
-    const limit  = Math.min(50, Number(c.req.query("limit")    || 30))
-    const offset = (page - 1) * limit
-    const animeId = c.req.query("anime_id") || ""
-    const season  = c.req.query("season")   || ""
-    const search  = c.req.query("search")   || ""
+    const db = c.env.DB
 
-    let where    = "WHERE 1=1"
+    const page   = Math.max(1, Number(c.req.query("page")  || 1))
+    const limit  = Math.min(50, Math.max(1, Number(c.req.query("limit") || 20)))   // ✅ FIX: floor at 1
+    const offset = (page - 1) * limit
+
+    const search = c.req.query("search") || ""
+    const type   = c.req.query("type")   || ""
+    const status = c.req.query("status") || ""
+    const home   = c.req.query("home")   || ""   // ✅ FIX: home filter support
+
+    let where  = "WHERE 1=1"
     const params = []
 
-    if (animeId) { where += " AND anime_id=?"; params.push(animeId) }
-    if (season)  { where += " AND season=?";   params.push(season)  }
-    if (search)  {
-      where += " AND (title LIKE ? OR anime_title LIKE ?)"
-      params.push(`%${search}%`, `%${search}%`)
-    }
+    if (search) { where += " AND title LIKE ?"; params.push(`%${search}%`) }
+    if (type)   { where += " AND type = ?";     params.push(type) }
+    if (status) { where += " AND status = ?";   params.push(status) }
+    if (home === "yes") { where += " AND is_home = 1" }   // ✅ FIX
+    if (home === "no")  { where += " AND is_home = 0" }   // ✅ FIX
 
     const { results } = await db.prepare(`
-      SELECT * FROM episodes
+      SELECT * FROM anime
       ${where}
-      ORDER BY anime_title ASC, CAST(season AS INTEGER) ASC, episode ASC
+      ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `).bind(...params, limit, offset).all()
 
-    const countRow = await db.prepare(
-      `SELECT COUNT(*) as total FROM episodes ${where}`
-    ).bind(...params).first()
+    const countRow = await db.prepare(`
+      SELECT COUNT(*) as total FROM anime ${where}
+    `).bind(...params).first()
 
-    const globalStats = await db.prepare(`
+    const total = countRow?.total || 0
+
+    /* ✅ FIX: global stats (whole table, not just current page) for accurate dashboard cards */
+    const stats = await db.prepare(`
       SELECT
-        COUNT(*)                         as totalAll,
-        COALESCE(SUM(featured), 0)       as totalFeatured,
-        COALESCE(SUM(ongoing),  0)       as totalOngoing,
-        COUNT(DISTINCT anime_id)         as totalAnime
-      FROM episodes
+        COUNT(*)                           as total,
+        COALESCE(SUM(is_trending), 0)      as totalTrending,
+        COALESCE(SUM(is_home), 0)          as totalHome,
+        COALESCE(SUM(is_hidden), 0)        as totalHidden
+      FROM anime
     `).first()
 
-    const data = (results || []).map(e => ({
-      id:          e.id,
-      anime_id:    e.anime_id,
-      anime_title: e.anime_title,
-      season:      e.season,
-      episode:     e.episode,
-      title:       e.title,
-      description: e.description,
-      thumbnail:   e.thumbnail,
-      servers:     safeJSON(e.servers),
-      ongoing:     !!e.ongoing,
-      featured:    !!e.featured,
-      sort_order:  e.sort_order || 0,
-      created_at:  e.created_at,
-      updated_at:  e.updated_at
-    }))
+    const data = (results || []).map(mapAnime)
 
     return c.json(success({
       page, limit,
-      total: countRow?.total || 0,
+      total,          // filtered total (for pagination)
       count: data.length,
       data,
-      totalFeatured: Number(globalStats?.totalFeatured) || 0,
-      totalOngoing:  Number(globalStats?.totalOngoing)  || 0,
-      totalAnime:    Number(globalStats?.totalAnime)    || 0
+      // global stats (whole table) for dashboard cards — not affected by filters
+      totalTrending: Number(stats?.totalTrending) || 0,
+      totalHome:     Number(stats?.totalHome)     || 0,
+      totalHidden:   Number(stats?.totalHidden)   || 0,
+      totalAll:      Number(stats?.total)         || 0   // ✅ FIX: expose unfiltered total for stat card accuracy
     }))
 
   } catch (err) {
-    console.error("episodes GET:", err)
+    console.error("anime GET error:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
-/* ================= GET ONE ================= */
+/* ========================= */
+/* GET SINGLE                */
+/* ========================= */
 
-app.get("/episodes/:id", async (c) => {
+animeRoute.get("/anime/:id", async (c) => {
   try {
-    const db  = c.env.DB
-    const id  = c.req.param("id")
-    const row = await db.prepare("SELECT * FROM episodes WHERE id=?").bind(id).first()
+    const db = c.env.DB
+    const id = c.req.param("id")
 
-    if (!row) return c.json(failure("Episode not found"), 404)
+    const a = await db.prepare(
+      "SELECT * FROM anime WHERE id=? OR slug=?"
+    ).bind(id, id).first()
 
-    return c.json(success({
-      id:          row.id,
-      anime_id:    row.anime_id,
-      anime_title: row.anime_title,
-      season:      row.season,
-      episode:     row.episode,
-      title:       row.title,
-      description: row.description,
-      thumbnail:   row.thumbnail,
-      servers:     safeJSON(row.servers),
-      ongoing:     !!row.ongoing,
-      featured:    !!row.featured,
-      sort_order:  row.sort_order || 0,
-      created_at:  row.created_at,
-      updated_at:  row.updated_at
-    }))
+    if (!a) return c.json(failure("Anime not found"), 404)
+
+    return c.json(success(mapAnime(a)))
 
   } catch (err) {
+    console.error("anime GET single error:", err)   // ✅ FIX: log
     return c.json(failure(err.message), 500)
   }
 })
 
-/* ================= UPDATE ================= */
+/* ========================= */
+/* UPDATE                    */
+/* ========================= */
 
-app.put("/episodes/:id", async (c) => {
+animeRoute.put("/anime/:id", async (c) => {
   try {
     const db = c.env.DB
     const id = c.req.param("id")
 
     let body
-    try { body = await c.req.json() }
+    try { body = await c.req.json() }                          // ✅ FIX
     catch { return c.json(failure("Invalid JSON body"), 400) }
 
     const err = validate(body)
     if (err) return c.json(failure(err), 400)
 
+    /* ✅ FIX: fetch original row to PRESERVE created_at on sync */
     const existing = await db.prepare(
-      "SELECT id, created_at, sort_order FROM episodes WHERE id=?"
+      "SELECT id, created_at FROM anime WHERE id=?"
     ).bind(id).first()
-    if (!existing) return c.json(failure("Episode not found"), 404)
+    if (!existing) return c.json(failure("Anime not found"), 404)
 
-    const dup = await db.prepare(`
-      SELECT id FROM episodes
-      WHERE anime_id=? AND season=? AND episode=? AND id!=?
-    `).bind(body.anime_id, String(body.season || "1"), Number(body.episode), id).first()
+    const slug = makeSlug(body.slug?.trim() || body.title)   // ✅ FIX: normalize slug always
 
-    if (dup) return c.json(
-      failure(`S${body.season}E${body.episode} already exists`), 400
-    )
+    const slugConflict = await db.prepare(
+      "SELECT id FROM anime WHERE LOWER(slug)=LOWER(?) AND id!=?"
+    ).bind(slug, id).first()
+
+    if (slugConflict) return c.json(failure("Slug already used by another anime"), 400)
 
     const timestamp = now()
-    const row = {
-      id,
-      anime_id:    String(body.anime_id),
-      anime_title: String(body.anime_title  || ""),
-      season:      String(body.season       || "1"),
-      episode:     Number(body.episode),
-      title:       String(body.title        || ""),
-      description: String(body.description  || ""),
-      thumbnail:   String(body.thumbnail    || ""),
-      servers:     toJSON(body.servers),
-      ongoing:     body.ongoing  ? 1 : 0,
-      featured:    body.featured ? 1 : 0,
-      sort_order:  existing.sort_order || 0,
-      created_at:  existing.created_at || timestamp,
-      updated_at:  timestamp
-    }
+    const createdAt = existing.created_at || timestamp   // ✅ FIX: keep original creation date
+
+    const row = buildRow({ ...body, slug }, id, createdAt, timestamp)
 
     await db.prepare(`
-      UPDATE episodes SET
-        anime_id=?,anime_title=?,
-        season=?,episode=?,
-        title=?,description=?,
-        thumbnail=?,servers=?,
-        ongoing=?,featured=?,
-        updated_at=?
+      UPDATE anime SET
+        title=?,slug=?,type=?,status=?,
+        poster=?,banner=?,year=?,rating=?,
+        language=?,duration=?,genres=?,tags=?,
+        is_home=?,is_trending=?,is_most_viewed=?,
+        is_banner=?,is_hidden=?,
+        description=?,updated_at=?
       WHERE id=?
     `).bind(
-      row.anime_id, row.anime_title,
-      row.season, row.episode,
-      row.title, row.description,
-      row.thumbnail, row.servers,
-      row.ongoing, row.featured,
-      row.updated_at, id
+      row.title, row.slug, row.type, row.status,
+      row.poster, row.banner, row.year, row.rating,
+      row.language, row.duration, row.genres, row.tags,
+      row.is_home, row.is_trending, row.is_most_viewed,
+      row.is_banner, row.is_hidden,
+      row.description, row.updated_at,
+      id
     ).run()
 
+    /* ✅ FIX: sync with correct (preserved) created_at */
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
     } else {
       syncToReplicas(c.env, "insert", row)
     }
 
-    return c.json(success({ id }))
+    return c.json(success({ id, slug }))
 
   } catch (err) {
-    console.error("episodes PUT:", err)
+    console.error("anime PUT error:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
-/* ================= BULK DELETE by IDs ================= */
-/* ROUTE ORDER FIX: Must be registered BEFORE DELETE /episodes/:id
-   Otherwise Hono matches "bulk" as :id param and returns 404 */
-app.delete('/episodes/bulk', async (c) => {
-  try {
-    const db = c.env.DB
+/* ========================= */
+/* DELETE                    */
+/* ========================= */
 
-    let body
-    try { body = await c.req.json() }
-    catch { return c.json(failure('Invalid JSON body'), 400) }
-
-    const episodeIds = body?.episodeIds
-    if (!Array.isArray(episodeIds) || episodeIds.length === 0) {
-      return c.json(failure('episodeIds array required'), 400)
-    }
-
-    // Safety cap — prevent runaway deletes
-    const ids = episodeIds.slice(0, 100)
-    const placeholders = ids.map(() => '?').join(',')
-
-    // Fetch IDs before delete so we can sync replicas
-    const { results: toDelete } = await db.prepare(
-      `SELECT id FROM episodes WHERE id IN (${placeholders})`
-    ).bind(...ids).all()
-
-    if (!toDelete.length) {
-      return c.json(success({ deleted: 0 }))
-    }
-
-    // Single D1 query — no loop, no subrequest overflow
-    const deleteIds = toDelete.map(r => r.id)
-    const delPlaceholders = deleteIds.map(() => '?').join(',')
-    const result = await db.prepare(
-      `DELETE FROM episodes WHERE id IN (${delPlaceholders})`
-    ).bind(...deleteIds).run()
-
-    // Sync replicas non-blocking
-    const syncAll = Promise.all(deleteIds.map(id => syncToReplicas(c.env, 'delete', { id })))
-    if (c.executionCtx?.waitUntil) {
-      c.executionCtx.waitUntil(syncAll)
-    } else {
-      syncAll.catch(() => {})
-    }
-
-    return c.json(success({ deleted: result.meta?.changes || deleteIds.length }))
-
-  } catch (err) {
-    console.error('episodes bulk DELETE by IDs:', err)
-    return c.json(failure(err.message), 500)
-  }
-})
-
-/* ================= REORDER EPISODES ================= */
-/* ROUTE ORDER FIX: registered before :id routes to avoid param collision
-   Drag-and-drop reorder: accepts array of episode IDs in new order.
-   Uses D1 batch to update sort_order in a single round-trip. */
-app.post('/episodes/reorder', async (c) => {
-  try {
-    const db = c.env.DB
-
-    let body
-    try { body = await c.req.json() }
-    catch { return c.json(failure('Invalid JSON body'), 400) }
-
-    const { animeId, orderedIds } = body || {}
-
-    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
-      return c.json(failure('orderedIds array required'), 400)
-    }
-
-    if (!animeId) {
-      return c.json(failure('animeId required'), 400)
-    }
-
-    const timestamp = now()
-
-    // D1 batch — one network call for all updates
-    const statements = orderedIds.map((id, index) =>
-      db.prepare(
-        'UPDATE episodes SET sort_order=?, updated_at=? WHERE id=? AND anime_id=?'
-      ).bind(index + 1, timestamp, id, animeId)
-    )
-
-    await db.batch(statements)
-
-    return c.json(success({ reordered: orderedIds.length }))
-
-  } catch (err) {
-    console.error('episodes reorder:', err)
-    return c.json(failure(err.message), 500)
-  }
-})
-
-/* ================= DELETE ================= */
-
-app.delete("/episodes/:id", async (c) => {
+animeRoute.delete("/anime/:id", async (c) => {
   try {
     const db = c.env.DB
     const id = c.req.param("id")
 
-    const existing = await db.prepare(
-      "SELECT id FROM episodes WHERE id=?"
-    ).bind(id).first()
-    if (!existing) return c.json(failure("Episode not found"), 404)
+    const existing = await db.prepare("SELECT id FROM anime WHERE id=?").bind(id).first()
+    if (!existing) return c.json(failure("Anime not found"), 404)
 
-    await db.prepare("DELETE FROM episodes WHERE id=?").bind(id).run()
+    await db.prepare("DELETE FROM anime WHERE id=?").bind(id).run()
 
-    if (c.executionCtx?.waitUntil) {
+    if (c.executionCtx?.waitUntil) {                           // ✅ FIX
       c.executionCtx.waitUntil(syncToReplicas(c.env, "delete", { id }))
     } else {
       syncToReplicas(c.env, "delete", { id })
@@ -509,116 +466,80 @@ app.delete("/episodes/:id", async (c) => {
     return c.json(success({ id, deleted: true }))
 
   } catch (err) {
-    console.error("episodes DELETE:", err)
+    console.error("anime DELETE error:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
-/* ================= BULK DELETE by anime ================= */
+/* ========================= */
+/* SANITIZE PAGINATION HELPER*/
+/* (exported utility)        */
+/* ========================= */
 
-app.delete("/episodes/anime/:animeId", async (c) => {
+// ✅ FIX (Line 254): NaN from invalid `limit` param sanitized.
+//    Exported for use by other modules.
+export function sanitizePagination(params) {
+  const page  = Math.max(1, parseInt(params.get("page"))  || 1)
+  const limit = Math.min(Math.max(1, parseInt(params.get("limit")) || 20), 100)
+  return { page, limit, offset: (page - 1) * limit }
+}
+
+/* ========================= */
+/* BULK UPDATE STATUS        */
+/* (MISSING FEATURE — ADDED) */
+/* Blueprint §2 Item 4       */
+/* ========================= */
+
+// POST /api/admin/anime/bulk-status
+// Body: { animeIds: string[], status: string }
+// "hidden" is treated as a visibility toggle (is_hidden=1), NOT a status value —
+// status and visibility are independent columns.
+animeRoute.post("/anime/bulk-status", async (c) => {
   try {
-    const db      = c.env.DB
-    const animeId = c.req.param("animeId")
+    const db = c.env.DB
 
-    const { results } = await db.prepare(
-      "SELECT id FROM episodes WHERE anime_id=?"
-    ).bind(animeId).all()
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
 
-    if (!results.length) return c.json(success({ deleted: 0 }))
+    const { animeIds, status } = body || {}
 
-    await db.prepare(
-      "DELETE FROM episodes WHERE anime_id=?"
-    ).bind(animeId).run()
-
-    const syncAll = Promise.all(results.map(r => syncToReplicas(c.env, "delete", { id: r.id })))
-    if (c.executionCtx?.waitUntil) {
-      c.executionCtx.waitUntil(syncAll)
-    } else {
-      await syncAll
+    const validStatuses = ["airing", "completed", "upcoming", "dropped", "ongoing", "hidden"]
+    if (!validStatuses.includes(status)) {
+      return c.json(failure(`Invalid status — must be one of: ${validStatuses.join(", ")}`), 400)
     }
 
-    return c.json(success({ deleted: results.length }))
+    if (!Array.isArray(animeIds) || animeIds.length === 0) {
+      return c.json(failure("animeIds array required"), 400)
+    }
+
+    // Safety cap
+    const ids          = animeIds.slice(0, 100)
+    const placeholders = ids.map(() => "?").join(",")
+    const timestamp    = now()
+
+    let result
+    if (status === "hidden") {
+      result = await db.prepare(
+        `UPDATE anime SET is_hidden=1, updated_at=? WHERE id IN (${placeholders})`
+      ).bind(timestamp, ...ids).run()
+    } else {
+      result = await db.prepare(
+        `UPDATE anime SET status=?, updated_at=? WHERE id IN (${placeholders})`
+      ).bind(status, timestamp, ...ids).run()
+    }
+
+    return c.json(success({
+      updated: result.meta?.changes || 0,
+      status
+    }))
 
   } catch (err) {
-    console.error("episodes bulk DELETE:", err)
+    console.error("anime bulk-status error:", err)
     return c.json(failure(err.message), 500)
   }
 })
 
-/* ================================================
-   PUBLIC ROUTES
-================================================ */
+// ✅ FIX: export default at true end — bulk-status route registered BEFORE export
+export default animeRoute
 
-app.get("/public/episodes/:animeId", async (c) => {
-  try {
-    const db      = c.env.DB
-    const animeId = c.req.param("animeId")
-    const season  = c.req.query("season") || ""
-
-    let query  = `SELECT id,season,episode,title,thumbnail,servers
-                  FROM episodes WHERE anime_id=?`
-    const args = [animeId]
-
-    if (season) { query += " AND season=?"; args.push(season) }
-    query += " ORDER BY CAST(season AS INTEGER) ASC, episode ASC"
-
-    const { results } = await db.prepare(query).bind(...args).all()
-
-    return c.json(success(
-      results.map(e => ({
-        id:        e.id,
-        season:    e.season,
-        episode:   e.episode,
-        title:     e.title,
-        thumbnail: e.thumbnail,
-        servers:   safeJSON(e.servers)
-      }))
-    ))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-app.get("/public/servers/:id", async (c) => {
-  try {
-    const db  = c.env.DB
-    const id  = c.req.param("id")
-    const row = await db.prepare(
-      "SELECT servers FROM episodes WHERE id=?"
-    ).bind(id).first()
-
-    if (!row) return c.json(success([]))
-
-    return c.json(success(
-      safeJSON(row.servers).map((url, i) => ({ index: i, url }))
-    ))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-app.get("/public/seasons/:animeId", async (c) => {
-  try {
-    const db      = c.env.DB
-    const animeId = c.req.param("animeId")
-
-    const { results } = await db.prepare(`
-      SELECT season, COUNT(*) as ep_count
-      FROM episodes
-      WHERE anime_id=?
-      GROUP BY season
-      ORDER BY CAST(season AS INTEGER) ASC
-    `).bind(animeId).all()
-
-    return c.json(success(results))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-export default app
-     
