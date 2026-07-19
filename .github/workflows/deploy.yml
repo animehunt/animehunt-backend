@@ -1,0 +1,29 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger deploy on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: deploy
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # What's sent here barely matters on purpose — the VPS's
+          # authorized_keys entry for this key forces deploy.sh to run
+          # regardless of the command received. See DEPLOY_USER_SETUP.md.
+          # Sending a real command anyway, purely so this step's own log
+          # output is meaningful if you're reading it later.
+          script: echo "requesting deploy — server enforces deploy.sh regardless of this line"
+
+      # Optional but recommended: fail the workflow loudly (not just the
+      # SSH step) if the deploy script itself exited non-zero, since
+      # appleboy/ssh-action already surfaces that as a failed step — this
+      # job has no further steps, so a failed deploy = a red X on the
+      # commit, which is what you want to notice.
+      
