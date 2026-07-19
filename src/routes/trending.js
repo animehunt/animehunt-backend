@@ -178,3 +178,4 @@ app.get("/api/trending/movies", async (c) => {
 })
 
 export default app
+
