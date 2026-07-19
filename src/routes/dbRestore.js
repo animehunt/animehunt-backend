@@ -73,13 +73,16 @@ async function fetchAllFromD1(env, table) {
   }
 }
 
+// MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — this used to read
+// env.TURSO_URL directly, which is the same primary database fetchAllFromD1
+// above already reads via env.DB, making the two functions redundant.
 async function fetchAllFromTurso(env, table) {
   try {
-    const httpUrl = env.TURSO_URL.replace("libsql://", "https://")
+    const httpUrl = env.TURSO_REPLICA_URL.replace("libsql://", "https://")
     const res = await fetch(`${httpUrl}/v2/pipeline`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+        "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -140,13 +143,16 @@ async function bulkWriteToD1(env, table, rows) {
   return count
 }
 
+// MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — "restore into
+// Turso" now means restoring into the second, independent Turso database,
+// not writing back into the primary through a separate redundant path.
 async function bulkWriteToTurso(env, table, rows) {
   if (!rows.length) return 0
-  if (!env.TURSO_URL || !env.TURSO_AUTH_TOKEN) {
-    console.warn(`Turso write skipped [${table}]: TURSO_URL/TURSO_AUTH_TOKEN not configured`)
+  if (!env.TURSO_REPLICA_URL || !env.TURSO_REPLICA_AUTH_TOKEN) {
+    console.warn(`Turso write skipped [${table}]: TURSO_REPLICA_URL/TURSO_REPLICA_AUTH_TOKEN not configured`)
     return 0
   }
-  const httpUrl = env.TURSO_URL.replace("libsql://", "https://")
+  const httpUrl = env.TURSO_REPLICA_URL.replace("libsql://", "https://")
   let count = 0
   for (const row of rows) {
     const keys = Object.keys(row)
@@ -161,7 +167,7 @@ async function bulkWriteToTurso(env, table, rows) {
       await fetch(`${httpUrl}/v2/pipeline`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+          "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -212,14 +218,21 @@ async function checkD1Health(env) {
   }
 }
 
+// MIGRATION: this used to check env.TURSO_URL directly, which — now that
+// checkD1Health() above queries env.DB (the primary Turso, via the
+// D1-compatible adapter) — meant this function and checkD1Health() were
+// silently checking the exact same database through two different code
+// paths. Repointed at TURSO_REPLICA_URL/TOKEN (DB3, the second independent
+// Turso database) so the three-way comparison below is genuinely three
+// independent sources again, matching the trio architecture.
 async function checkTursoHealth(env) {
   try {
-    const httpUrl = env.TURSO_URL?.replace("libsql://", "https://")
-    if (!httpUrl) return { ok: false, error: "TURSO_URL not set" }
+    const httpUrl = env.TURSO_REPLICA_URL?.replace("libsql://", "https://")
+    if (!httpUrl) return { ok: false, error: "TURSO_REPLICA_URL not set" }
     const res = await fetch(`${httpUrl}/v2/pipeline`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+        "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -812,11 +825,13 @@ router.post("/db/replay-events", async (c) => {
         }
 
         if (event.origin !== ORIGIN_TURSO) {
-          const httpUrl = c.env.TURSO_URL.replace("libsql://", "https://")
+          // MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — same
+          // reasoning as fetchAllFromTurso/bulkWriteToTurso above.
+          const httpUrl = c.env.TURSO_REPLICA_URL.replace("libsql://", "https://")
           await fetch(`${httpUrl}/v2/pipeline`, {
             method: "POST",
             headers: {
-              "Authorization": `Bearer ${c.env.TURSO_AUTH_TOKEN}`,
+              "Authorization": `Bearer ${c.env.TURSO_REPLICA_AUTH_TOKEN}`,
               "Content-Type": "application/json"
             },
             body: JSON.stringify({
@@ -926,11 +941,13 @@ router.post("/db/dead-letter/retry", async (c) => {
         // Try to re-apply
         await c.env.DB.prepare(event.sql).bind(...args).run().catch(() => null)
 
-        const httpUrl = c.env.TURSO_URL.replace("libsql://", "https://")
+        // MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — same
+        // reasoning as fetchAllFromTurso/bulkWriteToTurso above.
+        const httpUrl = c.env.TURSO_REPLICA_URL.replace("libsql://", "https://")
         await fetch(`${httpUrl}/v2/pipeline`, {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${c.env.TURSO_AUTH_TOKEN}`,
+            "Authorization": `Bearer ${c.env.TURSO_REPLICA_AUTH_TOKEN}`,
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
@@ -1050,4 +1067,3 @@ router.get("/db/checksums", async (c) => {
 })
 
 export default router
-
