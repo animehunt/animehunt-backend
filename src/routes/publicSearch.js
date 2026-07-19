@@ -90,7 +90,7 @@ app.get("/api/search", async (c) => {
   const page   = (isNaN(rawPage)  || rawPage  < 1)  ? 1  : rawPage
   const limit  = Math.min(50, Math.max(1, isNaN(rawLimit) ? 20 : rawLimit))
   const offset = (page - 1) * limit
-  const ip     = c.req.header("CF-Connecting-IP") || "unknown"
+  const ip     = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
 
   if (q.length < 2) {
     return c.json(ok({ query: q, results: [], count: 0, pagination: { page, limit, total: 0, pages: 0 } }))
@@ -119,7 +119,7 @@ app.get("/api/search", async (c) => {
                  a.rating, a.year, a.language, a.genres,
                  bm25(anime_fts) as rank
           FROM anime_fts
-          JOIN anime a ON anime_fts.rowid = a.id
+          JOIN anime a ON anime_fts.id = a.id
           WHERE anime_fts MATCH ?
             AND a.is_hidden=0 AND a.active=1
           ORDER BY rank
@@ -132,7 +132,7 @@ app.get("/api/search", async (c) => {
           const cntRow = await db.prepare(`
             SELECT COUNT(*) as total
             FROM anime_fts
-            JOIN anime a ON anime_fts.rowid = a.id
+            JOIN anime a ON anime_fts.id = a.id
             WHERE anime_fts MATCH ?
               AND a.is_hidden=0 AND a.active=1
           `).bind(ftsQuery).first()
@@ -445,4 +445,3 @@ app.get("/api/search/az/:letter", async (c) => {
 ============================================================ */
 
 export default app
-
