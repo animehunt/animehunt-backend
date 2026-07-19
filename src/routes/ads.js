@@ -650,7 +650,7 @@ async function trackUniqueClick(env, adId, ip) {
 ads.post("/public/ads/:adId/click", async (c) => {
   const db   = c.env.DB
   const adId = parseInt(c.req.param("adId"))
-  const ip   = c.req.header("CF-Connecting-IP") || "unknown"
+  const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
   try {
     const ad = await db.prepare("SELECT id, clicks FROM ads_library WHERE id=?").bind(adId).first()
     if (!ad) return fail(c, "Ad not found", 404)
