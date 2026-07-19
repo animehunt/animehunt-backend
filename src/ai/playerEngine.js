@@ -40,10 +40,11 @@ export async function runPlayerEngine(env, request = null){
 
       // origin.includes(host) security bypass fixed.
       //    'evil.com/trusted.com' se bypass possible tha — exact match use karo.
+      // MIGRATION: dropped the .pages.dev / .workers.dev checks that used to
+      // allow-list embeds served from Cloudflare Pages/Workers preview URLs —
+      // dead weight once this isn't running on Workers itself.
       const allowed =
         refOrigin === host ||
-        refOrigin.endsWith(".pages.dev") ||
-        refOrigin.endsWith(".workers.dev") ||
         origin === `https://${host}` ||
         origin === `http://${host}`
 
@@ -53,7 +54,14 @@ export async function runPlayerEngine(env, request = null){
 
     }
 
-    /* REGION BLOCK */
+    /* REGION BLOCK
+       MIGRATION: cf-ipcountry is a Cloudflare-only header. This only keeps
+       working if you keep Cloudflare's proxy (orange-cloud DNS) in front of
+       the VPS — see the migration report §1.1/§3.3. If you go fully
+       origin-direct instead, `country` below is always "", so this block
+       quietly becomes a no-op rather than breaking anything — if you need
+       real geo-blocking without Cloudflare in front, swap this for an
+       IP-geolocation lookup (e.g. a MaxMind GeoLite2 database) instead. */
     if(cfg.sec_cloudflare){
 
       const country = request?.headers?.get("cf-ipcountry") || ""
@@ -68,7 +76,7 @@ export async function runPlayerEngine(env, request = null){
     🚦 STREAM RATE LIMIT
     ========================= */
 
-    const rateUserId = request?.headers?.get("cf-connecting-ip") || "unknown"
+    const rateUserId = request?.headers?.get("cf-connecting-ip") || request?.headers?.get("x-forwarded-for") || "unknown"
     const rateCheck   = await checkStreamRateLimit(env, rateUserId)
     if(!rateCheck.allowed){
       return error("Too many stream requests — slow down",429)
@@ -241,8 +249,12 @@ async function checkServer(url){
 
     const res = await fetch(url,{
       method:"HEAD",
-      signal: controller.signal,
-      cf:{ cacheTtl:0 }
+      signal: controller.signal
+      // MIGRATION: dropped `cf:{ cacheTtl:0 }` — that's a Cloudflare
+      // Workers-only fetch() extension for controlling edge caching.
+      // Node's fetch() doesn't recognize it (it was a harmless no-op on
+      // Node either way), and a HEAD health-check like this isn't going
+      // to get cached by anything in between regardless.
     })
 
     clearTimeout(timeout)
@@ -294,7 +306,7 @@ async function trackSession(env, request, serverId){
 
     const db = env.DB
 
-    const ip = request.headers.get("cf-connecting-ip") || "unknown"
+    const ip = request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for") || "unknown"
 
     await db.prepare(`
       INSERT INTO player_sessions(ip,server_id,created_at)
@@ -425,7 +437,7 @@ export function setupPlayerRoutes(router, env) {
     }
     let body = {}
     try { body = await req.json() } catch {}
-    const userId = body.userId || req.headers.get("CF-Connecting-IP") || "unknown"
+    const userId = body.userId || req.headers.get("CF-Connecting-IP") || req.headers.get("x-forwarded-for") || "unknown"
     const check  = await checkStreamRateLimit(env, userId)
     if (!check.allowed) {
       return new Response(JSON.stringify({ error: "Too many stream requests" }), {
@@ -503,4 +515,4 @@ export function setupPlayerRoutes(router, env) {
       config: parsedConfig
     }), { status: 200, headers: { "Content-Type": "application/json" } })
   })
-        }
+}
