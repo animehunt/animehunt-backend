@@ -227,21 +227,27 @@ function parseTursoResult(result) {
   return { results: rows, meta: { rows_written: result.affected_row_count || 0 } }
 }
 
+// MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — this is the core
+// function the whole file's D1→Turso→Supabase fallback waterfall and sync
+// mechanism route through. Using the same primary Turso credentials as a
+// "fallback" would be pointless (if the primary Turso is down, hitting it
+// again under a different function name doesn't help) — DB3 being a
+// genuinely separate database is what makes this a real fallback again.
 async function tursoQuery(env, sql, args = [], { event_id = null, is_sync = false } = {}) {
-  if (!env.TURSO_URL || !env.TURSO_AUTH_TOKEN) return null
+  if (!env.TURSO_REPLICA_URL || !env.TURSO_REPLICA_AUTH_TOKEN) return null
 
   if (is_sync && event_id) {
     const already = await hasProcessedEvent(env, event_id, ORIGIN_TURSO)
     if (already) return { results: [], meta: {}, skipped: true }
   }
 
-  const httpUrl = env.TURSO_URL.replace("libsql://", "https://")
+  const httpUrl = env.TURSO_REPLICA_URL.replace("libsql://", "https://")
 
   try {
     const res = await fetch(`${httpUrl}/v2/pipeline`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+        "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
         "Content-Type":  "application/json",
         ...(event_id ? { "X-Sync-Event-Id": event_id } : {})
       },
