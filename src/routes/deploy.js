@@ -74,11 +74,11 @@ async function ensureTables(db) {
 
 async function syncBackupToReplicas(env, backupRow) {
   /* We sync a lightweight reference — not the full data blob */
-  if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
-    fetch(`${env.TURSO_URL}/v2/pipeline`, {
+  if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
+    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+        "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
         "Content-Type":  "application/json"
       },
       body: JSON.stringify({
@@ -153,6 +153,14 @@ app.get("/deploy", async (c) => {
         banners:  bannerCount?.c   || 0
       },
       dbStatus: {
+        // MIGRATION: `d1: true` is accurate here (every query above this
+        // point already succeeded against it, via the Turso adapter — if
+        // it weren't reachable, this whole handler would already have
+        // thrown into the catch block below). Worth knowing: post-
+        // migration, c.env.DB *is* your Turso connection under the
+        // adapter, so this and `turso` below are now reporting on the
+        // same underlying database, not two independent ones the way
+        // they were when D1 and Turso were genuinely separate systems.
         d1:       true,
         turso:    !!(c.env.TURSO_URL    && c.env.TURSO_AUTH_TOKEN),
         supabase: !!(c.env.SUPABASE_URL && c.env.SUPABASE_KEY)
@@ -581,3 +589,4 @@ app.post("/deploy/version", async (c) => {
 })
 
 export default app
+
