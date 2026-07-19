@@ -213,10 +213,10 @@ async function syncToReplicas(env, row) {
     value: String(v ?? "")
   }))
 
-  if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
-    fetch(`${env.TURSO_URL}/v2/pipeline`, {
+  if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
+    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
       method: "POST",
-      headers: { "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`, "Content-Type": "application/json" },
+      headers: { "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         requests: [{
           type: "execute",
