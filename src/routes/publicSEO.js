@@ -78,12 +78,17 @@ app.get("/robots.txt", async (c) => {
     const base = await getBase(db)
 
     // Check custom robots.txt from system_settings
+    // MIGRATION FIX: system_settings is a single wide row (id=1, many named
+    // columns — see routes/system.js's own CREATE TABLE), not a key/value
+    // table. This used to query `WHERE key='robots_txt'`, which never
+    // matched anything against that design — real bug found during the
+    // final schema audit, not something the migration introduced.
     let content = null
     try {
       const setting = await db.prepare(
-        "SELECT value FROM system_settings WHERE key='robots_txt'"
+        "SELECT robots_txt FROM system_settings WHERE id=1"
       ).first()
-      if (setting?.value?.trim()) content = setting.value.trim()
+      if (setting?.robots_txt?.trim()) content = setting.robots_txt.trim()
     } catch {}
 
     if (!content) {
@@ -462,4 +467,3 @@ app.get("/api/seo/schema/:animeId", async (c) => {
 })
 
 export default app
-
