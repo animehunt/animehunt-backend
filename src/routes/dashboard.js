@@ -118,11 +118,19 @@ app.get("/dashboard", async (c) => {
     const tursoOk    = !!(c.env.TURSO_URL && c.env.TURSO_AUTH_TOKEN)
     const supabaseOk = !!(c.env.SUPABASE_URL && c.env.SUPABASE_KEY)
 
+    // MIGRATION: this used to be hardcoded to "Connected" unconditionally —
+    // fine on Workers where env.DB not existing at all would already have
+    // failed the earlier DB-check middleware, but on Node the D1-compatible
+    // adapter always exists as an object even if Turso itself is unreachable,
+    // so this now does the same real check dbTurso/dbSupabase already did.
+    let dbD1Ok = false
+    try { await c.env.DB.prepare("SELECT 1").first(); dbD1Ok = true } catch {}
+
     /* ---- SYSTEM STATUS ---- */
     const systemStatus = {
       cmsStatus:    "Online",
       apiStatus:    "Running",
-      dbD1:         "Connected",
+      dbD1:         dbD1Ok ? "Connected" : "Not Configured",
       dbTurso:      tursoOk    ? "Connected" : "Not Configured",
       dbSupabase:   supabaseOk ? "Connected" : "Not Configured",
       tripleSync:   (tursoOk && supabaseOk) ? "Active" : tursoOk || supabaseOk ? "Partial" : "Disabled",
@@ -210,16 +218,19 @@ app.post("/dashboard/sync-check", async (c) => {
     results.d1 = true
   } catch { /* d1 failed */ }
 
-  /* Turso */
-  if (c.env.TURSO_URL && c.env.TURSO_AUTH_TOKEN) {
+  /* Turso — MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3). This
+     used to test c.env.TURSO_URL directly, the same primary credentials
+     results.d1 above already tests via c.env.DB (the D1-compatible
+     adapter), making the two checks redundant post-migration. */
+  if (c.env.TURSO_REPLICA_URL && c.env.TURSO_REPLICA_AUTH_TOKEN) {
     try {
       // ✅ FIX: 'libsql://' protocol ko fetch direct support nahi karta, isliye isko 'https://' kiya gaya hai
-      const targetUrl = c.env.TURSO_URL.replace("libsql://", "https://")
+      const targetUrl = c.env.TURSO_REPLICA_URL.replace("libsql://", "https://")
       
       const res = await fetch(`${targetUrl}/v2/pipeline`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${c.env.TURSO_AUTH_TOKEN}`,
+          "Authorization": `Bearer ${c.env.TURSO_REPLICA_AUTH_TOKEN}`,
           "Content-Type":  "application/json"
         },
         body: JSON.stringify({
@@ -271,4 +282,3 @@ app.post("/dashboard/ai-scan", async (c) => {
 })
 
 export default app
-
