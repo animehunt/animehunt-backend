@@ -48,12 +48,12 @@ function validate(body) {
 async function syncToReplicas(env, action, data) {
   const promises = []
 
-  if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
+  if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
     promises.push(
-      fetch(`${env.TURSO_URL}/v2/pipeline`, {
+      fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+          "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
           "Content-Type":  "application/json"
         },
         body: JSON.stringify(buildTursoPayload(action, data))
@@ -453,7 +453,7 @@ app.post("/banners/:id/click", async (c) => {
   try {
     const db  = c.env.DB
     const id  = c.req.param("id")
-    const ip  = c.req.header("CF-Connecting-IP") || "unknown"
+    const ip  = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
 
     const banner = await db.prepare(
       "SELECT id, link FROM banners WHERE id=?"
@@ -544,4 +544,3 @@ app.post("/banners/:id/trailer", async (c) => {
 })
 
 export default app
-
