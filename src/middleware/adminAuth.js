@@ -605,4 +605,3 @@ app.post("/auth/change-password", handleChangePassword)
 app.post("/auth/reset-password",  handleChangePassword)
 
 export default app
-
