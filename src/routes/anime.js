@@ -106,12 +106,12 @@ async function syncToReplicas(env, action, data) {
   const promises = []
 
   /* ---- Turso ---- */
-  if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
+  if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
     promises.push(
-      fetch(`${env.TURSO_URL}/v2/pipeline`, {
+      fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+          "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify(buildTursoPayload(action, data))
@@ -542,4 +542,3 @@ animeRoute.post("/anime/bulk-status", async (c) => {
 
 // ✅ FIX: export default at true end — bulk-status route registered BEFORE export
 export default animeRoute
-
