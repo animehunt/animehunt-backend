@@ -44,7 +44,7 @@ function rangeStart(range) {
 app.post("/api/track/view", async (c) => {
   const db   = c.env.DB
   const body = await c.req.json().catch(() => ({}))
-  const ip   = c.req.header("CF-Connecting-IP") || "unknown"
+  const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
   const ua   = c.req.header("User-Agent") || ""
 
   try {
@@ -64,7 +64,7 @@ app.post("/api/track/view", async (c) => {
 app.post("/api/track/download", async (c) => {
   const db   = c.env.DB
   const body = await c.req.json().catch(() => ({}))
-  const ip   = c.req.header("CF-Connecting-IP") || "unknown"
+  const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
 
   try {
     await db.prepare(`
@@ -85,7 +85,7 @@ app.post("/api/track/download", async (c) => {
 app.post("/api/track/search", async (c) => {
   const db   = c.env.DB
   const body = await c.req.json().catch(() => ({}))
-  const ip   = c.req.header("CF-Connecting-IP") || "unknown"
+  const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
 
   try {
     await db.prepare(`
@@ -231,3 +231,4 @@ app.get("/api/admin/analytics/export", async (c) => {
 })
 
 export default app
+
