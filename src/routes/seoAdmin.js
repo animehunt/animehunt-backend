@@ -208,11 +208,11 @@ function formatRow(r) {
 ================================================ */
 
 function syncToReplicas(env, row) {
-  if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
-    fetch(`${env.TURSO_URL}/v2/pipeline`, {
+  if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
+    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+        "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
         "Content-Type":  "application/json"
       },
       body: JSON.stringify({
@@ -621,19 +621,18 @@ app.get("/seo/robots", async (c) => {
     // Read custom robots.txt if one was saved via /seo/robots/update.
     // This mirrors exactly what publicSEO.js's public /robots.txt serves,
     // so the admin preview never disagrees with what crawlers actually see.
+    // MIGRATION FIX: this used to CREATE TABLE system_settings with a
+    // key/value shape, which conflicts with routes/system.js's own
+    // CREATE TABLE for the SAME table name (a single wide row, id=1) —
+    // whichever ran first would win and the other would break with "no
+    // such column" errors. Removed the conflicting CREATE TABLE here;
+    // system.js already owns creating this table.
     let custom = null
     try {
-      await db.prepare(`
-        CREATE TABLE IF NOT EXISTS system_settings (
-          key        TEXT PRIMARY KEY,
-          value      TEXT,
-          updated_at TEXT
-        )
-      `).run()
       const setting = await db.prepare(
-        "SELECT value FROM system_settings WHERE key='robots_txt'"
+        "SELECT robots_txt FROM system_settings WHERE id=1"
       ).first()
-      if (setting?.value?.trim()) custom = setting.value.trim()
+      if (setting?.robots_txt?.trim()) custom = setting.robots_txt.trim()
     } catch {}
 
     if (custom) {
@@ -769,17 +768,13 @@ app.post("/seo/robots/update", async (c) => {
       return c.json(failure("content required"), 400)
     }
 
+    // MIGRATION FIX: same collision as the GET handler above — this used
+    // to CREATE TABLE + INSERT OR REPLACE against a key/value shape that
+    // conflicts with system.js's own CREATE TABLE for the same name.
+    // system.js already guarantees a row with id=1 exists (ensureRow-style
+    // init on that router), so this is now a plain UPDATE.
     await db.prepare(`
-      CREATE TABLE IF NOT EXISTS system_settings (
-        key        TEXT PRIMARY KEY,
-        value      TEXT,
-        updated_at TEXT
-      )
-    `).run()
-
-    await db.prepare(`
-      INSERT OR REPLACE INTO system_settings (key, value, updated_at)
-      VALUES ('robots_txt', ?, ?)
+      UPDATE system_settings SET robots_txt = ?, updated_at = ? WHERE id = 1
     `).bind(body.content.trim(), now()).run()
 
     if (c.env.KV) {
@@ -793,4 +788,3 @@ app.post("/seo/robots/update", async (c) => {
 })
 
 export default app
-
