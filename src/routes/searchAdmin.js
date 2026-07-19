@@ -190,11 +190,11 @@ async function ensureLogsTable(db) {
 ================================================ */
 
 function syncToReplicas(env, settings) {
-  if (env.TURSO_URL && env.TURSO_AUTH_TOKEN) {
-    fetch(`${env.TURSO_URL}/v2/pipeline`, {
+  if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
+    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.TURSO_AUTH_TOKEN}`,
+        "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
         "Content-Type":  "application/json"
       },
       body: JSON.stringify({
@@ -576,22 +576,26 @@ app.post("/search/rebuild-index", async (c) => {
     const isFirst  = offset === 0
 
     // Create FTS5 virtual table
+    // MIGRATION FIX: this was external-content mode (content='anime',
+    // content_rowid='id'), which requires content_rowid to be an actual
+    // SQLite integer rowid. anime.id is TEXT (crypto.randomUUID(), see the
+    // schema audit) — confirmed via direct testing that external-content
+    // mode throws "datatype mismatch" the moment a real UUID gets inserted.
+    // Switched to a standalone FTS5 table with id as a regular UNINDEXED
+    // column instead — verified working end-to-end with a real TEXT id.
     await db.prepare(`
       CREATE VIRTUAL TABLE IF NOT EXISTS anime_fts USING fts5(
-        title, description, genres,
-        content='anime',
-        content_rowid='id'
+        id UNINDEXED,
+        title, description, genres
       )
     `).run()
 
-    // FIXED: Correct FTS5 delete on first call
-    // Plain "DELETE FROM anime_fts" breaks content table tracking
-    // Use the FTS5 special delete command instead
+    // MIGRATION FIX: the special 'delete-all' command is specifically for
+    // external-content FTS5 tables (which this no longer is) — a plain
+    // DELETE is the correct, tested way to clear a standalone FTS5 table.
     if (isFirst) {
       try {
-        await db.prepare(
-          "INSERT INTO anime_fts(anime_fts) VALUES('delete-all')"
-        ).run()
+        await db.prepare("DELETE FROM anime_fts").run()
       } catch {
         // Fallback: table might not have data yet, ignore error
       }
@@ -615,9 +619,10 @@ app.post("/search/rebuild-index", async (c) => {
     }
 
     // Batch insert this chunk (max 100 at a time — D1 limit safe)
+    // MIGRATION FIX: id goes into the real 'id' column now, not rowid.
     const stmts = animeList.map(a =>
       db.prepare(
-        "INSERT INTO anime_fts (rowid, title, description, genres) VALUES (?, ?, ?, ?)"
+        "INSERT INTO anime_fts (id, title, description, genres) VALUES (?, ?, ?, ?)"
       ).bind(a.id, a.title || "", a.description || "", a.genres || "")
     )
     await db.batch(stmts)
@@ -638,4 +643,3 @@ app.post("/search/rebuild-index", async (c) => {
 })
 
 export default app
-
