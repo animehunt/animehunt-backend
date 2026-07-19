@@ -90,7 +90,7 @@ export async function invalidateCacheByPrefix(env, prefix) {
 ───────────────────────────────────────────────────────────── */
 export async function dbSync(c, next) {
   const start = Date.now()
-  const ip    = c.req.header("CF-Connecting-IP") || "unknown"
+  const ip    = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
 
   const rateLimitResult = await checkRateLimit(c.env, ip)
   if (!rateLimitResult.allowed) {
