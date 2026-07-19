@@ -1,0 +1,26 @@
+# CRITICAL: never commit real secrets
+.env
+.env.local
+.env.production
+*.pem
+*.key
+animehunt_deploy_key
+animehunt_deploy_key.pub
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+deploy.log
+
+# PM2
+.pm2/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
