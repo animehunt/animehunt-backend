@@ -1,21 +1,21 @@
 {
   "name": "animehunt-backend",
-  "version": "1.0.0",
+  "version": "2.0.0-node",
   "type": "module",
   "scripts": {
-    "dev":    "wrangler dev",
-    "deploy": "wrangler deploy",
-    "db:migrate": "wrangler d1 execute animehunt --file=schema.sql",
-    "db:migrate:remote": "wrangler d1 execute animehunt --remote --file=schema.sql",
-    "secret:jwt":     "wrangler secret put JWT_SECRET",
-    "secret:admin-password": "wrangler secret put ADMIN_INITIAL_PASSWORD",
-    "secret:turso":   "wrangler secret put TURSO_AUTH_TOKEN",
-    "secret:supabase":"wrangler secret put SUPABASE_KEY",
-    "secret:imagekit":"wrangler secret put IMAGEKIT_PRIVATE_KEY",
-    "secrets:all": "npm run secret:jwt && npm run secret:admin-password && npm run secret:turso && npm run secret:supabase && npm run secret:imagekit"
+    "start": "node src/index.js",
+    "dev":   "node --watch src/index.js",
+
+    "_comment_legacy": "Kept for the one-time migration step only (exporting your existing D1 data before cutover). Not used day-to-day once you're running on Node — remove the wrangler devDependency below after you've exported.",
+    "db:export-from-d1": "wrangler d1 export animehunt --output=schema-and-data.sql"
   },
   "dependencies": {
-    "hono": "^4.0.0"
+    "hono": "^4.0.0",
+    "@hono/node-server": "^1.13.0",
+    "@libsql/client": "^0.14.0",
+    "ioredis": "^5.4.1",
+    "@aws-sdk/client-s3": "^3.658.0",
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"
