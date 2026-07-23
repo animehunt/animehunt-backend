@@ -105,10 +105,23 @@ async function ensureTables(db) {
       )
     `).run()
 
+    // ✅ FIX (audit ISSUE-015): this was missing frozen/emergency/version/
+    // environment — present in both deploy.js's own definition and
+    // schema.sql. Since ensureTables() runs lazily per-request (not at
+    // boot), whichever admin page (ai-brain.html or deploy-backup.html) an
+    // admin visits first on a fresh database determined this table's real
+    // columns — if this narrower version ran first, deploy.js's later
+    // "UPDATE deploy_state SET frozen=?..." would fail with "no such
+    // column: frozen." Matching the full definition here removes the
+    // race entirely.
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS deploy_state (
         id           INTEGER PRIMARY KEY DEFAULT 1,
         last_deploy  TEXT,
+        frozen       INTEGER DEFAULT 0,
+        emergency    INTEGER DEFAULT 0,
+        version      TEXT    DEFAULT '1.0.0',
+        environment  TEXT    DEFAULT 'production',
         updated_at   TEXT
       )
     `).run()
@@ -467,10 +480,20 @@ async function serverEngine(db, cfg) {
     `)
 
     if (activeHealthy && activeHealthy.cnt === 0) {
+      // ✅ FIX (audit ISSUE-016): "UPDATE ... LIMIT 1" is not valid SQLite/
+      // libSQL syntax (LIMIT on UPDATE requires a non-default SQLite compile
+      // flag Turso doesn't enable) — this threw inside safeRun(), which
+      // caught it and returned false, silently reporting "skipped" every
+      // time. Auto-failover — the one thing meant to bring a backup server
+      // online when all others are down — never actually executed. A
+      // subquery scoped with its own LIMIT is the portable equivalent.
       const ok = await safeRun(db, `
         UPDATE servers SET active=1
-        WHERE fail_count = 0 AND active=0
-        LIMIT 1
+        WHERE id = (
+          SELECT id FROM servers
+          WHERE fail_count = 0 AND active=0
+          LIMIT 1
+        )
       `)
       changes.auto_failover = ok ? "activated_fallback" : "skipped"
     } else {
@@ -899,5 +922,3 @@ export async function runAIEngines(env) {
 }
 
 export default app
-
-
