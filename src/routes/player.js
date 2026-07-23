@@ -1,6 +1,17 @@
 /* ================================================
-   player.js — Netflix-Style Player Settings
+   player.js — Netflix-Style Player Settings (PUBLIC READS ONLY)
    Auth handled by adminAuth middleware in index.js
+
+   ✅ FIX (audit ISSUE-020): this file was the ONLY route in the codebase
+   mounted publicly (app.route("/api", player) in index.js) while also
+   containing write endpoints (POST /player, POST /player/reset) — meaning
+   anyone, unauthenticated, could rewrite the entire player configuration,
+   including the security settings covered in playerEngine.js (embed-lock,
+   hotlink-block). The write routes have been moved to playerAdmin.js,
+   which is mounted under adminRoutes (auth-gated) instead. This file now
+   only serves GET /player and GET /player/public — both safe to leave
+   public, matching the original intent visible in the admin frontend
+   (player.html expects POST to go to /api/admin/player).
 ================================================ */
 
 import { Hono } from "hono"
@@ -272,170 +283,6 @@ app.get("/player", async (c) => {
 })
 
 /* ================================================
-   POST /player — Save
-================================================ */
-
-app.post("/player", async (c) => {
-  try {
-    const db = c.env.DB
-
-    let body
-    try { body = await c.req.json() }
-    catch { return c.json(failure("Invalid JSON body"), 400) }
-
-    await ensureRow(db)
-
-    const timestamp = now()
-
-    const row = {
-      default_server:      body.server?.default     || "Server 1",
-      server_priority:     JSON.stringify(body.server?.priority || ["Server 1","Server 2","Server 3"]),
-
-      autoplay:            bool(body.playback?.autoplay),
-      resume:              bool(body.playback?.resume),
-      autoswitch:          bool(body.playback?.autoswitch),
-      auto_next:           bool(body.playback?.autoNext),
-      auto_next_delay:     Number(body.playback?.autoNextDelay || 5),
-      loop:                bool(body.playback?.loop),
-      mode:                body.playback?.mode       || "responsive",
-
-      skip_intro:          bool(body.controls?.skipIntro),
-      skip_intro_sec:      Number(body.controls?.skipIntroSec   || 85),
-      skip_outro:          bool(body.controls?.skipOutro),
-      seek_seconds:        Number(body.controls?.seekSeconds    || 10),
-      default_speed:       body.controls?.defaultSpeed          || "1",
-      remember_speed:      bool(body.controls?.rememberSpeed),
-      remember_quality:    bool(body.controls?.rememberQuality),
-
-      subtitle_enabled:    bool(body.subtitle?.enabled),
-      subtitle_default:    body.subtitle?.default    || "Hindi",
-      subtitle_size:       body.subtitle?.size       || "medium",
-      subtitle_color:      body.subtitle?.color      || "#ffffff",
-      subtitle_bg:         body.subtitle?.bg         || "rgba(0,0,0,0.7)",
-      subtitle_position:   body.subtitle?.position   || "bottom",
-      subtitle_langs:      JSON.stringify(body.subtitle?.langs  || ["Hindi","English","Japanese","Off"]),
-
-      audio_enabled:       bool(body.audio?.enabled),
-      audio_default:       body.audio?.default       || "Hindi Dubbed",
-      audio_tracks:        JSON.stringify(body.audio?.tracks    || ["Hindi Dubbed","English Dubbed","Japanese Original"]),
-      audio_normalize:     bool(body.audio?.normalize),
-
-      ui_servers:          bool(body.ui?.servers),
-      ui_download:         bool(body.ui?.download),
-      ui_subscribe:        bool(body.ui?.subscribe),
-      ui_related:          bool(body.ui?.related),
-      ui_episodes:         bool(body.ui?.episodes),
-      ui_share:            bool(body.ui?.share),
-      ui_fullscreen:       bool(body.ui?.fullscreen),
-      ui_pip:              bool(body.ui?.pip),
-      ui_keyboard:         bool(body.ui?.keyboard),
-      ui_minibar:          bool(body.ui?.minibar),
-      ui_progress_preview: bool(body.ui?.progressPreview),
-      ui_volume_mem:       bool(body.ui?.volumeMemory),
-
-      ads_enabled:         bool(body.ads?.enabled),
-      ads_skip_sec:        Number(body.ads?.skipSec || 5),
-
-      sec_embed_only:      bool(body.security?.embedOnly),
-      sec_cloudflare:      bool(body.security?.cloudflare),
-      sec_sandbox:         bool(body.security?.sandbox),
-      sec_referrer:        body.security?.referrer   || "strict-origin",
-      sec_hotlink_block:   bool(body.security?.hotlinkBlock),
-      sec_iframe_limit:    bool(body.security?.iframeLimit),
-
-      updated_at: timestamp
-    }
-
-    await db.prepare(`
-      UPDATE player_settings SET
-        default_server=?,server_priority=?,
-        autoplay=?,resume=?,autoswitch=?,auto_next=?,auto_next_delay=?,loop=?,mode=?,
-        skip_intro=?,skip_intro_sec=?,skip_outro=?,seek_seconds=?,
-        default_speed=?,remember_speed=?,remember_quality=?,
-        subtitle_enabled=?,subtitle_default=?,subtitle_size=?,
-        subtitle_color=?,subtitle_bg=?,subtitle_position=?,subtitle_langs=?,
-        audio_enabled=?,audio_default=?,audio_tracks=?,audio_normalize=?,
-        ui_servers=?,ui_download=?,ui_subscribe=?,ui_related=?,
-        ui_episodes=?,ui_share=?,ui_fullscreen=?,ui_pip=?,
-        ui_keyboard=?,ui_minibar=?,ui_progress_preview=?,ui_volume_mem=?,
-        ads_enabled=?,ads_skip_sec=?,
-        sec_embed_only=?,sec_cloudflare=?,sec_sandbox=?,
-        sec_referrer=?,sec_hotlink_block=?,sec_iframe_limit=?,
-        updated_at=?
-      WHERE id=1
-    `).bind(
-      row.default_server, row.server_priority,
-      row.autoplay, row.resume, row.autoswitch, row.auto_next, row.auto_next_delay, row.loop, row.mode,
-      row.skip_intro, row.skip_intro_sec, row.skip_outro, row.seek_seconds,
-      row.default_speed, row.remember_speed, row.remember_quality,
-      row.subtitle_enabled, row.subtitle_default, row.subtitle_size,
-      row.subtitle_color, row.subtitle_bg, row.subtitle_position, row.subtitle_langs,
-      row.audio_enabled, row.audio_default, row.audio_tracks, row.audio_normalize,
-      row.ui_servers, row.ui_download, row.ui_subscribe, row.ui_related,
-      row.ui_episodes, row.ui_share, row.ui_fullscreen, row.ui_pip,
-      row.ui_keyboard, row.ui_minibar, row.ui_progress_preview, row.ui_volume_mem,
-      row.ads_enabled, row.ads_skip_sec,
-      row.sec_embed_only, row.sec_cloudflare, row.sec_sandbox,
-      row.sec_referrer, row.sec_hotlink_block, row.sec_iframe_limit,
-      row.updated_at
-    ).run()
-
-    if (c.executionCtx?.waitUntil) {
-      c.executionCtx.waitUntil(syncToReplicas(c.env, row))
-    } else {
-      syncToReplicas(c.env, row)
-    }
-
-    return c.json(success({ saved: true, updated_at: timestamp }))
-
-  } catch (err) {
-    console.error("player POST:", err)
-    return c.json(failure(err.message), 500)
-  }
-})
-
-/* ================================================
-   POST /player/reset
-================================================ */
-
-app.post("/player/reset", async (c) => {
-  try {
-    const db = c.env.DB
-    const ts = now()
-    await ensureRow(db)
-
-    await db.prepare(`
-      UPDATE player_settings SET
-        default_server='Server 1',
-        server_priority='["Server 1","Server 2","Server 3"]',
-        autoplay=1,resume=1,autoswitch=1,auto_next=1,auto_next_delay=5,loop=0,
-        mode='responsive',
-        skip_intro=1,skip_intro_sec=85,skip_outro=1,seek_seconds=10,
-        default_speed='1',remember_speed=1,remember_quality=1,
-        subtitle_enabled=1,subtitle_default='Hindi',subtitle_size='medium',
-        subtitle_color='#ffffff',subtitle_bg='rgba(0,0,0,0.7)',
-        subtitle_position='bottom',
-        subtitle_langs='["Hindi","English","Japanese","Off"]',
-        audio_enabled=1,audio_default='Hindi Dubbed',
-        audio_tracks='["Hindi Dubbed","English Dubbed","Japanese Original"]',
-        audio_normalize=1,
-        ui_servers=1,ui_download=1,ui_subscribe=1,ui_related=1,
-        ui_episodes=1,ui_share=1,ui_fullscreen=1,ui_pip=1,
-        ui_keyboard=1,ui_minibar=1,ui_progress_preview=1,ui_volume_mem=1,
-        ads_enabled=0,ads_skip_sec=5,
-        sec_embed_only=0,sec_cloudflare=1,sec_sandbox=1,
-        sec_referrer='strict-origin',sec_hotlink_block=1,sec_iframe_limit=0,
-        updated_at=?
-      WHERE id=1
-    `).bind(ts).run()
-
-    return c.json(success({ reset: true, updated_at: ts }))
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-/* ================================================
    GET /player/public — for frontend watch page
 ================================================ */
 
@@ -453,4 +300,3 @@ app.get("/player/public", async (c) => {
 })
 
 export default app
-
