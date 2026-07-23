@@ -700,3 +700,4 @@ ads.post("/ads/bulk-assign", async (c) => {
 // ✅ FIX: export default correctly placed at true end of file
 //    (was mis-placed before nav-monetization routes — those routes were never registered)
 export default ads
+
