@@ -155,37 +155,13 @@ async function syncSupabase(env, action, data) {
   }
 }
 
-/* ================================================
-   PUBLIC ROUTES — must be BEFORE /:id
-================================================ */
-
-app.get("/categories/public", async (c) => {
-  try {
-    const db = c.env.DB
-    const { results } = await db.prepare(`
-      SELECT * FROM categories
-      WHERE active=1
-      ORDER BY priority ASC, category_order ASC
-    `).all()
-    return c.json(success((results || []).map(format)))
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-app.get("/categories/home", async (c) => {
-  try {
-    const db = c.env.DB
-    const { results } = await db.prepare(`
-      SELECT * FROM categories
-      WHERE active=1 AND show_home=1
-      ORDER BY priority ASC, category_order ASC
-    `).all()
-    return c.json(success((results || []).map(format)))
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
+/* ✅ FIX (audit ISSUE-021): removed dead duplicate routes GET /categories/public
+   and GET /categories/home. This file is only mounted under adminRoutes
+   (see index.js), so these were only ever reachable at
+   /api/admin/categories/public and /api/admin/categories/home — behind
+   admin auth, never actually serving the public site. public.js already
+   correctly and independently serves the real public versions of this
+   data (with KV caching) at /api/categories/public and /api/categories/home. */
 
 /* ================= CREATE ================= */
 
@@ -514,4 +490,3 @@ app.patch("/categories/:id/toggle", async (c) => {
 })
 
 export default app
-
