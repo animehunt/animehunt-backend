@@ -258,7 +258,14 @@ app.post("/deploy/backup", async (c) => {
     await ensureTables(db)
 
     const body = await c.req.json().catch(() => ({}))
-    const note = body.note || ""
+    // ✅ FIX (audit ISSUE-014/041): note is free-text admin input that flows
+    // into both an HTTP response header (Content-Disposition on download,
+    // see the fix above) and raw innerHTML in deploy-backup.html — neither
+    // context is safe for arbitrary text. Sanitize once here at the point
+    // of storage, in addition to (not instead of) escaping at each output
+    // site — a string safe to store isn't automatically safe in every
+    // future rendering context, and vice versa.
+    const note = String(body.note || "").replace(/[\r\n"<>]/g, "").slice(0, 300)
 
     // ✅ FIX (Lines 153, 178): Chunked reads — never loads full table into RAM at once
     const TABLES = [
@@ -449,11 +456,60 @@ app.post("/deploy/restore", async (c) => {
       { key: "search",      table: "search_settings" }
     ]
 
+    // ✅ FIX (audit ISSUE-002): cols came from Object.keys(item) with no
+    // validation — item originates from a stored deploy_backups row (not
+    // directly from the current request), so this is a second-order/stored
+    // risk rather than a first-order one, but it's still unguarded. Restrict
+    // to each table's known real columns (confirmed against schema.sql for
+    // seo_settings/security_settings/search_settings/servers, and against
+    // performance.js's own ensureRow() for performance_settings, since that
+    // table is created at runtime and isn't in the static schema file).
+    const GENERIC_RESTORE_COLUMNS = {
+      servers: [
+        "id","name","anime","anime_id","episode_id","season","episode",
+        "embed","type","priority","active","verified","fail_count",
+        "last_check","last_used","created_at","updated_at"
+      ],
+      seo_settings: [
+        "id","site_title","site_desc","site_keywords","canonical","indexing",
+        "home_title","home_desc","home_keywords","home_og",
+        "tpl_anime","tpl_category","tpl_episode","tpl_search","tpl_movie","tpl_cartoon",
+        "og_title","og_desc","tw_title","tw_desc","tw_card","schema_org",
+        "auto_meta","auto_sitemap","sitemap_freq","sitemap_priority",
+        "robots_index","robots_noindex","lang","updated_at"
+      ],
+      performance_settings: [
+        "id","lazyLoad","smartPreload","adaptiveLoad","mobilePriority",
+        "assetMinify","imgOptimize","jsOptimize","cssOptimize",
+        "smartCache","cdnMode","preconnect","bandwidth","http2Push","compression",
+        "cacheTTL","staticTTL","apiCacheTTL",
+        "imgQuality","imgWebP","imgResponsive","thumbWidth",
+        "cdnUrl","updated_at"
+      ],
+      security_settings: [
+        "id","firewall_level","core_bot","core_scraper","core_hotlink","core_embed",
+        "core_xss","core_csrf","core_sqli","rate_limit","rate_limit_req","rate_limit_window",
+        "rate_limit_ban","ddos_protect","ddos_threshold","ddos_block_time",
+        "admin_login_limit","admin_max_attempts","admin_lockout_min","session_monitor",
+        "geo_block","geo_blocked_countries","vpn_block","tor_block",
+        "ai_auto_ban","ai_threat_detect","ai_anomaly","ai_ban_threshold",
+        "hsts","csp","xframe","nosniff","updated_at"
+      ],
+      search_settings: [
+        "id","mode","debounce","ranking_mode","ranking_boost","ranking_weight",
+        "src_anime","src_episode","src_category","src_pages",
+        "smart_typo","smart_alias","smart_language",
+        "ui_max","ui_thumb","ui_group","ui_highlight",
+        "safe_mode","track_popular","seo_urls","cache_seconds","updated_at"
+      ]
+    }
+
     for (const { key, table } of genericRestoreMap) {
       for (const item of (data[key] || [])) {
         if (!item || typeof item !== "object") continue
         try {
-          const cols = Object.keys(item)
+          const allowed = GENERIC_RESTORE_COLUMNS[table] || []
+          const cols = Object.keys(item).filter(k => allowed.includes(k))
           if (!cols.length) continue
           const sql = `INSERT OR REPLACE INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`
           await db.prepare(sql).bind(...cols.map(k => item[k])).run()
@@ -510,10 +566,19 @@ app.get("/deploy/backup/:id/download", async (c) => {
 
     if (!row) return c.json(failure("Not found"), 404)
 
+    // ✅ FIX (audit ISSUE-014): row.name is admin-supplied free text (the
+    // "note" field on backup creation) interpolated directly into an HTTP
+    // response header with no sanitization — a name containing a double
+    // quote or CR/LF could inject additional headers into this response.
+    // Strip control characters and quotes; cap length defensively.
+    const safeName = String(row.name || "backup")
+      .replace(/[\r\n"]/g, "")
+      .slice(0, 200)
+
     return new Response(row.data, {
       headers: {
         "Content-Type":        "application/json",
-        "Content-Disposition": `attachment; filename="${row.name || "backup"}.json"`
+        "Content-Disposition": `attachment; filename="${safeName}.json"`
       }
     })
 
@@ -566,16 +631,22 @@ app.post("/deploy/version", async (c) => {
     const epCount    = await db.prepare("SELECT COUNT(*) as c FROM episodes").first()
 
     const id  = crypto.randomUUID()
-    const tag = body.tag || `v${Date.now().toString().slice(-6)}`
+    // ✅ FIX (audit ISSUE-014/041): same reasoning as POST /deploy/backup's
+    // note sanitization above — these three fields are admin free text that
+    // ends up rendered via innerHTML in deploy-backup.html's renderVersions()
+    // and could theoretically reach header contexts in future features.
+    const tag   = String(body.tag || `v${Date.now().toString().slice(-6)}`).replace(/[\r\n"<>]/g, "").slice(0, 50)
+    const vName = String(body.name  || `Version ${new Date().toLocaleDateString()}`).replace(/[\r\n"<>]/g, "").slice(0, 200)
+    const notes = String(body.notes || "").replace(/[\r\n"<>]/g, "").slice(0, 300)
 
     await db.prepare(`
       INSERT INTO deploy_versions (id,name,tag,notes,anime_count,ep_count,created_at)
       VALUES (?,?,?,?,?,?,?)
     `).bind(
       id,
-      body.name  || `Version ${new Date().toLocaleDateString()}`,
+      vName,
       tag,
-      body.notes || "",
+      notes,
       animeCount?.c || 0,
       epCount?.c    || 0,
       now()
@@ -589,4 +660,3 @@ app.post("/deploy/version", async (c) => {
 })
 
 export default app
-
