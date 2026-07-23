@@ -63,4 +63,5 @@ Checked directly against the code, not from memory:
 - Actually create the deploy user (Tier 1) and follow `DEPLOY_USER_SETUP.md`'s steps on your real VPS — I can't SSH in and do this part.
 - Get real Turso/Supabase/ImageKit credentials into a real `.env` — I only have placeholders.
 - Decide whether to point the per-route `syncToReplicas()` helpers at `TURSO_REPLICA_URL` (the DB3 follow-up mentioned last turn) — still open, say the word.
+
 - 
