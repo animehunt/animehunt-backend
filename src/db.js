@@ -502,4 +502,3 @@ export function getDB(env) {
 }
 
 export { tursoQuery, supabaseQuery, nowISO, ORIGIN_D1, ORIGIN_TURSO, ORIGIN_SUPABASE }
-
