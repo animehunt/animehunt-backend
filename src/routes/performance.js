@@ -411,22 +411,11 @@ app.get("/performance/score", async (c) => {
   }
 })
 
-/* ================================================
-   PUBLIC ROUTE — for frontend to read settings
-================================================ */
-
-app.get("/performance/public", async (c) => {
-  try {
-    const row = await c.env.DB.prepare(
-      "SELECT * FROM performance_settings WHERE id=1"
-    ).first()
-
-    if (!row) return c.json(success(formatRow(DEFAULTS)))
-    return c.json(success(formatRow(row)))
-
-  } catch (err) {
-    return c.json(success(formatRow(DEFAULTS)))
-  }
-})
+/* ✅ FIX (audit ISSUE-026, performance.js instance): removed dead
+   duplicate route GET /performance/public. This file is only mounted
+   under adminRoutes (see index.js), so it was only ever reachable at
+   /api/admin/performance/public — behind admin auth, never actually
+   serving the public site. public.js already correctly and independently
+   serves the real public version at /api/performance/public. */
 
 export default app
