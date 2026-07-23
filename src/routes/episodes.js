@@ -159,10 +159,13 @@ app.post("/episodes", async (c) => {
     const id        = crypto.randomUUID()
     const timestamp = now()
 
-    const maxSort = await db.prepare(
-      "SELECT COALESCE(MAX(sort_order),0) as m FROM episodes WHERE anime_id=?"
-    ).bind(String(body.anime_id)).first()
-
+    // ✅ FIX (audit ISSUE-024): sort_order was computed via a separate
+    // SELECT MAX(...) then used in a later INSERT — two non-atomic
+    // operations. Two concurrent POST /episodes requests for the same
+    // anime_id could both read the same maxSort before either INSERT
+    // committed, producing two episodes with the same sort_order (a
+    // display-ordering bug, not data loss). Computing sort_order via a
+    // subquery inside the INSERT itself makes it atomic.
     const row = {
       id,
       anime_id:    String(body.anime_id),
@@ -175,7 +178,6 @@ app.post("/episodes", async (c) => {
       servers:     toJSON(body.servers),
       ongoing:     body.ongoing  ? 1 : 0,
       featured:    body.featured ? 1 : 0,
-      sort_order:  (maxSort?.m || 0) + 1,
       created_at:  timestamp,
       updated_at:  timestamp
     }
@@ -185,14 +187,24 @@ app.post("/episodes", async (c) => {
         id,anime_id,anime_title,season,episode,
         title,description,thumbnail,servers,
         ongoing,featured,sort_order,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,
+        (SELECT COALESCE(MAX(sort_order),0)+1 FROM episodes WHERE anime_id=?),
+        ?,?)
     `).bind(
       row.id, row.anime_id, row.anime_title,
       row.season, row.episode, row.title, row.description,
       row.thumbnail, row.servers,
-      row.ongoing, row.featured, row.sort_order,
+      row.ongoing, row.featured,
+      row.anime_id,
       row.created_at, row.updated_at
     ).run()
+
+    // Fetch the sort_order the subquery actually assigned, for the
+    // replica sync payload below (syncToReplicas needs a concrete value).
+    const inserted = await db.prepare(
+      "SELECT sort_order FROM episodes WHERE id=?"
+    ).bind(row.id).first()
+    row.sort_order = inserted?.sort_order || 1
 
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
@@ -546,78 +558,14 @@ app.delete("/episodes/anime/:animeId", async (c) => {
   }
 })
 
-/* ================================================
-   PUBLIC ROUTES
-================================================ */
-
-app.get("/public/episodes/:animeId", async (c) => {
-  try {
-    const db      = c.env.DB
-    const animeId = c.req.param("animeId")
-    const season  = c.req.query("season") || ""
-
-    let query  = `SELECT id,season,episode,title,thumbnail,servers
-                  FROM episodes WHERE anime_id=?`
-    const args = [animeId]
-
-    if (season) { query += " AND season=?"; args.push(season) }
-    query += " ORDER BY CAST(season AS INTEGER) ASC, episode ASC"
-
-    const { results } = await db.prepare(query).bind(...args).all()
-
-    return c.json(success(
-      results.map(e => ({
-        id:        e.id,
-        season:    e.season,
-        episode:   e.episode,
-        title:     e.title,
-        thumbnail: e.thumbnail,
-        servers:   safeJSON(e.servers)
-      }))
-    ))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-app.get("/public/servers/:id", async (c) => {
-  try {
-    const db  = c.env.DB
-    const id  = c.req.param("id")
-    const row = await db.prepare(
-      "SELECT servers FROM episodes WHERE id=?"
-    ).bind(id).first()
-
-    if (!row) return c.json(success([]))
-
-    return c.json(success(
-      safeJSON(row.servers).map((url, i) => ({ index: i, url }))
-    ))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-app.get("/public/seasons/:animeId", async (c) => {
-  try {
-    const db      = c.env.DB
-    const animeId = c.req.param("animeId")
-
-    const { results } = await db.prepare(`
-      SELECT season, COUNT(*) as ep_count
-      FROM episodes
-      WHERE anime_id=?
-      GROUP BY season
-      ORDER BY CAST(season AS INTEGER) ASC
-    `).bind(animeId).all()
-
-    return c.json(success(results))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
+/* ✅ FIX (audit ISSUE-023): removed dead duplicate routes
+   GET /public/episodes/:animeId, GET /public/servers/:id, and
+   GET /public/seasons/:animeId. This file is only mounted under
+   adminRoutes (see index.js), so these were only ever reachable at
+   /api/admin/public/episodes/:animeId etc. — behind admin auth, never
+   actually serving the public watch page. public.js already correctly
+   and independently serves the real public versions of this data, using
+   a newer episode_id-based design for servers rather than this file's
+   older (:animeId, :season, :episode) composite-key approach. */
 
 export default app
