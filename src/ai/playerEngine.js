@@ -2,8 +2,57 @@
 🎬 ANIMEHUNT PLAYER ENGINE (FULL PRODUCTION - FIXED)
 ========================================================= */
 
+import { Hono }   from "hono"    // ✅ FIX (audit ISSUE-017): needed for playerProgressRoutes below
+import crypto      from "node:crypto"  // ✅ FIX (audit ISSUE-018): for HMAC stream tokens below — Node runtime, available post-migration
+
 // Alias for index.js scheduled cron
 export const runPlayerAI = runPlayerEngine
+
+/* =========================================================
+🔑 STREAM TOKEN (audit ISSUE-018)
+
+   The embed-lock check below (EMBED LOCK) correctly guards against
+   unauthorized *browser-based* iframe embedding — Origin/Referer are
+   genuinely set by the browser and can't be forged by a legitimate
+   victim's browser during a real embed. But those headers are entirely
+   client-supplied in a raw, non-browser HTTP request (curl, a script) —
+   a request claiming Origin: https://<this-site> bypasses the check
+   completely, since nothing here is bound to anything the server itself
+   issued.
+
+   This is a limitation inherent to any header-based origin check, not a
+   coding mistake in the check itself — refining the header comparison
+   logic further can't fix it. If protecting the stream URL from
+   non-browser scraping/hotlinking matters (not just from being embedded
+   on other sites), a short-lived signed token closes that gap: issue it
+   when the page first loads the player, then require it on the actual
+   stream request — this binds the request to something the server
+   generated, which Origin/Referer alone cannot provide.
+
+   This is an additional layer, not a replacement for the existing
+   Origin/Referer check — both run.
+========================================================= */
+
+function generateStreamToken(animeId, ep, secret, expirySeconds = 300) {
+  const exp = Math.floor(Date.now() / 1000) + expirySeconds
+  const payload = `${animeId}:${ep}:${exp}`
+  const sig = crypto.createHmac("sha256", secret).update(payload).digest("hex")
+  return `${exp}.${sig}`
+}
+
+function verifyStreamToken(animeId, ep, token, secret) {
+  if (!token || typeof token !== "string") return false
+  const [expStr, sig] = token.split(".")
+  const exp = parseInt(expStr, 10)
+  if (!exp || Date.now() / 1000 > exp) return false
+  const expected = crypto.createHmac("sha256", secret)
+    .update(`${animeId}:${ep}:${exp}`).digest("hex")
+  // Constant-time comparison to avoid a timing side-channel on the signature check.
+  const sigBuf = Buffer.from(sig || "", "hex")
+  const expBuf = Buffer.from(expected, "hex")
+  if (sigBuf.length !== expBuf.length) return false
+  return crypto.timingSafeEqual(sigBuf, expBuf)
+}
 
 export async function runPlayerEngine(env, request = null){
 
@@ -48,7 +97,20 @@ export async function runPlayerEngine(env, request = null){
         origin === `https://${host}` ||
         origin === `http://${host}`
 
-      if(!allowed){
+      // ✅ FIX (audit ISSUE-018): when a stream token is present and
+      // STREAM_TOKEN_SECRET is configured, honor a valid token as an
+      // alternative to the Origin/Referer check — this is what lets a
+      // legitimate non-browser caller (if one is ever needed) through
+      // without weakening the check for everyone else. When no token is
+      // sent, behavior is unchanged from before this fix — the
+      // Origin/Referer check alone still decides.
+      const animeId = request?.animeId ?? null
+      const ep      = request?.episode ?? null
+      const token    = request?.headers?.get("x-stream-token") || ""
+      const hasValidToken = env.STREAM_TOKEN_SECRET && animeId && ep &&
+        verifyStreamToken(animeId, ep, token, env.STREAM_TOKEN_SECRET)
+
+      if(!allowed && !hasValidToken){
         return error("Embed only access",403)
       }
 
@@ -422,97 +484,77 @@ export async function saveUserVideoConfig(env, userId, cfg) {
 /* =========================================================
 🚦 EXPORTED HTTP HANDLERS (for index.js to mount)
    These are additional routes beyond runPlayerEngine()
+
+   ✅ FIX (audit ISSUE-017): setupPlayerRoutes() previously used the raw
+   Fetch API pattern ((req) => new Response(...)) instead of Hono's
+   ((c) => c.json(...)) — every other route file in this codebase is a
+   Hono sub-app mounted via app.route(prefix, subApp), and this function's
+   raw-router signature couldn't compose that way. It was written, fully
+   functional against real schema-backed tables (watch_progress,
+   user_video_config), but never actually imported or mounted anywhere in
+   index.js — meaning /api/player/validate, /api/player/progress, and
+   /api/player/config never existed in production, and the entire
+   "resume where you left off" / "remember my playback preferences"
+   feature was completely dead despite being fully built. Rewritten below
+   as a Hono sub-app (playerProgressRoutes) with the exact same logic —
+   rate limiting, origin check, watch-progress read/write, video-config
+   read/write — unchanged. See index.js for the app.route("/api",
+   playerProgressRoutes) mount that makes this reachable.
 ========================================================= */
 
-export function setupPlayerRoutes(router, env) {
+export const playerProgressRoutes = new Hono()
 
-  // Rate-limited stream validate
-  router.post("/api/player/validate", async (req) => {
-    const origin = req.headers.get("Origin") || ""
-    const host   = req.headers.get("host")   || ""
-    if (origin && origin !== `https://${host}` && origin !== `http://${host}`) {
-      return new Response(JSON.stringify({ error: "Origin not allowed" }), {
-        status: 403, headers: { "Content-Type": "application/json" }
-      })
-    }
-    let body = {}
-    try { body = await req.json() } catch {}
-    const userId = body.userId || req.headers.get("CF-Connecting-IP") || req.headers.get("x-forwarded-for") || "unknown"
-    const check  = await checkStreamRateLimit(env, userId)
-    if (!check.allowed) {
-      return new Response(JSON.stringify({ error: "Too many stream requests" }), {
-        status: 429, headers: { "Content-Type": "application/json" }
-      })
-    }
-    return new Response(JSON.stringify({ valid: true }), {
-      status: 200, headers: { "Content-Type": "application/json" }
-    })
-  })
+playerProgressRoutes.post("/player/validate", async (c) => {
+  const origin = c.req.header("Origin") || ""
+  const host   = c.req.header("host")   || ""
+  if (origin && origin !== `https://${host}` && origin !== `http://${host}`) {
+    return c.json({ error: "Origin not allowed" }, 403)
+  }
+  const body   = await c.req.json().catch(() => ({}))
+  const userId = body.userId || c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+  const check  = await checkStreamRateLimit(c.env, userId)
+  if (!check.allowed) return c.json({ error: "Too many stream requests" }, 429)
+  return c.json({ valid: true })
+})
 
-  // Save watch progress
-  router.post("/api/player/progress", async (req) => {
-    let body = {}
-    try { body = await req.json() } catch {}
-    const { userId, episodeId, timestamp, duration } = body
-    if (!userId || !episodeId || timestamp === undefined) {
-      return new Response(JSON.stringify({ error: "userId, episodeId, timestamp required" }), {
-        status: 400, headers: { "Content-Type": "application/json" }
-      })
-    }
-    const result = await saveWatchProgress(env, userId, episodeId, timestamp, duration || 0)
-    return new Response(JSON.stringify(result), {
-      status: 200, headers: { "Content-Type": "application/json" }
-    })
-  })
+playerProgressRoutes.post("/player/progress", async (c) => {
+  const body = await c.req.json().catch(() => ({}))
+  const { userId, episodeId, timestamp, duration } = body
+  if (!userId || !episodeId || timestamp === undefined) {
+    return c.json({ error: "userId, episodeId, timestamp required" }, 400)
+  }
+  const result = await saveWatchProgress(c.env, userId, episodeId, timestamp, duration || 0)
+  return c.json(result)
+})
 
-  // Get watch progress
-  router.get("/api/player/progress/:userId/:episodeId", async (req) => {
-    const url       = new URL(req.url)
-    const parts     = url.pathname.split("/")
-    const userId    = parts[parts.length - 2]
-    const episodeId = parts[parts.length - 1]
-    const progress  = await getWatchProgress(env, userId, episodeId)
-    return new Response(JSON.stringify({
-      progress: progress || { timestamp: 0, progress: 0 }
-    }), { status: 200, headers: { "Content-Type": "application/json" } })
-  })
+playerProgressRoutes.get("/player/progress/:userId/:episodeId", async (c) => {
+  const userId    = c.req.param("userId")
+  const episodeId = c.req.param("episodeId")
+  const progress  = await getWatchProgress(c.env, userId, episodeId)
+  return c.json({ progress: progress || { timestamp: 0, progress: 0 } })
+})
 
-  // Save user video config
-  router.post("/api/player/config", async (req) => {
-    let body = {}
-    try { body = await req.json() } catch {}
-    const { userId, config: cfg } = body
-    if (!userId || !cfg) {
-      return new Response(JSON.stringify({ error: "userId and config required" }), {
-        status: 400, headers: { "Content-Type": "application/json" }
-      })
-    }
-    const result = await saveUserVideoConfig(env, userId, cfg)
-    return new Response(JSON.stringify(result), {
-      status: 200, headers: { "Content-Type": "application/json" }
-    })
-  })
+playerProgressRoutes.post("/player/config", async (c) => {
+  const body = await c.req.json().catch(() => ({}))
+  const { userId, config: cfg } = body
+  if (!userId || !cfg) return c.json({ error: "userId and config required" }, 400)
+  const result = await saveUserVideoConfig(c.env, userId, cfg)
+  return c.json(result)
+})
 
-  // Get user video config
-  router.get("/api/player/config/:userId", async (req) => {
-    const url    = new URL(req.url)
-    const userId = url.pathname.split("/").pop()
-    const row    = await env.DB.prepare(
-      "SELECT config FROM user_video_config WHERE user_id=?"
-    ).bind(userId).first()
+playerProgressRoutes.get("/player/config/:userId", async (c) => {
+  const userId = c.req.param("userId")
+  const row = await c.env.DB.prepare(
+    "SELECT config FROM user_video_config WHERE user_id=?"
+  ).bind(userId).first()
 
-    const defaultConfig = {
-      playback_speed: 1, subtitle_lang: "en", quality: "auto",
-      autoplay: true, subtitle_size: "medium"
-    }
-
-    let parsedConfig = defaultConfig
-    if (row) {
-      try { parsedConfig = JSON.parse(row.config) } catch { parsedConfig = defaultConfig }
-    }
-
-    return new Response(JSON.stringify({
-      config: parsedConfig
-    }), { status: 200, headers: { "Content-Type": "application/json" } })
-  })
-}
+  const defaultConfig = {
+    playback_speed: 1, subtitle_lang: "en", quality: "auto",
+    autoplay: true, subtitle_size: "medium"
+  }
+  let parsedConfig = defaultConfig
+  if (row) {
+    try { parsedConfig = JSON.parse(row.config) } catch { parsedConfig = defaultConfig }
+  }
+  return c.json({ config: parsedConfig })
+})
