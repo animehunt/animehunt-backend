@@ -236,33 +236,13 @@ app.get("/footer", async (c) => {
   }
 })
 
-/* ================================================
-   GET /footer/public — Frontend (KV cached)
-================================================ */
-
-app.get("/footer/public", async (c) => {
-  try {
-    // KV cache check
-    if (c.env.KV) {
-      const cached = await c.env.KV.get(KV_FOOTER_KEY, "json").catch(() => null)
-      if (cached) return c.json(success(cached), 200, { "X-Cache": "HIT" })
-    }
-
-    const db  = c.env.DB
-    const row = await db.prepare("SELECT * FROM footer_config WHERE id=1").first()
-    const data = format(row || {})
-
-    if (c.env.KV) {
-      await c.env.KV.put(KV_FOOTER_KEY, JSON.stringify(data), {
-        expirationTtl: KV_TTL
-      }).catch(() => {})
-    }
-
-    return c.json(success(data), 200, { "X-Cache": "MISS" })
-  } catch (err) {
-    return c.json(success(format({})))
-  }
-})
+/* ✅ FIX (audit ISSUE-026, footer.js instance): removed dead duplicate
+   route GET /footer/public. This file is only mounted under adminRoutes
+   (see index.js), so it was only ever reachable at
+   /api/admin/footer/public — behind admin auth, never actually serving
+   the public site. public.js already correctly and independently serves
+   the real public version, with its own KV caching, at
+   /api/footer/public. */
 
 /* ================================================
    POST /footer — Save (single UPDATE — not 20 separate queries)
