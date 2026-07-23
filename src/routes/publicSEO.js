@@ -367,8 +367,15 @@ app.get("/api/seo/meta/:animeId", async (c) => {
     }
 
     // Fallback: generate from anime table
+    // ✅ FIX (audit ISSUE-032): added is_hidden=0 — this file's own sitemap
+    // routes (GET /api/seo/sitemap) correctly check both is_hidden=0 AND
+    // active=1, but this metadata fallback only checked active=1. Matching
+    // the pairing used consistently everywhere else in this codebase
+    // (public.js, publicSearch.js, recommendations.js, trending.js) so a
+    // hidden anime's OG/Twitter meta can't be generated even when the
+    // exact animeId/slug is known directly.
     const anime = await db.prepare(
-      "SELECT id, title, slug, description, poster, banner, rating, year, type, genres, language FROM anime WHERE (id=? OR slug=?) AND active=1 LIMIT 1"
+      "SELECT id, title, slug, description, poster, banner, rating, year, type, genres, language FROM anime WHERE (id=? OR slug=?) AND active=1 AND is_hidden=0 LIMIT 1"
     ).bind(animeId, animeId).first()
 
     if (!anime) return c.json(fail("Not found"), 404)
@@ -427,8 +434,10 @@ app.get("/api/seo/schema/:animeId", async (c) => {
   const animeId = c.req.param("animeId")
 
   try {
+    // ✅ FIX (audit ISSUE-032): same is_hidden=0 addition as the /seo/meta
+    // route above.
     const anime = await db.prepare(
-      "SELECT id, title, slug, description, poster, rating, year, type, genres, language FROM anime WHERE (id=? OR slug=?) AND active=1 LIMIT 1"
+      "SELECT id, title, slug, description, poster, rating, year, type, genres, language FROM anime WHERE (id=? OR slug=?) AND active=1 AND is_hidden=0 LIMIT 1"
     ).bind(animeId, animeId).first()
 
     if (!anime) return c.json(fail("Not found"), 404)
