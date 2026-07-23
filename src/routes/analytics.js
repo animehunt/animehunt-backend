@@ -106,11 +106,14 @@ app.post("/api/track/banner", async (c) => {
       VALUES ('banner', ?, ?, datetime('now'))
     `).bind(body.banner_id || null, body.slug || null).run()
 
-    if (body.banner_id) {
-      await db.prepare(
-        "UPDATE banners SET clicks=COALESCE(clicks,0)+1 WHERE id=?"
-      ).bind(body.banner_id).run().catch(() => {})
-    }
+    // ✅ FIX (audit ISSUE-025): removed "UPDATE banners SET clicks=..." —
+    // no "clicks" column exists on the banners table (confirmed against
+    // schema.sql), so this always threw and was silently swallowed by the
+    // .catch(() => {}) below, never actually recording anything.
+    // banner_clicks (written via bannersPublic.js's POST
+    // /banners/:id/click, now correctly mounted publicly) is the real,
+    // working destination for this data.
+
     return c.json(ok())
   } catch { return c.json(ok()) }
 })
@@ -230,5 +233,61 @@ app.get("/api/admin/analytics/export", async (c) => {
   }
 })
 
-export default app
+/* ================================================
+   GET /api/admin/analytics/summary — monetization stats
+   for ads.html's stats bar
 
+   ✅ NEW ROUTE (audit ISSUE-038): ads.html's loadStats() has always called
+   this exact path, but it never existed — the only related route
+   (GET /api/admin/analytics) computes entirely different metrics (page
+   views, visitor counts) and never touches the monetization tables at
+   all. All 10 stat cards at the top of the Ads admin page permanently
+   showed "—".
+
+   Note on scope: only ads_library.clicks and download_host_entries.clicks
+   are real columns (confirmed against schema.sql) — popup_library,
+   shortlinks_library, and redirect_library have no click-tracking column
+   at all, so popup_opens/shortlink_clicks/redirect_clicks will report 0
+   here until those tables get a real clicks column added via migration,
+   plus tracking code wired in wherever those items are actually served/
+   clicked on the public site (a larger feature gap beyond this endpoint).
+   Same for verify_clicks/page_ad_views/page_ad_clicks — nothing in this
+   codebase currently writes analytics_views rows with those `type`
+   values, so those three also report 0 until that tracking is added.
+================================================ */
+
+app.get("/api/admin/analytics/summary", async (c) => {
+  const db = c.env.DB
+  try {
+    const [hostClicks, downloads, knightDownloads, verifyClicks, popupOpens,
+           shortlinkClicks, redirectClicks, adClicks, pageAdViews, pageAdClicks] = await Promise.all([
+      db.prepare(`SELECT COALESCE(SUM(clicks),0) as v FROM download_host_entries`).first(),
+      db.prepare(`SELECT COUNT(*) as v FROM analytics_downloads`).first(),
+      db.prepare(`SELECT COALESCE(SUM(clicks),0) as v FROM download_host_entries WHERE knight=1`).first().catch(() => ({v:0})),
+      db.prepare(`SELECT COUNT(*) as v FROM analytics_views WHERE type='verify'`).first().catch(() => ({v:0})),
+      db.prepare(`SELECT COALESCE(SUM(clicks),0) as v FROM popup_library`).first().catch(() => ({v:0})),
+      db.prepare(`SELECT COALESCE(SUM(clicks),0) as v FROM shortlinks_library`).first().catch(() => ({v:0})),
+      db.prepare(`SELECT COALESCE(SUM(clicks),0) as v FROM redirect_library`).first().catch(() => ({v:0})),
+      db.prepare(`SELECT COALESCE(SUM(clicks),0) as v FROM ads_library`).first(),
+      db.prepare(`SELECT COUNT(*) as v FROM analytics_views WHERE type='page_ad_view'`).first().catch(() => ({v:0})),
+      db.prepare(`SELECT COUNT(*) as v FROM analytics_views WHERE type='page_ad_click'`).first().catch(() => ({v:0})),
+    ])
+
+    return c.json(ok({
+      host_clicks:      hostClicks?.v      || 0,
+      downloads:        downloads?.v       || 0,
+      knight_downloads: knightDownloads?.v || 0,
+      verify_clicks:    verifyClicks?.v    || 0,
+      popup_opens:      popupOpens?.v      || 0,
+      shortlink_clicks: shortlinkClicks?.v || 0,
+      redirect_clicks:  redirectClicks?.v  || 0,
+      ad_clicks:        adClicks?.v        || 0,
+      page_ad_views:    pageAdViews?.v     || 0,
+      page_ad_clicks:   pageAdClicks?.v    || 0,
+    }))
+  } catch (err) {
+    return c.json(fail(err.message), 500)
+  }
+})
+
+export default app
