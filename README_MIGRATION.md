@@ -120,4 +120,3 @@ Also ran a bracket-depth-aware scan of all 367 static `.prepare(sql).bind(args)`
 9. Follow `deploy/DEPLOY_USER_SETUP.md` on your real VPS, then deploy, smoke-test auth + a few read/write routes, then cut DNS over. Keep the Workers deployment as a rollback path for a week or two.
 
 **Everything above this list is code/config, and it's done.** Items 2, 3, 4, 8, and 9 are the ones that only happen on your actual server — no amount of further code from me closes those out, they need your hands on the real VPS.
-
