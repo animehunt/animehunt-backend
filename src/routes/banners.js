@@ -137,46 +137,12 @@ async function syncSupabase(env, action, data) {
   }
 }
 
-/* ================================================
-   PUBLIC ROUTES — MUST be before /:id
-================================================ */
-
-/* GET active banners (for frontend) */
-app.get("/banners/public", async (c) => {
-  try {
-    const db       = c.env.DB
-    const page     = c.req.query("page")     || ""
-    const position = c.req.query("position") || ""
-    const category = c.req.query("category") || ""
-
-    let query    = "SELECT * FROM banners WHERE active=1"
-    const params = []
-
-    if (page)     { query += " AND page=?";     params.push(page) }
-    if (position) { query += " AND position=?"; params.push(position) }
-    if (category) {
-      query += " AND (category=? OR category='')"
-      params.push(category)
-    }
-
-    query += " ORDER BY banner_order ASC"
-
-    const { results } = await db.prepare(query).bind(...params).all()
-
-    return c.json(success(results.map(b => ({
-      id:       b.id,
-      title:    b.title,
-      image:    b.image,
-      link:     b.link,
-      page:     b.page,
-      position: b.position,
-      rotate:   !!b.auto_rotate
-    }))))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
+/* ✅ FIX (audit ISSUE-021, banners.js instance): removed dead duplicate
+   route GET /banners/public. This file is only mounted under adminRoutes
+   (see index.js), so this was only ever reachable at
+   /api/admin/banners/public — behind admin auth, never actually serving
+   the public site. public.js already correctly and independently serves
+   the real public version, with KV caching, at /api/banners/public. */
 
 /* ================= CREATE ================= */
 
@@ -192,12 +158,16 @@ app.post("/banners", async (c) => {
     if (err) return c.json(failure(err), 400)
 
     /* Auto order */
+    // ✅ FIX (audit ISSUE-024, banners.js instance): same non-atomic
+    // read-then-write race as episodes.js's sort_order — two concurrent
+    // banner creates without an explicit order could both read the same
+    // MAX(banner_order) before either INSERT commits. Scoped to only the
+    // auto-append path below; the explicit-order path (the else branch)
+    // is a different, multi-row renumbering operation that a single
+    // subquery can't replace.
     let order = Number(body.order)
     if (!order || order < 1) {
-      const last = await db.prepare(
-        "SELECT MAX(banner_order) as max FROM banners"
-      ).first()
-      order = (last?.max || 0) + 1
+      order = null  // signal to the INSERT below to compute it atomically
     } else {
       /* Shift others down */
       await db.prepare(`
@@ -218,7 +188,7 @@ app.post("/banners", async (c) => {
       title:        body.title.trim(),
       image:        body.image.trim(),
       link:         body.link      || "",
-      banner_order: order,
+      banner_order: order,  // may be null here — resolved atomically by the INSERT below
       active:       body.active !== false ? 1 : 0,
       auto_rotate:  bool(body.rotate),
       created_at:   timestamp,
@@ -229,13 +199,26 @@ app.post("/banners", async (c) => {
       INSERT INTO banners (
         id,page,category,position,title,image,link,
         banner_order,active,auto_rotate,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,
+        COALESCE(?, (SELECT COALESCE(MAX(banner_order),0)+1 FROM banners)),
+        ?,?,?,?)
     `).bind(
       row.id, row.page, row.category, row.position,
       row.title, row.image, row.link,
-      row.banner_order, row.active, row.auto_rotate,
+      row.banner_order,
+      row.active, row.auto_rotate,
       row.created_at, row.updated_at
     ).run()
+
+    // Fetch the banner_order the INSERT actually assigned (needed if it
+    // was null and resolved by the COALESCE subquery above), for the
+    // replica sync payload.
+    if (row.banner_order === null) {
+      const inserted = await db.prepare(
+        "SELECT banner_order FROM banners WHERE id=?"
+      ).bind(row.id).first()
+      row.banner_order = inserted?.banner_order || 1
+    }
 
     if (c.executionCtx?.waitUntil) {
       c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
@@ -449,32 +432,12 @@ app.post("/banners/reorder", async (c) => {
    Blueprint §2 Item 3 — track clicks on each banner
 ────────────────────────────────────────────────────────────────────────────── */
 
-app.post("/banners/:id/click", async (c) => {
-  try {
-    const db  = c.env.DB
-    const id  = c.req.param("id")
-    const ip  = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
-
-    const banner = await db.prepare(
-      "SELECT id, link FROM banners WHERE id=?"
-    ).bind(id).first()
-
-    if (!banner) return c.json(failure("Banner not found"), 404)
-
-    // Record click
-    await db.prepare(
-      "INSERT INTO banner_clicks (banner_id, ip, clicked_at) VALUES (?, ?, datetime('now'))"
-    ).bind(id, ip).run()
-
-    return c.json(success({
-      clicked:     true,
-      redirectUrl: banner.link || null
-    }))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
+/* ✅ FIX (audit ISSUE-025): moved to bannersPublic.js, which is mounted
+   publicly — see index.js. Kept in exactly one place to avoid the
+   copy-drift problem the audit found between categories.js's dead
+   duplicate and public.js's real version (they'd quietly diverged over
+   time). This admin-only file no longer needs its own copy since the
+   click route was never meant to require admin auth in the first place. */
 
 /* ── BANNER STATS (batch fetch — avoids loop await bug) ────────────────────
    GET /banners/stats?ids=id1,id2,id3
