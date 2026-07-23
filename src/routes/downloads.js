@@ -52,7 +52,11 @@ downloads.get("/public/download-hosts", async (c) => {
 /* GET /api/public/anime/:id — anime hero info (title, poster, banner, meta) */
 downloads.get("/public/anime/:id", async (c) => {
   const db = c.env.DB
-  const id = parseInt(c.req.param("id"))
+  // ✅ FIX (audit ISSUE-031): anime.id is TEXT (crypto.randomUUID()), not an
+  // integer — parseInt() on a UUID string always returns NaN or a truncated
+  // garbage number, so this route could never find a real anime created
+  // through the normal admin flow.
+  const id = c.req.param("id")
   try {
     const row = await db.prepare(
       "SELECT id, title, poster, banner, type, genres, status, year, rating, description FROM anime WHERE id=?"
@@ -67,7 +71,8 @@ downloads.get("/public/anime/:id", async (c) => {
 /* GET /api/public/download-structure — seasons list + anime type for download.html */
 downloads.get("/public/download-structure", async (c) => {
   const db       = c.env.DB
-  const anime_id = parseInt(c.req.query("anime_id"))
+  // ✅ FIX (audit ISSUE-031): same anime.id TEXT/UUID issue as above.
+  const anime_id = c.req.query("anime_id")
   if (!anime_id) return fail(c, "anime_id required")
   try {
     const anime = await db.prepare("SELECT id, type FROM anime WHERE id=?").bind(anime_id).first()
@@ -337,7 +342,10 @@ downloads.get("/downloads/stats", async (c) => {
 /* GET /api/admin/downloads/structure/:anime_id */
 downloads.get("/downloads/structure/:anime_id", async (c) => {
   const db       = c.env.DB
-  const anime_id = parseInt(c.req.param("anime_id"))
+  // ✅ FIX (audit ISSUE-031): anime.id is TEXT/UUID — parseInt() here broke
+  // every click into an anime's download structure from downloads.html,
+  // since it always produced NaN against a real anime UUID.
+  const anime_id = c.req.param("anime_id")
   try {
     const anime = await db.prepare("SELECT id, title, type FROM anime WHERE id=?").bind(anime_id).first()
     if (!anime) return fail(c, "Anime not found", 404)
@@ -573,7 +581,13 @@ downloads.post("/bulk-upload/download-links", async (c) => {
       if (!row.length || row.every(v => v === "")) continue
 
       try {
-        const anime_id       = parseInt(row[iAnime])
+        // ✅ FIX (audit ISSUE-031): anime.id is TEXT/UUID — parseInt() here
+        // turned every valid UUID into NaN, so the "if (!anime_id...)" check
+        // just below always failed and every CSV row got skipped as
+        // "missing required fields," even when the CSV correctly contained
+        // a real anime_id. host_id is correctly left as parseInt() — it's a
+        // genuine INTEGER PRIMARY KEY on download_host_entries/hosts.
+        const anime_id       = row[iAnime]
         const content_type   = row[iType] || "episode"
         const season         = iSeason >= 0 && row[iSeason] ? parseInt(row[iSeason]) : null
         const episode        = iEp     >= 0 && row[iEp]     ? parseInt(row[iEp])     : null
@@ -834,4 +848,3 @@ downloads.delete("/downloads/broken/:id", async (c) => {
 })
 
 export default downloads
-
