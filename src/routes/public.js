@@ -411,8 +411,15 @@ app.get("/api/categories/public", async (c) => {
       if (cached) return c.json(ok(cached))
     }
 
+    // ✅ FIX (audit ISSUE-030): icon/color are not real columns on
+    // categories (confirmed against schema.sql) — this query always threw
+    // "no such column: icon", caught by the try/catch below and returned
+    // as a 500, meaning this endpoint never actually worked. categories.html
+    // (the only admin UI for this table) has no icon/color fields anywhere,
+    // confirming these were never a real feature — removed rather than added
+    // to the schema.
     const { results } = await c.env.DB.prepare(`
-      SELECT id, name, slug, icon, color, category_order
+      SELECT id, name, slug, category_order
       FROM categories
       WHERE active=1
       ORDER BY category_order ASC, priority DESC
@@ -432,8 +439,9 @@ app.get("/api/categories/public", async (c) => {
 
 app.get("/api/categories/home", async (c) => {
   try {
+    // ✅ FIX (audit ISSUE-030): same icon/color removal as above.
     const { results } = await c.env.DB.prepare(`
-      SELECT id, name, slug, icon, color
+      SELECT id, name, slug, category_order
       FROM categories
       WHERE active=1 AND show_home=1
       ORDER BY category_order ASC
@@ -691,4 +699,3 @@ app.get("/api/system/health", async (c) => {
 ============================================================ */
 
 export default app
-
