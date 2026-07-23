@@ -57,6 +57,23 @@ const SYNC_TABLES = [
   "sync_dead_letter", "sync_audit_log", "sync_checksums"
 ]
 
+// ✅ FIX (audit ISSUE-011): /db/replay-events and /db/dead-letter/retry both
+// execute event.sql — a raw SQL string read back from sync_event_log /
+// sync_dead_letter — via db.prepare(event.sql).bind(...args).run() with no
+// validation. Any row that ever lands in that table with attacker-influenced
+// sql/args_json content becomes a live, re-executable SQL payload. This check
+// restricts replay to write statements against a known table before execution.
+function isSafeToReplay(sql) {
+  if (typeof sql !== "string") return false
+  const clean = sql.trim().toUpperCase()
+  const isWriteStmt = /^(INSERT|UPDATE|DELETE)\b/.test(clean)
+  if (!isWriteStmt) return false
+
+  const match = sql.match(/(?:INTO|UPDATE|FROM)\s+([`"]?[\w]+[`"]?)/i)
+  const table = match ? match[1].replace(/[`"]/g, "") : null
+  return table && ALL_TABLES.includes(table)
+}
+
 /* ─────────────────────────────────────────────────────────────
    HELPERS: FETCH from each source
 ───────────────────────────────────────────────────────────── */
@@ -737,6 +754,15 @@ router.post("/db/snapshot/restore", async (c) => {
     return c.json({ success: false, error: "key required" }, 400)
   }
 
+  // ✅ FIX (audit ISSUE-012): key was passed straight to env.R2_BUCKET.get(key)
+  // with no check it's actually one of our own snapshot objects — any key in
+  // the bucket could be fetched, parsed as a snapshot, and bulk-written into
+  // the live database. Snapshots are always created under snapshots/ (see
+  // snapshotToR2 below) — enforce that prefix and reject traversal sequences.
+  if (!key.startsWith("snapshots/") || key.includes("..")) {
+    return c.json({ success: false, error: "Invalid snapshot key" }, 400)
+  }
+
   const result = await restoreFromR2(
     c.env, key,
     targets || ["d1", "turso", "supabase"]
@@ -772,6 +798,23 @@ router.get("/db/snapshots", async (c) => {
 router.post("/db/reconcile", async (c) => {
   const body   = await c.req.json().catch(() => ({}))
   const tables = body.tables || ALL_TABLES
+
+  // ✅ FIX (audit ISSUE-001): body.tables was used directly as a table name in
+  // raw SQL (SELECT * FROM ${table}) inside reconcileTable() with no allowlist
+  // check — any authenticated admin could pass a crafted string as "table" and
+  // have it interpolated into three separate SQL execution paths (D1/Turso
+  // primary, Turso replica, Supabase). Validate against the same ALL_TABLES
+  // allowlist every other route in this file already uses.
+  if (body.tables) {
+    const invalid = tables.filter(t => !ALL_TABLES.includes(t))
+    if (invalid.length) {
+      return c.json({
+        success: false,
+        message: `Invalid table name(s): ${invalid.join(", ")}`
+      }, 400)
+    }
+  }
+
   const report = []
 
   for (const table of tables) {
@@ -813,6 +856,13 @@ router.post("/db/replay-events", async (c) => {
 
     for (const event of (events || [])) {
       try {
+        // ✅ FIX (audit ISSUE-011): reject any event whose stored SQL doesn't
+        // match a known write statement against an allowlisted table, before
+        // ever executing it — see isSafeToReplay() above.
+        if (!isSafeToReplay(event.sql)) {
+          throw new Error(`Refusing to replay unsafe/unrecognized SQL for event ${event.event_id}`)
+        }
+
         const args = JSON.parse(event.args_json || "[]")
 
         // Write to all three targets
@@ -824,7 +874,12 @@ router.post("/db/replay-events", async (c) => {
           }
         }
 
-        if (event.origin !== ORIGIN_TURSO) {
+        // ✅ FIX (audit ISSUE-013): TURSO_REPLICA_URL is optional/unset on a
+        // fresh install per .env.example — calling .replace() on it threw,
+        // silently inflating the "failed" count for every event instead of
+        // clearly skipping the unconfigured replica, inconsistent with the
+        // explicit guard bulkWriteToTurso() already uses elsewhere in this file.
+        if (event.origin !== ORIGIN_TURSO && c.env.TURSO_REPLICA_URL && c.env.TURSO_REPLICA_AUTH_TOKEN) {
           // MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — same
           // reasoning as fetchAllFromTurso/bulkWriteToTurso above.
           const httpUrl = c.env.TURSO_REPLICA_URL.replace("libsql://", "https://")
@@ -936,11 +991,22 @@ router.post("/db/dead-letter/retry", async (c) => {
       if (!event) { failed++; continue }
 
       try {
+        // ✅ FIX (audit ISSUE-011): same validation as /db/replay-events —
+        // reject any dead-letter item whose stored SQL doesn't match a known
+        // write statement against an allowlisted table before executing it.
+        if (!isSafeToReplay(event.sql)) {
+          throw new Error(`Refusing to retry unsafe/unrecognized SQL for event ${event.event_id}`)
+        }
+
         const args = JSON.parse(event.args_json || "[]")
 
         // Try to re-apply
         await c.env.DB.prepare(event.sql).bind(...args).run().catch(() => null)
 
+        // ✅ FIX (audit ISSUE-013): guard against TURSO_REPLICA_URL being unset
+        // (the documented default for a fresh install) — see the matching fix
+        // in /db/replay-events above for full reasoning.
+        if (c.env.TURSO_REPLICA_URL && c.env.TURSO_REPLICA_AUTH_TOKEN) {
         // MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — same
         // reasoning as fetchAllFromTurso/bulkWriteToTurso above.
         const httpUrl = c.env.TURSO_REPLICA_URL.replace("libsql://", "https://")
@@ -967,6 +1033,7 @@ router.post("/db/dead-letter/retry", async (c) => {
             ]
           })
         }).catch(() => null)
+        }
 
         // Remove from dead letter
         await c.env.DB.prepare(
