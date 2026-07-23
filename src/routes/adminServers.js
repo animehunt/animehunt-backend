@@ -146,57 +146,16 @@ async function syncSupabase(env, action, data) {
   }
 }
 
-/* ================================================
-   PUBLIC ROUTES — before /:id
-================================================ */
-
-/* Public: get servers for episode (frontend watch page) */
-app.get("/servers/public/:animeId/:season/:episode", async (c) => {
-  try {
-    const db      = c.env.DB
-    const animeId = c.req.param("animeId")
-    const season  = c.req.param("season")
-    const episode = c.req.param("episode")
-
-    const { results } = await db.prepare(`
-      SELECT id,name,embed,type,priority
-      FROM servers
-      WHERE (anime_id=? OR anime=?)
-        AND season=?
-        AND episode=?
-        AND active=1
-      ORDER BY priority ASC
-    `).bind(animeId, animeId, Number(season), Number(episode)).all()
-
-    return c.json(success(results))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
-
-/* Legacy public route (old format) */
-app.get("/servers/public/:anime/:ep", async (c) => {
-  try {
-    const db    = c.env.DB
-    const anime = c.req.param("anime")
-    const ep    = c.req.param("ep")
-
-    const { results } = await db.prepare(`
-      SELECT id,name,embed,type,priority
-      FROM servers
-      WHERE (anime=? OR anime_id=?)
-        AND episode=?
-        AND active=1
-      ORDER BY priority ASC
-    `).bind(anime, anime, Number(ep)).all()
-
-    return c.json(success(results))
-
-  } catch (err) {
-    return c.json(failure(err.message), 500)
-  }
-})
+/* ✅ FIX (audit ISSUE-026, adminServers.js instance): removed dead
+   duplicate routes GET /servers/public/:animeId/:season/:episode and its
+   legacy variant. This file is only mounted under adminRoutes (see
+   index.js), so these were only ever reachable at
+   /api/admin/servers/public/... — behind admin auth, never actually
+   serving the public watch page. public.js already correctly and
+   independently serves the real public version at
+   /api/public/servers/:episodeId, using a newer, cleaner episode_id-based
+   lookup rather than this file's older (animeId, season, episode)
+   composite-key approach. */
 
 /* ================= STATS ================= */
 /* ROUTE ORDER FIX: must be registered BEFORE /servers/:id
@@ -301,9 +260,15 @@ app.post("/servers/health-check", async (c) => {
       LIMIT 20
     `).all()
 
-    let checked = 0, failed = 0
-
-    for (const server of results) {
+    // ✅ FIX (audit ISSUE-027): this loop previously awaited each fetch
+    // sequentially — worst case ~100s (20 servers × 5s timeout each).
+    // nginx.conf.example doesn't set proxy_read_timeout, so nginx's
+    // default (60s) could return a 504 to the admin's browser well before
+    // the backend finished, even though the backend kept running and
+    // completed the DB updates regardless — a confusing "it failed" when
+    // it actually succeeded silently in the background. Running checks
+    // concurrently brings worst case down to ~5s.
+    async function checkOne(server) {
       try {
         /* HEAD request — just check if URL responds */
         const res = await fetch(server.embed, {
@@ -316,13 +281,19 @@ app.post("/servers/health-check", async (c) => {
           await db.prepare(`
             UPDATE servers SET verified=1,fail_count=0,last_check=? WHERE id=?
           `).bind(now(), server.id).run()
+          return { ok: true }
         } else {
           await db.prepare(`
             UPDATE servers SET verified=0,fail_count=fail_count+1,last_check=? WHERE id=?
           `).bind(now(), server.id).run()
-          failed++
+          return { ok: false }
         }
-
+      } catch {
+        await db.prepare(`
+          UPDATE servers SET fail_count=fail_count+1,last_check=? WHERE id=?
+        `).bind(now(), server.id).run()
+        return { ok: false }
+      } finally {
         /* Auto-disable after 5 consecutive failures */
         const row = await db.prepare(
           "SELECT fail_count FROM servers WHERE id=?"
@@ -333,17 +304,12 @@ app.post("/servers/health-check", async (c) => {
             "UPDATE servers SET active=0 WHERE id=?"
           ).bind(server.id).run()
         }
-
-        checked++
-
-      } catch {
-        await db.prepare(`
-          UPDATE servers SET fail_count=fail_count+1,last_check=? WHERE id=?
-        `).bind(now(), server.id).run()
-        failed++
-        checked++
       }
     }
+
+    const outcomes = await Promise.all(results.map(checkOne))
+    const failed   = outcomes.filter(o => !o.ok).length
+    const checked  = outcomes.length
 
     return c.json(success({ checked, failed, healthy: checked - failed }))
 
@@ -491,7 +457,12 @@ app.put("/servers/:id", async (c) => {
     try { body = await c.req.json() }
     catch { return c.json(failure("Invalid JSON body"), 400) }
 
-    const existing = await db.prepare("SELECT id, created_at FROM servers WHERE id=?").bind(id).first()
+    // ✅ FIX (audit ISSUE-028): expanded SELECT to include verified/
+    // fail_count/last_check/last_used — needed below to preserve them in
+    // the replica sync instead of hardcoding resets.
+    const existing = await db.prepare(
+      "SELECT id, created_at, verified, fail_count, last_check, last_used FROM servers WHERE id=?"
+    ).bind(id).first()
     if (!existing) return c.json(failure("Server not found"), 404)
 
     const err = validate(body)
@@ -525,16 +496,28 @@ app.put("/servers/:id", async (c) => {
       row.active, row.updated_at, id
     ).run()
 
+    // ✅ FIX (audit ISSUE-028): the primary DB UPDATE above correctly
+    // preserves verified/fail_count/last_check/last_used (they're not in
+    // the SET clause) — but the replica sync was hardcoding them back to
+    // 0/"" on every edit, meaning primary and replicas permanently
+    // disagreed on these 4 fields for any server that was ever edited.
+    // That would cause dbRestore.js's /db/reconcile and /db/checksums to
+    // perpetually flag the row as out-of-sync, since there's no "correct"
+    // side to resolve to. Preserving existing.* here keeps replicas
+    // consistent with what the primary DB actually has.
+    const replicaRow = {
+      ...row,
+      verified:   existing.verified   ?? 0,
+      fail_count: existing.fail_count ?? 0,
+      last_check: existing.last_check || "",
+      last_used:  existing.last_used  || "",
+      created_at: existing.created_at || timestamp
+    }
+
     if (c.executionCtx?.waitUntil) {
-      c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", {
-        ...row, verified: 0, fail_count: 0, last_check: "", last_used: "",
-        created_at: existing.created_at || timestamp
-      }))
+      c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", replicaRow))
     } else {
-      syncToReplicas(c.env, "insert", {
-        ...row, verified: 0, fail_count: 0, last_check: "", last_used: "",
-        created_at: existing.created_at || timestamp
-      })
+      syncToReplicas(c.env, "insert", replicaRow)
     }
 
     return c.json(success({ id }))
