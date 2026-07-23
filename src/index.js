@@ -44,8 +44,10 @@ import publicAnime     from "./routes/public.js"
 import episodes        from "./routes/episodes.js"
 import categories      from "./routes/categories.js"
 import banners         from "./routes/banners.js"
+import bannersPublic   from "./routes/bannersPublic.js"  // ✅ FIX (audit ISSUE-025): public click-tracking route only
 import adminServers    from "./routes/adminServers.js"
 import player          from "./routes/player.js"
+import playerAdmin     from "./routes/playerAdmin.js"  // ✅ FIX (audit ISSUE-020): admin-only player write routes
 import downloads       from "./routes/downloads.js"   // ← NEW
 import ads             from "./routes/ads.js"          // ← NEW
 import analytics       from "./routes/analytics.js"
@@ -57,6 +59,7 @@ import sidebar         from "./routes/sidebar.js"
 import footer          from "./routes/footer.js"
 import homepage        from "./routes/homepage.js"
 import ai              from "./routes/ai.js"
+import { runAIEngines } from "./routes/ai.js"  // ✅ FIX (audit ISSUE-010): named export, wired into /internal/run-cron below
 import securityAdmin   from "./routes/securityAdmin.js"
 import performance     from "./routes/performance.js"
 import system          from "./routes/system.js"
@@ -73,6 +76,7 @@ import bulkUpload      from "./routes/bulk-upload.js"    // ← CRITICAL FIX #4
 /* ================= AI ENGINES ================= */
 
 import { runPlayerAI } from "./ai/playerEngine.js"
+import { playerProgressRoutes } from "./ai/playerEngine.js"  // ✅ FIX (audit ISSUE-017): watch-progress/video-config routes, now mountable
 import { runFooterAI } from "./ai/footerAI.js"
 
 /* ================= NODE ENV OBJECT (replaces Workers bindings) =================
@@ -292,10 +296,15 @@ app.get("/api/health", async (c) => {
 // (runPlayerAI + runFooterAI). routes/ai.js exports a separate
 // runAIEngines() that its own comment says is "called by cron every 5
 // minutes", but nothing in the original scheduled() handler actually
-// called it — that gap already existed before this migration. If you
-// want it on the schedule too, add `await runAIEngines(c.env)` below;
-// left out here to keep this migration behavior-preserving rather than
-// silently changing what runs.
+// called it — that gap already existed before this migration.
+//
+// ✅ FIX (audit ISSUE-010): added below. runAIEngines() covers the
+// server/analytics/category/banner/seo/homepage/backup/search/deploy/
+// download engines (see ai.js) — previously these only ran when an admin
+// manually clicked "Run Now" on the AI Brain page, including the
+// auto-failover logic that's supposed to activate a backup server when
+// all others are down (see the ISSUE-016 fix in ai.js) — a feature whose
+// entire value is in running unattended, on schedule, not on-demand.
 app.post("/internal/run-cron", async (c) => {
   const authHeader = c.req.header("Authorization") || ""
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null
@@ -307,7 +316,8 @@ app.post("/internal/run-cron", async (c) => {
   console.log(`⏰ Cron: manual trigger at ${new Date().toISOString()}`)
   const results = await Promise.allSettled([
     runPlayerAI(c.env),
-    runFooterAI(c.env)
+    runFooterAI(c.env),
+    runAIEngines(c.env)
   ])
 
   return c.json({
@@ -320,6 +330,8 @@ app.post("/internal/run-cron", async (c) => {
 /* ================= PUBLIC ROUTES ================= */
 app.route("/api", publicAnime)
 app.route("/api", player)
+app.route("/api", playerProgressRoutes)  // ✅ FIX (audit ISSUE-017): /api/player/validate, /progress, /config — previously dead, never mounted
+app.route("/api", bannersPublic)  // ✅ FIX (audit ISSUE-025): /api/banners/:id/click — was admin-only, so real visitor clicks never recorded
 app.route("/api", downloads)      // ← /api/go, /api/session/:id, /api/knight-data, /api/public/download-hosts, /api/public/episodes, /api/analytics
 app.route("/api", ads)            // ← /api/public/page-ads
 app.route("/api", publicSearch)
@@ -339,6 +351,7 @@ adminRoutes.route("/", anime)
 adminRoutes.route("/", episodes)
 adminRoutes.route("/", categories)
 adminRoutes.route("/", banners)
+adminRoutes.route("/", playerAdmin)  // ✅ FIX (audit ISSUE-020): POST /player, POST /player/reset now require auth
 adminRoutes.route("/", adminServers)
 adminRoutes.route("/", downloads)    // ← /api/admin/downloads/*, /api/admin/hosts/*
 adminRoutes.route("/", ads)          // ← /api/admin/ads-library/*, /api/admin/popup-library/*, etc.
@@ -383,3 +396,4 @@ process.on("SIGTERM", async () => {
   await redisClient.quit()
   process.exit(0)
 })
+
