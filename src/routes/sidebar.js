@@ -161,44 +161,14 @@ function syncToReplicas(env, action, row) {
   }
 }
 
-/* ================================================
-   GET /sidebar/public — Public menu
-   KV cached 5 min
-   NOTE: This is /sidebar/public (admin-mounted path)
-   public.js separately serves /api/sidebar/public
-   Both read from same KV key "public:sidebar"
-================================================ */
-
-app.get("/sidebar/public", async (c) => {
-  try {
-    if (c.env.KV) {
-      const cached = await c.env.KV.get(KV_SIDEBAR_KEY, "json").catch(() => null)
-      if (cached) return c.json(success(cached), 200, { "X-Cache": "HIT" })
-    }
-
-    const db = c.env.DB
-    await ensureTable(db)
-
-    const { results } = await db.prepare(`
-      SELECT id, title, icon, url, highlight, badge, priority, newTab, device, visibility
-      FROM sidebar
-      WHERE active=1
-      ORDER BY priority ASC
-    `).all()
-
-    const data = results || []
-
-    if (c.env.KV) {
-      await c.env.KV.put(KV_SIDEBAR_KEY, JSON.stringify(data), {
-        expirationTtl: KV_TTL
-      }).catch(() => {})
-    }
-
-    return c.json(success(data), 200, { "X-Cache": "MISS" })
-  } catch (err) {
-    return c.json(success([]))
-  }
-})
+/* ✅ FIX (audit ISSUE-026, sidebar.js instance): removed dead duplicate
+   route GET /sidebar/public. The prior comment here already correctly
+   noted this file is admin-mounted and that public.js separately serves
+   the real /api/sidebar/public — sharing a KV cache key was a thoughtful
+   attempt to reduce impact, but it didn't change the fact that this exact
+   route, at this exact path, was still only reachable at
+   /api/admin/sidebar/public and never actually served a real public
+   request. public.js's own copy is the one genuinely public path. */
 
 /* ================================================
    GET /sidebar — Admin list
