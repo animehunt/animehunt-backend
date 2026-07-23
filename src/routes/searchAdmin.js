@@ -481,20 +481,32 @@ app.get("/search/logs", async (c) => {
 
     await ensureLogsTable(db)
 
-    let sql   = "SELECT * FROM search_logs"
-    const params = []
+    let sql      = "SELECT * FROM search_logs"
+    let countSql = "SELECT COUNT(*) as total FROM search_logs"
+    const params      = []
+    // ✅ FIX (audit ISSUE-035): countParams tracks its own bind list —
+    // the count query previously ignored dateFrom/dateTo entirely, so
+    // pagination.total (and any "X of Y" UI derived from it) was wrong
+    // whenever a date filter was active — e.g. filtering to "last 7 days"
+    // could show 50 matching rows on the page while total reported the
+    // count across all history.
+    const countParams = []
     const conds  = []
 
-    if (dateFrom) { conds.push("created_at >= ?"); params.push(dateFrom) }
-    if (dateTo)   { conds.push("created_at <= ?"); params.push(dateTo) }
-    if (conds.length) sql += " WHERE " + conds.join(" AND ")
+    if (dateFrom) { conds.push("created_at >= ?"); params.push(dateFrom); countParams.push(dateFrom) }
+    if (dateTo)   { conds.push("created_at <= ?"); params.push(dateTo);   countParams.push(dateTo) }
+    if (conds.length) {
+      const whereClause = " WHERE " + conds.join(" AND ")
+      sql      += whereClause
+      countSql += whereClause
+    }
 
     sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
     params.push(limit, offset)
 
     const [logs, total] = await Promise.all([
       db.prepare(sql).bind(...params).all(),
-      db.prepare("SELECT COUNT(*) as total FROM search_logs").first()
+      db.prepare(countSql).bind(...countParams).first()
     ])
 
     return c.json(success({
