@@ -47,6 +47,14 @@ const mapAnime = (a) => ({
   isMostViewed: !!a.is_most_viewed,
   isBanner:     !!a.is_banner,
   isHidden:     !!a.is_hidden,
+  // ✅ FIX (audit ISSUE-029): active is a real schema column, read in
+  // WHERE clauses across public.js/publicSEO.js/publicSearch.js/
+  // recommendations.js/seoAdmin.js/trending.js, but was never exposed
+  // anywhere in this admin CRUD file — there was no way for an admin to
+  // ever set it, and no way to recover a row if it were ever set to 0 by
+  // any other means. Default true when undefined (legacy rows / rows
+  // created before this fix), matching the schema's own default.
+  isActive:     a.active === undefined || a.active === null ? true : !!a.active,
   description:  a.description,
   created_at:   a.created_at,
   updated_at:   a.updated_at
@@ -74,6 +82,10 @@ const buildRow = (body, id, createdAt, updatedAt) => ({
   is_most_viewed: body.isMostViewed  ? 1 : 0,
   is_banner:      body.isBanner      ? 1 : 0,
   is_hidden:      body.isHidden      ? 1 : 0,
+  // ✅ FIX (audit ISSUE-029): defaults to active=1 (matching the schema
+  // default) unless explicitly set to false — so existing PUT requests
+  // that don't send isActive at all won't accidentally deactivate a row.
+  active:         body.isActive === false ? 0 : 1,
   description:    String(body.description || ""),
   created_at:     createdAt,
   updated_at:     updatedAt
@@ -141,9 +153,9 @@ function buildTursoPayload(action, data) {
           sql: `INSERT OR REPLACE INTO anime (
             id,title,slug,type,status,poster,banner,year,rating,
             language,duration,genres,tags,
-            is_home,is_trending,is_most_viewed,is_banner,is_hidden,
+            is_home,is_trending,is_most_viewed,is_banner,is_hidden,active,
             description,created_at,updated_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           args: [
             {type:"text",value:data.id},
             {type:"text",value:data.title},
@@ -152,8 +164,14 @@ function buildTursoPayload(action, data) {
             {type:"text",value:data.status},
             {type:"text",value:data.poster},
             {type:"text",value:data.banner},
-            data.year    ? {type:"integer",value:String(data.year)}  : {type:"null"},   // ✅ FIX: Turso wants string values
-            data.rating  ? {type:"float",  value:String(data.rating)}: {type:"null"},   // ✅ FIX
+            // ✅ FIX (audit ISSUE-022): was `data.year ? ... : null` — buildRow()
+            // already explicitly sets year/rating to null (not 0/undefined)
+            // when empty, per its own "explicit null when empty" comments —
+            // so `!== null` is the precise check. The truthy check treated a
+            // genuinely valid rating of 0 as empty, silently syncing null to
+            // the Turso replica instead of 0 for that row.
+            data.year   !== null ? {type:"integer",value:String(data.year)}   : {type:"null"},
+            data.rating !== null ? {type:"float",  value:String(data.rating)} : {type:"null"},
             {type:"text",value:data.language},
             {type:"text",value:data.duration},
             {type:"text",value:data.genres},
@@ -163,6 +181,7 @@ function buildTursoPayload(action, data) {
             {type:"integer",value:String(data.is_most_viewed)},   // ✅ FIX
             {type:"integer",value:String(data.is_banner)},        // ✅ FIX
             {type:"integer",value:String(data.is_hidden)},        // ✅ FIX
+            {type:"integer",value:String(data.active)},           // ✅ FIX (audit ISSUE-029)
             {type:"text",value:data.description},
             {type:"text",value:data.created_at},
             {type:"text",value:data.updated_at}
@@ -255,15 +274,15 @@ animeRoute.post("/anime", async (c) => {
       INSERT INTO anime (
         id,title,slug,type,status,poster,banner,year,rating,
         language,duration,genres,tags,
-        is_home,is_trending,is_most_viewed,is_banner,is_hidden,
+        is_home,is_trending,is_most_viewed,is_banner,is_hidden,active,
         description,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       row.id, row.title, row.slug, row.type, row.status,
       row.poster, row.banner, row.year, row.rating,
       row.language, row.duration, row.genres, row.tags,
       row.is_home, row.is_trending, row.is_most_viewed,
-      row.is_banner, row.is_hidden,
+      row.is_banner, row.is_hidden, row.active,
       row.description, row.created_at, row.updated_at
     ).run()
 
@@ -415,7 +434,7 @@ animeRoute.put("/anime/:id", async (c) => {
         poster=?,banner=?,year=?,rating=?,
         language=?,duration=?,genres=?,tags=?,
         is_home=?,is_trending=?,is_most_viewed=?,
-        is_banner=?,is_hidden=?,
+        is_banner=?,is_hidden=?,active=?,
         description=?,updated_at=?
       WHERE id=?
     `).bind(
@@ -423,7 +442,7 @@ animeRoute.put("/anime/:id", async (c) => {
       row.poster, row.banner, row.year, row.rating,
       row.language, row.duration, row.genres, row.tags,
       row.is_home, row.is_trending, row.is_most_viewed,
-      row.is_banner, row.is_hidden,
+      row.is_banner, row.is_hidden, row.active,
       row.description, row.updated_at,
       id
     ).run()
