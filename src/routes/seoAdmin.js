@@ -773,6 +773,21 @@ app.post("/seo/robots/update", async (c) => {
     // conflicts with system.js's own CREATE TABLE for the same name.
     // system.js already guarantees a row with id=1 exists (ensureRow-style
     // init on that router), so this is now a plain UPDATE.
+    //
+    // ✅ FIX (audit ISSUE-034): that guarantee only holds once some
+    // system.js route has actually run at least once — system.js's
+    // ensureRow() is called lazily per-request, not globally, and
+    // systemGuard.js (genuinely global middleware) only reads this table,
+    // never creates the row. On a fresh install where an admin's very
+    // first action is saving robots.txt here (before ever opening System
+    // Settings), the bare UPDATE below would silently affect zero rows —
+    // no error, "saved: true" returned, but nothing persisted. This
+    // INSERT ... ON CONFLICT DO NOTHING closes that gap; it's a safe
+    // no-op when the row already exists.
+    await db.prepare(
+      "INSERT INTO system_settings (id, updated_at) VALUES (1, ?) ON CONFLICT(id) DO NOTHING"
+    ).bind(now()).run()
+
     await db.prepare(`
       UPDATE system_settings SET robots_txt = ?, updated_at = ? WHERE id = 1
     `).bind(body.content.trim(), now()).run()
