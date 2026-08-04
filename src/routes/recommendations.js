@@ -114,7 +114,7 @@ async function getRecommendations(db, animeId, limit = 8) {
   Otherwise Hono treats "similar" as the animeId param
 ============================================================ */
 
-app.get("/api/recommendations/similar/:slug", async (c) => {
+app.get("/recommendations/similar/:slug", async (c) => {
   const db    = c.env.DB
   const slug  = c.req.param("slug")
   const _rl   = parseInt(c.req.query("limit") || "8")
@@ -146,7 +146,7 @@ app.get("/api/recommendations/similar/:slug", async (c) => {
   KV cached 30 min
 ============================================================ */
 
-app.get("/api/recommendations/:animeId", async (c) => {
+app.get("/recommendations/:animeId", async (c) => {
   const db      = c.env.DB
   const animeId = c.req.param("animeId")
   const _rla    = parseInt(c.req.query("limit") || "8")
@@ -174,3 +174,5 @@ app.get("/api/recommendations/:animeId", async (c) => {
 })
 
 export default app
+
+
