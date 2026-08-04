@@ -115,7 +115,13 @@ app.get("/dashboard", async (c) => {
     `)
 
     /* ---- DB REPLICA STATUS ---- */
-    const tursoOk    = !!(c.env.TURSO_URL && c.env.TURSO_AUTH_TOKEN)
+    // ✅ FIX (audit, same bug class as deploy.js's dbStatus.turso and
+    // system.js's /system/health): this used to check TURSO_URL/
+    // TURSO_AUTH_TOKEN — the primary Turso credentials dbD1Ok below
+    // already verifies via a live query (post-migration, c.env.DB *is*
+    // that connection). The genuinely independent replica this section
+    // header calls out is TURSO_REPLICA_URL/TURSO_REPLICA_AUTH_TOKEN (DB3).
+    const tursoOk    = !!(c.env.TURSO_REPLICA_URL && c.env.TURSO_REPLICA_AUTH_TOKEN)
     const supabaseOk = !!(c.env.SUPABASE_URL && c.env.SUPABASE_KEY)
 
     // MIGRATION: this used to be hardcoded to "Connected" unconditionally —
@@ -282,4 +288,6 @@ app.post("/dashboard/ai-scan", async (c) => {
 })
 
 export default app
+
+
 
