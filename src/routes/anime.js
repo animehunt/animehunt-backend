@@ -230,9 +230,17 @@ async function syncToSupabase(env, action, data) {
   }
 
   if (action === "delete") {
+    // ✅ FIX (audit): `{ ...headers, Prefer: undefined }` does NOT remove the
+    // key — object spread keeps it with value undefined, and fetch's Headers
+    // constructor stringifies that to the literal header value "undefined"
+    // (verified: `new Headers({ Prefer: undefined })` produces a real
+    // "prefer: undefined" header), so Supabase was receiving a garbage
+    // Prefer header on every delete instead of no header at all. Destructure
+    // it out of a copy instead, which genuinely omits the key.
+    const { Prefer, ...deleteHeaders } = headers
     const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, {   // ✅ FIX: encode id in URL to prevent injection if UUID format changes
       method: "DELETE",
-      headers: { ...headers, Prefer: undefined }   // ✅ FIX: Prefer header not needed/valid for DELETE
+      headers: deleteHeaders
     })
     if (!res.ok) {
       const txt = await res.text()
