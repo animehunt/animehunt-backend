@@ -591,13 +591,20 @@ async function bannerEngine(db, cfg) {
     changes.homepage_banners = ok ? "ran" : "skipped"
   }
 
-  /* Trending banners — activate trending page banners */
+  /* ✅ FIX (audit): trending_banners' WHERE page='trending' could never
+     match any row — banners.page has a CHECK constraint limiting it to
+     ('home','anime','cartoon','series','movies','search','episode',
+     'download','category'), confirmed against both schema.sql and
+     banners.html's admin dropdown (same 9 values, no 'trending' option).
+     This setting has been a silent, permanent no-op: safeRun() reports
+     success even when zero rows match, so it always logged "ran" while
+     doing nothing. There's also no structural link between banners and
+     "trending" anime to build a correct version of this from (banners
+     has no anime_id/category-to-anime relationship in the current
+     schema) — reporting that explicitly rather than continuing to claim
+     a result that was never real. */
   if (cfg.trending_banners) {
-    const ok = await safeRun(db, `
-      UPDATE banners SET active=1
-      WHERE page='trending' AND active=0
-    `)
-    changes.trending_banners = ok ? "ran" : "skipped"
+    changes.trending_banners = "unsupported_no_trending_page_value"
   }
 
   /* Hero banners — top rated anime as banner */
@@ -817,22 +824,51 @@ async function deployEngine(db, cfg) {
   return { deploy: true, changes }
 }
 
-/* DOWNLOAD ENGINE */
+/* DOWNLOAD ENGINE
+   ✅ FIX (audit): this used to target a table called `downloads` (id,
+   episode_id, quality, url, active) — a legacy/simpler design this file
+   itself CREATE TABLE IF NOT EXISTS's, but confirmed via a full-codebase
+   search that no route anywhere ever INSERTs into it. The real, actively-
+   used download-link tables are download_host_entries.direct_download
+   (non-knight hosts, one URL) and download_links.link (knight hosts,
+   one row per quality) — see downloads.js/downloadsAdmin.js. This engine
+   was therefore running its cleanup queries against an always-empty
+   table every cron cycle: no error, "cleaned"/successful status reported,
+   but doing nothing whatsoever to real download links. Rewritten to
+   validate the tables that actually hold link data. */
 async function downloadEngine(db, cfg) {
   const changes = {}
 
   if (cfg.link_validation) {
-    /* Remove entries with null/empty URLs */
-    const ok = await safeRun(db, `
-      DELETE FROM downloads WHERE url IS NULL OR url='' OR TRIM(url)=''
+    /* Non-knight hosts: direct_download URL lives on download_host_entries */
+    const ok1 = await safeRun(db, `
+      UPDATE download_host_entries
+      SET status='broken'
+      WHERE knight=0
+        AND (direct_download IS NULL OR TRIM(direct_download)=''
+             OR direct_download LIKE '%example.com%'
+             OR direct_download LIKE '%localhost%'
+             OR direct_download LIKE '%127.0.0.1%')
+        AND status='active'
     `)
-    changes.link_validation = ok ? "cleaned" : "skipped"
 
-    /* ✅ NEW: Also deactivate downloads pointing to obviously dead domains */
-    await safeRun(db, `
-      UPDATE downloads SET active=0
-      WHERE url LIKE '%example.com%' OR url LIKE '%localhost%' OR url LIKE '%127.0.0.1%'
+    /* Knight hosts: per-quality URLs live on download_links; if a host
+       entry has zero remaining valid quality links, flag the entry too */
+    const ok2 = await safeRun(db, `
+      DELETE FROM download_links
+      WHERE link IS NULL OR TRIM(link)=''
+        OR link LIKE '%example.com%' OR link LIKE '%localhost%' OR link LIKE '%127.0.0.1%'
     `)
+
+    const ok3 = await safeRun(db, `
+      UPDATE download_host_entries
+      SET status='broken'
+      WHERE knight=1
+        AND status='active'
+        AND id NOT IN (SELECT DISTINCT host_entry_id FROM download_links)
+    `)
+
+    changes.link_validation = (ok1 && ok2 && ok3) ? "cleaned" : "partial"
   }
 
   return { download: true, changes }
