@@ -52,7 +52,7 @@ async function kvSet(env, key, data, ttl = KV_TTL) {
   KV cached 15 min
 ============================================================ */
 
-app.get("/api/trending", async (c) => {
+app.get("/trending", async (c) => {
   const limit = safeLimit(c.req.query("limit"), 20, 40)
 
   try {
@@ -78,7 +78,7 @@ app.get("/api/trending", async (c) => {
   KV cached 15 min
 ============================================================ */
 
-app.get("/api/trending/top", async (c) => {
+app.get("/trending/top", async (c) => {
   const limit = safeLimit(c.req.query("limit"), 10, 40)
 
   try {
@@ -104,7 +104,7 @@ app.get("/api/trending/top", async (c) => {
   KV cached 5 min (new content changes fastest)
 ============================================================ */
 
-app.get("/api/trending/new", async (c) => {
+app.get("/trending/new", async (c) => {
   const limit = safeLimit(c.req.query("limit"), 10, 40)
 
   try {
@@ -130,7 +130,7 @@ app.get("/api/trending/new", async (c) => {
   KV cached 15 min
 ============================================================ */
 
-app.get("/api/trending/ongoing", async (c) => {
+app.get("/trending/ongoing", async (c) => {
   const limit = safeLimit(c.req.query("limit"), 20, 40)
 
   try {
@@ -156,7 +156,7 @@ app.get("/api/trending/ongoing", async (c) => {
   KV cached 15 min
 ============================================================ */
 
-app.get("/api/trending/movies", async (c) => {
+app.get("/trending/movies", async (c) => {
   const limit = safeLimit(c.req.query("limit"), 20, 40)
 
   try {
