@@ -1,6 +1,12 @@
 /* ================================================
    config.js — Shared runtime configuration
-   Required by: upload.js, bulk-upload.js
+   Required by: upload.js
+
+   BULK_UPLOAD below is currently unused (bulk-upload.js's own
+   download-links route was removed as a broken duplicate of
+   downloadsAdmin.js — see that file's header for the full explanation).
+   Left in place in case a future bulk-CSV-import route is built against
+   the current schema and wants these limits.
 ================================================ */
 
 const config = {
