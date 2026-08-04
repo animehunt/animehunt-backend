@@ -540,7 +540,7 @@ router.get("/db/sync-status", async (c) => {
       checked_at: nowISO()
     })
   } catch (e) {
-    return c.json({ success: false, error: e.message }, 500)
+    return c.json({ success: false, message: e.message }, 500)
   }
 })
 
@@ -751,7 +751,7 @@ router.post("/db/snapshot/restore", async (c) => {
   const { key, targets } = body
 
   if (!key) {
-    return c.json({ success: false, error: "key required" }, 400)
+    return c.json({ success: false, message: "key required" }, 400)
   }
 
   // ✅ FIX (audit ISSUE-012): key was passed straight to env.R2_BUCKET.get(key)
@@ -760,7 +760,7 @@ router.post("/db/snapshot/restore", async (c) => {
   // the live database. Snapshots are always created under snapshots/ (see
   // snapshotToR2 below) — enforce that prefix and reject traversal sequences.
   if (!key.startsWith("snapshots/") || key.includes("..")) {
-    return c.json({ success: false, error: "Invalid snapshot key" }, 400)
+    return c.json({ success: false, message: "Invalid snapshot key" }, 400)
   }
 
   const result = await restoreFromR2(
@@ -778,7 +778,7 @@ router.post("/db/snapshot/restore", async (c) => {
 /* ─── LIST SNAPSHOTS ─── */
 router.get("/db/snapshots", async (c) => {
   if (!c.env.R2_BUCKET) {
-    return c.json({ success: false, error: "R2_BUCKET not bound" }, 500)
+    return c.json({ success: false, message: "R2_BUCKET not bound" }, 500)
   }
   try {
     const list = await c.env.R2_BUCKET.list({ prefix: "snapshots/" })
@@ -790,7 +790,7 @@ router.get("/db/snapshots", async (c) => {
 
     return c.json({ success: true, snapshots: objects })
   } catch (e) {
-    return c.json({ success: false, error: e.message }, 500)
+    return c.json({ success: false, message: e.message }, 500)
   }
 })
 
@@ -945,7 +945,7 @@ router.post("/db/replay-events", async (c) => {
       replayed_at: nowISO()
     })
   } catch (e) {
-    return c.json({ success: false, error: e.message }, 500)
+    return c.json({ success: false, message: e.message }, 500)
   }
 })
 
@@ -963,7 +963,7 @@ router.get("/db/dead-letter", async (c) => {
       items:   results || []
     })
   } catch (e) {
-    return c.json({ success: false, error: e.message }, 500)
+    return c.json({ success: false, message: e.message }, 500)
   }
 })
 
@@ -1057,7 +1057,7 @@ router.post("/db/dead-letter/retry", async (c) => {
       retried_at: nowISO()
     })
   } catch (e) {
-    return c.json({ success: false, error: e.message }, 500)
+    return c.json({ success: false, message: e.message }, 500)
   }
 })
 
@@ -1083,7 +1083,7 @@ router.get("/db/audit-log", async (c) => {
       logs:    results || []
     })
   } catch (e) {
-    return c.json({ success: false, error: e.message }, 500)
+    return c.json({ success: false, message: e.message }, 500)
   }
 })
 
@@ -1134,3 +1134,5 @@ router.get("/db/checksums", async (c) => {
 })
 
 export default router
+
+
