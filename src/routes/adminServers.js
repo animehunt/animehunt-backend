@@ -138,9 +138,14 @@ async function syncSupabase(env, action, data) {
     if (!res.ok) console.error("Supabase servers insert failed:", res.status, await res.text())
   }
   if (action === "delete") {
+    // ✅ FIX (audit, same bug class as anime.js): `{ ...headers, Prefer:
+    // undefined }` does not remove the key — fetch's Headers constructor
+    // stringifies it into a real "Prefer: undefined" header sent to
+    // Supabase. Destructure it out of a copy instead.
+    const { Prefer, ...deleteHeaders } = headers
     const res = await fetch(`${base}?id=eq.${encodeURIComponent(data.id)}`, {
       method: "DELETE",
-      headers: { ...headers, Prefer: undefined }
+      headers: deleteHeaders
     })
     if (!res.ok) console.error("Supabase servers delete failed:", res.status, await res.text())
   }
@@ -574,3 +579,4 @@ app.delete("/servers/:id", async (c) => {
 })
 
 export default app
+                                              
