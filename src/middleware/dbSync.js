@@ -90,14 +90,28 @@ export async function invalidateCacheByPrefix(env, prefix) {
 ───────────────────────────────────────────────────────────── */
 export async function dbSync(c, next) {
   const start = Date.now()
-  const ip    = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
 
-  const rateLimitResult = await checkRateLimit(c.env, ip)
-  if (!rateLimitResult.allowed) {
-    return c.json({
-      success: false,
-      message: "Rate limit exceeded. Max 500 writes/minute."
-    }, 429)
+  // ✅ FIX (audit): this middleware is mounted via app.use("*", dbSync) —
+  // every single request, including plain public GETs (homepage load,
+  // search, anime listing), was being counted against the same 500/minute
+  // budget the error message calls "writes." A handful of concurrent
+  // visitors browsing the site can burn through 500 GETs in well under a
+  // minute, after which EVERY request — reads included — started getting
+  // a 429 "Rate limit exceeded. Max 500 writes/minute," effectively taking
+  // the whole public site down under completely ordinary read traffic.
+  // Scoped the counter to write methods only, matching what the name and
+  // error message already claimed it did.
+  const isWrite = ["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method)
+
+  if (isWrite) {
+    const ip = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+    const rateLimitResult = await checkRateLimit(c.env, ip)
+    if (!rateLimitResult.allowed) {
+      return c.json({
+        success: false,
+        message: "Rate limit exceeded. Max 500 writes/minute."
+      }, 429)
+    }
   }
 
   const db = getDB(c.env)
@@ -112,5 +126,3 @@ export async function dbSync(c, next) {
   c.res.headers.set("X-DB-Replicas",     "turso,supabase")
   c.res.headers.set("X-DB-Sync-Version", "2.2")
 }
-
-
