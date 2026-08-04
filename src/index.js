@@ -5,15 +5,23 @@
 
    MIGRATION NOTES (everything below the "AI ENGINES" import block,
    i.e. from "NODE ENV OBJECT" onward, is new/changed for the VPS
-   migration. Every route import and every app.route(...)/adminRoutes
-   registration below is byte-for-byte unchanged from the Workers
-   version — they didn't need to change, because c.env.DB and c.env.KV
-   are populated by the adapters instead of Workers bindings.
+   migration. Every other route import and app.route(...)/adminRoutes
+   registration below is unchanged from the Workers version — they
+   didn't need to change, because c.env.DB and c.env.KV are populated
+   by the adapters instead of Workers bindings.
 
-   CHANGES (Downloads + Ads module added):
-     - downloads router mount kiya (public + admin)
-     - ads router mount kiya (public + admin)
-   Baaki sab unchanged hai
+   ✅ FIX (security audit, dual-mount vulnerability): downloads.js and
+   ads.js used to each be ONE router mounted both publicly (app.route
+   ("/api", ...), no auth) and under adminRoutes (auth required) — since
+   it's the same Hono() object in both places, every admin write route
+   inside them (hosts, download entries, ads/popup/shortlink/redirect
+   libraries, monetization config) was reachable unauthenticated at
+   /api/..., bypassing adminAuth entirely. Each file is now split:
+   downloads.js/ads.js contain ONLY public routes (mounted under
+   app.route("/api", ...)); downloadsAdmin.js/adsAdmin.js contain ONLY
+   admin routes (mounted only under adminRoutes, so requireAuth applies).
+   Every individual route's logic/SQL is unchanged — only which file
+   it lives in, and therefore where it's reachable, changed.
 ================================================ */
 
 // MUST be the very first import — loads .env into process.env before
@@ -48,13 +56,17 @@ import bannersPublic   from "./routes/bannersPublic.js"  // ✅ FIX (audit ISSUE
 import adminServers    from "./routes/adminServers.js"
 import player          from "./routes/player.js"
 import playerAdmin     from "./routes/playerAdmin.js"  // ✅ FIX (audit ISSUE-020): admin-only player write routes
-import downloads       from "./routes/downloads.js"   // ← NEW
-import ads             from "./routes/ads.js"          // ← NEW
-import analytics       from "./routes/analytics.js"
+import downloads       from "./routes/downloads.js"        // ← public routes only
+import downloadsAdmin  from "./routes/downloadsAdmin.js"   // ← admin routes only (see file header — split from downloads.js, security fix)
+import ads             from "./routes/ads.js"               // ← public routes only
+import adsAdmin        from "./routes/adsAdmin.js"          // ← admin routes only (see file header — split from ads.js, security fix)
+import analytics       from "./routes/analytics.js"        // ← public tracking routes only (see file header — split, security/prefix fix)
+import analyticsAdmin  from "./routes/analyticsAdmin.js"   // ← admin dashboard routes only (see file header — split, security/prefix fix)
 import searchAdmin     from "./routes/searchAdmin.js"
 import publicSearch    from "./routes/publicSearch.js"
 import seoAdmin        from "./routes/seoAdmin.js"
-import publicSEO       from "./routes/publicSEO.js"
+import publicSEO       from "./routes/publicSEO.js"          // ← /api/seo/meta, /api/seo/schema (prefix fix, see file header)
+import publicSEORoot   from "./routes/publicSEORoot.js"      // ← robots.txt, sitemap*.xml — mounted at domain root, NOT /api (see file header)
 import sidebar         from "./routes/sidebar.js"
 import footer          from "./routes/footer.js"
 import homepage        from "./routes/homepage.js"
@@ -66,9 +78,11 @@ import system          from "./routes/system.js"
 import deploy          from "./routes/deploy.js"
 import upload          from "./routes/upload.js"
 import recommendations from "./routes/recommendations.js"
-// (robots.js and sitemap.js removed — publicSEO.js already had complete,
+// (robots.js and sitemap.js removed — publicSEORoot.js has complete,
 // more capable implementations of both routes that were silently winning
-// over these two anyway; found during the final QA pass, see README)
+// over these two anyway; found during the final QA pass, see README.
+// Split out of publicSEO.js and mounted at the domain root — see
+// publicSEORoot.js's file header for why.)
 import trending        from "./routes/trending.js"
 import dbRestore       from "./routes/dbRestore.js"
 import bulkUpload      from "./routes/bulk-upload.js"    // ← CRITICAL FIX #4
@@ -160,7 +174,17 @@ const nodeEnv = {
   TURSO_REPLICA_AUTH_TOKEN: process.env.TURSO_REPLICA_AUTH_TOKEN,
   TURSO_REPLICA:            tursoReplicaClient,
 
-  CRON_SECRET: process.env.CRON_SECRET
+  CRON_SECRET: process.env.CRON_SECRET,
+
+  // ✅ FIX (audit): playerEngine.js's stream-token feature (ISSUE-018 —
+  // an optional signed-token alternative to the Origin/Referer embed
+  // check, for legitimate non-browser callers) reads env.STREAM_TOKEN_SECRET,
+  // but this key was missing from nodeEnv entirely — env.STREAM_TOKEN_SECRET
+  // was always undefined here regardless of what was set in .env, which
+  // silently disabled the whole feature (hasValidToken can never be true
+  // when the secret is undefined). The Origin/Referer check itself is
+  // unaffected either way — this only restores the optional token path.
+  STREAM_TOKEN_SECRET: process.env.STREAM_TOKEN_SECRET
 }
 
 // Fail loudly at boot rather than silently signing JWTs with the fallback
@@ -333,9 +357,11 @@ app.route("/api", player)
 app.route("/api", playerProgressRoutes)  // ✅ FIX (audit ISSUE-017): /api/player/validate, /progress, /config — previously dead, never mounted
 app.route("/api", bannersPublic)  // ✅ FIX (audit ISSUE-025): /api/banners/:id/click — was admin-only, so real visitor clicks never recorded
 app.route("/api", downloads)      // ← /api/go, /api/session/:id, /api/knight-data, /api/public/download-hosts, /api/public/episodes, /api/analytics
-app.route("/api", ads)            // ← /api/public/page-ads
+app.route("/api", ads)            // ← /api/public/page-ads, /api/public/nav-fire, /api/public/ads/:adId/click
+app.route("/api", analytics)      // ← /api/track/view, /api/track/download, /api/track/search, /api/track/banner
 app.route("/api", publicSearch)
 app.route("/api", publicSEO)
+app.route("/", publicSEORoot)     // ← root-mounted: /robots.txt, /sitemap.xml, /sitemap-index.xml, /sitemap-static.xml, /sitemap-anime-:page.xml
 app.route("/api", recommendations)
 app.route("/api", trending)
 
@@ -353,9 +379,9 @@ adminRoutes.route("/", categories)
 adminRoutes.route("/", banners)
 adminRoutes.route("/", playerAdmin)  // ✅ FIX (audit ISSUE-020): POST /player, POST /player/reset now require auth
 adminRoutes.route("/", adminServers)
-adminRoutes.route("/", downloads)    // ← /api/admin/downloads/*, /api/admin/hosts/*
-adminRoutes.route("/", ads)          // ← /api/admin/ads-library/*, /api/admin/popup-library/*, etc.
-adminRoutes.route("/", analytics)
+adminRoutes.route("/", downloadsAdmin)    // ← /api/admin/downloads/*, /api/admin/hosts/*
+adminRoutes.route("/", adsAdmin)          // ← /api/admin/ads-library/*, /api/admin/popup-library/*, etc.
+adminRoutes.route("/", analyticsAdmin)
 adminRoutes.route("/", homepage)
 adminRoutes.route("/", footer)
 adminRoutes.route("/", sidebar)
