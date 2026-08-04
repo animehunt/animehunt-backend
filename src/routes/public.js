@@ -117,7 +117,7 @@ function formatFooter(r) {
   Hono matches routes in registration order
 ============================================================ */
 
-app.get("/api/anime/home", async (c) => {
+app.get("/anime/home", async (c) => {
   try {
     if (c.env.KV) {
       const cached = await c.env.KV.get("public:home", "json").catch(() => null)
@@ -146,7 +146,7 @@ app.get("/api/anime/home", async (c) => {
   }
 })
 
-app.get("/api/anime/featured", async (c) => {
+app.get("/anime/featured", async (c) => {
   try {
     if (c.env.KV) {
       const cached = await c.env.KV.get("public:featured", "json").catch(() => null)
@@ -179,7 +179,7 @@ app.get("/api/anime/featured", async (c) => {
   GET /api/anime — Paginated list with filters
 ============================================================ */
 
-app.get("/api/anime", async (c) => {
+app.get("/anime", async (c) => {
   const db     = c.env.DB
   const qp     = c.req.query
   const page   = Math.max(1, toInt(qp("page"), 1))
@@ -239,7 +239,7 @@ app.get("/api/anime", async (c) => {
   KV cached 10 min
 ============================================================ */
 
-app.get("/api/anime/:slug", async (c) => {
+app.get("/anime/:slug", async (c) => {
   const db   = c.env.DB
   const slug = c.req.param("slug")
 
@@ -298,7 +298,7 @@ app.get("/api/anime/:slug", async (c) => {
   GET /api/public/episodes/:animeId
 ============================================================ */
 
-app.get("/api/public/episodes/:animeId", async (c) => {
+app.get("/public/episodes/:animeId", async (c) => {
   const db      = c.env.DB
   const animeId = c.req.param("animeId")
   const season  = c.req.query("season") || ""
@@ -329,7 +329,7 @@ app.get("/api/public/episodes/:animeId", async (c) => {
   GET /api/public/seasons/:animeId
 ============================================================ */
 
-app.get("/api/public/seasons/:animeId", async (c) => {
+app.get("/public/seasons/:animeId", async (c) => {
   const db      = c.env.DB
   const animeId = c.req.param("animeId")
 
@@ -358,7 +358,7 @@ app.get("/api/public/seasons/:animeId", async (c) => {
   (added to servers schema) instead of a non-existent column
 ============================================================ */
 
-app.get("/api/public/servers/:episodeId", async (c) => {
+app.get("/public/servers/:episodeId", async (c) => {
   const db        = c.env.DB
   const episodeId = c.req.param("episodeId")
 
@@ -404,7 +404,7 @@ app.get("/api/public/servers/:episodeId", async (c) => {
   GET /api/categories/public — KV cached 10 min
 ============================================================ */
 
-app.get("/api/categories/public", async (c) => {
+app.get("/categories/public", async (c) => {
   try {
     if (c.env.KV) {
       const cached = await c.env.KV.get("public:categories", "json").catch(() => null)
@@ -437,7 +437,7 @@ app.get("/api/categories/public", async (c) => {
   }
 })
 
-app.get("/api/categories/home", async (c) => {
+app.get("/categories/home", async (c) => {
   try {
     // ✅ FIX (audit ISSUE-030): same icon/color removal as above.
     const { results } = await c.env.DB.prepare(`
@@ -456,7 +456,7 @@ app.get("/api/categories/home", async (c) => {
   GET /api/banners/public — KV cached 5 min
 ============================================================ */
 
-app.get("/api/banners/public", async (c) => {
+app.get("/banners/public", async (c) => {
   const db       = c.env.DB
   const page     = c.req.query("page")     || "all"
   const position = c.req.query("position") || ""
@@ -494,7 +494,7 @@ app.get("/api/banners/public", async (c) => {
   Parallel row population via Promise.all
 ============================================================ */
 
-app.get("/api/homepage/public", async (c) => {
+app.get("/homepage/public", async (c) => {
   const db = c.env.DB
 
   try {
@@ -564,7 +564,7 @@ app.get("/api/homepage/public", async (c) => {
   KV cached 10 min
 ============================================================ */
 
-app.get("/api/footer/public", async (c) => {
+app.get("/footer/public", async (c) => {
   try {
     if (c.env.KV) {
       const cached = await c.env.KV.get("public:footer", "json").catch(() => null)
@@ -591,7 +591,7 @@ app.get("/api/footer/public", async (c) => {
   GET /api/sidebar/public — KV cached 5 min
 ============================================================ */
 
-app.get("/api/sidebar/public", async (c) => {
+app.get("/sidebar/public", async (c) => {
   try {
     if (c.env.KV) {
       const cached = await c.env.KV.get("public:sidebar", "json").catch(() => null)
@@ -618,45 +618,22 @@ app.get("/api/sidebar/public", async (c) => {
 })
 
 /* ============================================================
-  GET /api/player/public — KV cached 10 min
+  NOTE: GET /player/public used to be defined here too, duplicating
+  player.js's route at the same effective path (/api/player/public).
+  This file's mount comes first in index.js, so this version was
+  silently winning — despite returning a flat {autoplay, auto_next,
+  ...} shape that didn't match the nested {server, playback, controls,
+  subtitle} shape formatRow() in player.js produces (which GET /player,
+  the admin equivalent of this exact same data, already returns).
+  Removed the duplicate here; player.js's version (now with this file's
+  10-minute KV caching added to it) is the one implementation.
 ============================================================ */
-
-app.get("/api/player/public", async (c) => {
-  try {
-    if (c.env.KV) {
-      const cached = await c.env.KV.get("public:player", "json").catch(() => null)
-      if (cached) return c.json(ok(cached))
-    }
-
-    const row = await c.env.DB.prepare("SELECT * FROM player_settings WHERE id=1").first()
-    const data = row || {
-      autoplay:          1,
-      auto_next:         1,
-      auto_next_delay:   5,
-      skip_intro:        0,
-      seek_seconds:      10,
-      subtitle_enabled:  1,
-      default_server:    "Server 1",
-      show_download_btn: 1
-    }
-
-    if (c.env.KV) {
-      await c.env.KV.put("public:player", JSON.stringify(data), {
-        expirationTtl: 600
-      }).catch(() => {})
-    }
-
-    return c.json(ok(data))
-  } catch (err) {
-    return c.json(fail(err.message), 500)
-  }
-})
 
 /* ============================================================
   GET /api/performance/public
 ============================================================ */
 
-app.get("/api/performance/public", async (c) => {
+app.get("/performance/public", async (c) => {
   try {
     const row = await c.env.DB.prepare("SELECT * FROM performance_settings WHERE id=1").first()
     return c.json(ok(row || {
@@ -682,7 +659,7 @@ app.get("/api/performance/public", async (c) => {
   GET /api/system/health
 ============================================================ */
 
-app.get("/api/system/health", async (c) => {
+app.get("/system/health", async (c) => {
   try {
     await c.env.DB.prepare("SELECT 1").first()
     return c.json(ok({ status: "ok", db: "connected", ts: new Date().toISOString() }))
@@ -697,5 +674,111 @@ app.get("/api/system/health", async (c) => {
   These were causing duplicate route conflicts.
   publicSearch.js must be registered BEFORE this file in index.js
 ============================================================ */
+
+/* ============================================================
+  GET /api/category/:key — genre page OR A-Z letter page
+  Category.html (via categoryPage.js's fetchCategory()) passes
+  either a genre/category slug or a single A-Z letter as :key,
+  plus optional ?page= and ?type= (anime/movies/cartoon/series).
+
+  ✅ NEW ROUTE (audit): confirmed missing via categoryPage.js's own
+  comment ("GET /api/category/:key doesn't exist on the backend
+  yet") and via a frontend/backend route cross-check — Category.html
+  could never load any data without this. Response shape
+  ({items, total, title}) matches exactly what categoryPage.js reads
+  (data.items/data.total/data.title, per that same comment, which
+  says the frontend's shape was already written against the intended
+  contract). :key resolution order:
+    1. categories.slug (genre/category page — e.g. "action")
+    2. a single A-Z letter (e.g. "A", or "#" for non-alphabetic)
+  matching this file's /anime route and publicSearch.js's
+  /search/genre/:genre + /search/az/:letter for the underlying
+  anime-matching logic, so behavior is consistent across all three
+  category-browsing entry points.
+============================================================ */
+
+app.get("/category/:key", async (c) => {
+  const db     = c.env.DB
+  const key    = c.req.param("key")
+  const qp     = c.req.query
+  const page   = Math.max(1, toInt(qp("page"), 1))
+  const limit  = Math.min(50, Math.max(1, toInt(qp("limit"), 20)))
+  const offset = (page - 1) * limit
+  const type   = qp("type") || ""
+
+  if (!key) return c.json(fail("key required"), 400)
+
+  try {
+    const cacheKey = `category:${key.toLowerCase()}:${type}:${page}`
+    if (c.env.KV) {
+      const cached = await c.env.KV.get(cacheKey, "json").catch(() => null)
+      if (cached) return c.json(ok(cached))
+    }
+
+    const where = ["is_hidden=0", "active=1"]
+    const binds = []
+    let   title = key
+
+    // Try key as a category slug first (genre/category page)
+    const category = await db.prepare(
+      "SELECT name, slug FROM categories WHERE slug=? AND active=1"
+    ).bind(key.toLowerCase()).first()
+
+    if (category) {
+      where.push("genres LIKE ?")
+      binds.push(`%${category.name}%`)
+      title = category.name
+    } else if (key === "#") {
+      // A-Z nav's non-alphabetic bucket
+      where.push("SUBSTR(UPPER(title), 1, 1) NOT BETWEEN 'A' AND 'Z'")
+      title = "#"
+    } else if (/^[A-Za-z]$/.test(key)) {
+      // Single A-Z letter
+      const letter = key.toUpperCase()
+      where.push("title LIKE ?")
+      binds.push(`${letter}%`)
+      title = letter
+    } else {
+      // Neither a known category slug nor a single letter — fall back to
+      // treating it as a free-text genre match, same as publicSearch.js's
+      // /search/genre/:genre, so an unrecognized-but-plausible slug still
+      // returns something useful instead of an empty page.
+      where.push("genres LIKE ?")
+      binds.push(`%${key}%`)
+    }
+
+    if (type) { where.push("type=?"); binds.push(type) }
+
+    const whereSQL = where.join(" AND ")
+    const orderBy  = category ? "rating DESC" : "title ASC"
+
+    const [countRow, rows] = await Promise.all([
+      db.prepare(`SELECT COUNT(*) as total FROM anime WHERE ${whereSQL}`).bind(...binds).first(),
+      db.prepare(`
+        SELECT id, title, slug, type, status, poster, rating, year, genres
+        FROM anime
+        WHERE ${whereSQL}
+        ORDER BY ${orderBy}
+        LIMIT ? OFFSET ?
+      `).bind(...binds, limit, offset).all()
+    ])
+
+    const response = {
+      key, page, limit, title,
+      total: countRow?.total || 0,
+      items: rows.results.map(a => ({ ...a, genres: safeJSON(a.genres) }))
+    }
+
+    if (c.env.KV) {
+      await c.env.KV.put(cacheKey, JSON.stringify(response), {
+        expirationTtl: 300
+      }).catch(() => {})
+    }
+
+    return c.json(ok(response))
+  } catch (err) {
+    return c.json(fail(err.message), 500)
+  }
+})
 
 export default app
