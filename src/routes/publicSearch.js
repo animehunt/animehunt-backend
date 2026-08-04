@@ -82,7 +82,7 @@ async function logSearch(env, query, ip, resultCount) {
   FIXED: Single definition here (not in public.js)
 ============================================================ */
 
-app.get("/api/search", async (c) => {
+app.get("/search", async (c) => {
   const db     = c.env.DB
   const q      = (c.req.query("q") || "").trim()
   const rawPage  = parseInt(c.req.query("page")  || "1")
@@ -216,7 +216,7 @@ app.get("/api/search", async (c) => {
   KV cached 5 min
 ============================================================ */
 
-app.get("/api/search/popular", async (c) => {
+app.get("/search/popular", async (c) => {
   try {
     if (c.env.KV) {
       const cached = await c.env.KV.get("search:popular", "json").catch(() => null)
@@ -252,7 +252,7 @@ app.get("/api/search/popular", async (c) => {
   KV cached 5 min
 ============================================================ */
 
-app.get("/api/search/suggestions", async (c) => {
+app.get("/search/suggestions", async (c) => {
   const db    = c.env.DB
   const q     = (c.req.query("q") || "").trim()
   const _sl   = parseInt(c.req.query("limit") || "6")
@@ -308,7 +308,7 @@ app.get("/api/search/suggestions", async (c) => {
   GET /api/search/filter — Advanced filtered search
 ============================================================ */
 
-app.get("/api/search/filter", async (c) => {
+app.get("/search/filter", async (c) => {
   const db     = c.env.DB
   const qp     = c.req.query
   const search = (qp("q") || "").trim()
@@ -364,7 +364,7 @@ app.get("/api/search/filter", async (c) => {
   KV cached 5 min
 ============================================================ */
 
-app.get("/api/search/genre/:genre", async (c) => {
+app.get("/search/genre/:genre", async (c) => {
   const db     = c.env.DB
   const genre  = c.req.param("genre")
   const _gp    = parseInt(c.req.query("page")  || "1");  const page  = (isNaN(_gp)  || _gp  < 1) ? 1  : _gp
@@ -408,7 +408,7 @@ app.get("/api/search/genre/:genre", async (c) => {
   '#' = non-alphabetic; SQLite safe (no [] syntax)
 ============================================================ */
 
-app.get("/api/search/az/:letter", async (c) => {
+app.get("/search/az/:letter", async (c) => {
   const db     = c.env.DB
   const letter = c.req.param("letter").toUpperCase().slice(0, 1)
   const _ap    = parseInt(c.req.query("page")  || "1");  const page  = (isNaN(_ap)  || _ap  < 1) ? 1  : _ap
@@ -446,3 +446,4 @@ app.get("/api/search/az/:letter", async (c) => {
 
 export default app
 
+    
