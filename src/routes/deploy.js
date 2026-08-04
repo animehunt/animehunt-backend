@@ -158,11 +158,23 @@ app.get("/deploy", async (c) => {
         // it weren't reachable, this whole handler would already have
         // thrown into the catch block below). Worth knowing: post-
         // migration, c.env.DB *is* your Turso connection under the
-        // adapter, so this and `turso` below are now reporting on the
-        // same underlying database, not two independent ones the way
-        // they were when D1 and Turso were genuinely separate systems.
+        // adapter, so "d1" here is reporting on your PRIMARY Turso
+        // database.
+        //
+        // ✅ FIX (audit): `turso` below used to check TURSO_URL/
+        // TURSO_AUTH_TOKEN — the exact same primary-database credentials
+        // "d1" already reports on — so this card was silently duplicating
+        // the d1 check under a different label instead of reporting on
+        // anything independent. The genuinely separate third database is
+        // TURSO_REPLICA_URL/TURSO_REPLICA_AUTH_TOKEN (DB3, see index.js
+        // and dbRestore.js's checkTursoHealth) — checking those instead.
+        // Note this is still only checking that the env vars are
+        // *configured*, not live connectivity (unlike GET /db/status in
+        // dbRestore.js, which actually queries all three DBs) — accurate
+        // enough for the deploy dashboard's summary card, given this
+        // endpoint is called on every page load.
         d1:       true,
-        turso:    !!(c.env.TURSO_URL    && c.env.TURSO_AUTH_TOKEN),
+        turso:    !!(c.env.TURSO_REPLICA_URL    && c.env.TURSO_REPLICA_AUTH_TOKEN),
         supabase: !!(c.env.SUPABASE_URL && c.env.SUPABASE_KEY)
       }
     }))
@@ -356,21 +368,36 @@ app.post("/deploy/restore", async (c) => {
       servers: 0, seo: 0, performance: 0, security: 0, search: 0
     }
 
-    /* Restore anime — explicit columns */
+    /* Restore anime — explicit columns
+       ✅ FIX (audit): this INSERT used to list only 21 of the anime
+       table's 29 columns — ageRating, season_count, episode_count,
+       studio, active, views, and search_weight were silently dropped on
+       every restore even though the backup genuinely captured them
+       (readTableChunked does SELECT * FROM anime), because SQLite
+       doesn't complain about an INSERT that simply omits some columns —
+       it just fills them from DEFAULT. That meant every restore quietly
+       reset every anime's view count to 0 and reset active/episode_count/
+       season_count/studio/ageRating to their schema defaults, regardless
+       of what they actually were at backup time. Now inserts every
+       column the schema (and therefore the backup data) actually has. */
     for (const a of (data.anime || [])) {
       try {
         await db.prepare(`
           INSERT OR REPLACE INTO anime (
             id,title,slug,type,status,poster,banner,year,rating,
-            language,duration,genres,tags,
+            language,duration,genres,tags,ageRating,
+            season_count,episode_count,studio,
             is_home,is_trending,is_most_viewed,is_banner,is_hidden,
+            featured,active,views,search_weight,
             description,created_at,updated_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).bind(
           a.id, a.title, a.slug, a.type, a.status,
           a.poster, a.banner, a.year, a.rating,
-          a.language, a.duration, a.genres, a.tags,
+          a.language, a.duration, a.genres, a.tags, a.ageRating,
+          a.season_count, a.episode_count, a.studio,
           a.is_home, a.is_trending, a.is_most_viewed, a.is_banner, a.is_hidden,
+          a.featured, a.active, a.views, a.search_weight,
           a.description, a.created_at, a.updated_at
         ).run()
         restored.anime++
@@ -379,19 +406,26 @@ app.post("/deploy/restore", async (c) => {
       }
     }
 
-    /* Restore episodes */
+    /* Restore episodes
+       ✅ FIX (audit): same class of bug as the anime restore above —
+       active, sort_order, and air_date existed in the schema and in the
+       backup data (SELECT * FROM episodes) but were missing from this
+       INSERT's column list, so every restore silently reset them to
+       their schema defaults. */
     for (const e of (data.episodes || [])) {
       try {
         await db.prepare(`
           INSERT OR REPLACE INTO episodes (
             id,anime_id,anime_title,season,episode,
             title,description,thumbnail,servers,
-            ongoing,featured,created_at,updated_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ongoing,featured,active,sort_order,air_date,
+            created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).bind(
           e.id, e.anime_id, e.anime_title, e.season, e.episode,
           e.title, e.description, e.thumbnail, e.servers,
-          e.ongoing, e.featured, e.created_at, e.updated_at
+          e.ongoing, e.featured, e.active, e.sort_order, e.air_date,
+          e.created_at, e.updated_at
         ).run()
         restored.episodes++
       } catch (err) {
@@ -422,18 +456,24 @@ app.post("/deploy/restore", async (c) => {
       }
     }
 
-    /* Restore banners */
+    /* Restore banners
+       ✅ FIX (audit): same class of bug — trailer_url, trailer_autoplay,
+       and trailer_muted existed in the schema and backup data but were
+       missing from this INSERT's column list. */
     for (const b of (data.banners || [])) {
       try {
         await db.prepare(`
           INSERT OR REPLACE INTO banners (
             id,page,category,position,title,image,link,
-            banner_order,active,auto_rotate,created_at,updated_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            banner_order,active,auto_rotate,
+            trailer_url,trailer_autoplay,trailer_muted,
+            created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).bind(
           b.id, b.page, b.category, b.position,
           b.title, b.image, b.link,
           b.banner_order, b.active, b.auto_rotate,
+          b.trailer_url, b.trailer_autoplay, b.trailer_muted,
           b.created_at, b.updated_at
         ).run()
         restored.banners++
@@ -660,3 +700,5 @@ app.post("/deploy/version", async (c) => {
 })
 
 export default app
+
+
