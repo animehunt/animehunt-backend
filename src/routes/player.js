@@ -284,16 +284,29 @@ app.get("/player", async (c) => {
 
 /* ================================================
    GET /player/public — for frontend watch page
+   KV cached 10 min (matches other public settings endpoints' pattern)
 ================================================ */
 
 app.get("/player/public", async (c) => {
   try {
+    if (c.env.KV) {
+      const cached = await c.env.KV.get("public:player", "json").catch(() => null)
+      if (cached) return c.json(success(cached))
+    }
+
     const db  = c.env.DB
     const row = await db.prepare(
       "SELECT * FROM player_settings WHERE id=1"
     ).first()
-    if (!row) return c.json(success(formatRow({})))
-    return c.json(success(formatRow(row)))
+    const formatted = row ? formatRow(row) : formatRow({})
+
+    if (c.env.KV) {
+      c.env.KV.put("public:player", JSON.stringify(formatted), {
+        expirationTtl: 600
+      }).catch(() => {})
+    }
+
+    return c.json(success(formatted))
   } catch (err) {
     return c.json(success(formatRow({})))
   }
