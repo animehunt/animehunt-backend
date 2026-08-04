@@ -493,7 +493,13 @@ app.get("/system/health", async (c) => {
   const db     = c.env.DB
   const result = {
     d1:        false,
-    turso:     !!(c.env.TURSO_URL && c.env.TURSO_AUTH_TOKEN),
+    // ✅ FIX (audit, same bug class as deploy.js's dbStatus.turso): this used
+    // to check TURSO_URL/TURSO_AUTH_TOKEN — the same primary-database
+    // credentials `d1` below already verifies via a live query. Post-
+    // migration, c.env.DB *is* your Turso connection, so that duplicated
+    // the d1 check under a different label. The genuinely independent
+    // third database is TURSO_REPLICA_URL/TURSO_REPLICA_AUTH_TOKEN (DB3).
+    turso:     !!(c.env.TURSO_REPLICA_URL && c.env.TURSO_REPLICA_AUTH_TOKEN),
     supabase:  !!(c.env.SUPABASE_URL && c.env.SUPABASE_KEY),
     kv:        !!c.env.KV,
     imageKit:  !!c.env.IMAGEKIT_PRIVATE_KEY,
@@ -563,4 +569,3 @@ app.delete("/system/logs", async (c) => {
 })
 
 export default app
-
