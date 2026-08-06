@@ -1,35 +1,37 @@
 /* ================================================================
    adminAuth.js — Admin Authentication API
-   AnimeHunt Backend — Cloudflare Workers (Hono)
+   AnimeHunt Backend — Node.js (migrated from Cloudflare Workers)
 
    Routes:
      POST /auth/login           — Login, JWT + refresh token return
      GET  /auth/me              — Token verify + user info
-     POST /auth/refresh         — FIX: Refresh access token (was missing)
+     POST /auth/refresh         — Refresh access token
      POST /auth/logout          — Invalidate refresh token in DB
      POST /auth/change-password — Password change (min 12 chars)
 
    Password hashing: PBKDF2-SHA512 via Web Crypto API
    JWT:              HMAC-SHA256 via Web Crypto API (URL-safe base64)
-   No external libs — pure Workers runtime
+   No external libs — Web Crypto is a global in Node 20+, same as it
+   was in Workers, so none of this needed to change for the migration.
 
-   FIXES:
-     ✅ FIX 1: POST /auth/refresh route added (was missing — Line 229 bug)
-     ✅ FIX 2: refresh_token column added to admin_users table
-     ✅ FIX 3: login now stores refresh token in DB
-     ✅ FIX 4: logout now clears refresh token from DB (true invalidation)
-     ✅ FIX 5: requireAuth() exported for use by other modules
-     ✅ FIX 6: All Web Crypto API — no Node.js crypto
-     ✅ FIX 7: Token expiry — access: 15min, refresh: 7 days
-     ✅ FIX 8 (production-readiness pass): seedDefaultAdmin() no longer
-               ships a static pre-computed password hash in source code.
-               Every deployment of this file previously created the same
-               "admin" account with the same password everywhere it was
-               used. Now the seed password comes from the ADMIN_INITIAL_PASSWORD
-               secret (wrangler secret put ADMIN_INITIAL_PASSWORD) if set,
-               otherwise a fresh random password is generated per-deploy
-               and printed once to the Workers deploy log (never stored
-               in source, never returned over the API).
+   HARDENING (this pass):
+     ✅ Removed the hardcoded fallback JWT secret
+        ("animehunt-fallback-secret-change-in-env") that every one of
+        this file's five route handlers plus requireAuth() fell back
+        to via `env.JWT_SECRET || "..."` if the env var was ever
+        unset. index.js already refuses to boot without a real
+        JWT_SECRET, which makes this fallback dead code in the
+        properly-configured app — but a hardcoded, source-visible
+        secret string sitting behind an `||` is still a live footgun
+        for any code path that reaches this file without going
+        through that boot check (tests, a future entry point, a
+        refactor that drops the check). requireSecret() below throws
+        instead of ever handing back a known string — every call
+        site is already inside a try/catch that turns that into a
+        clean error response, so nothing this changes can crash the
+        process; it just stops the file from being able to silently
+        sign or verify a JWT against a secret an attacker can read
+        in this very file.
 ================================================================ */
 
 import { Hono } from "hono"
@@ -40,13 +42,21 @@ const success = (data) => ({ success: true,  data })
 const failure = (msg)  => ({ success: false, message: msg })
 const now     = ()     => new Date().toISOString()
 
+/* Every JWT sign/verify call site goes through this instead of a bare
+   `env.JWT_SECRET || "fallback"` — see the HARDENING note above. */
+function requireSecret(env) {
+  if (!env?.JWT_SECRET) {
+    throw new Error("JWT_SECRET is not configured")
+  }
+  return env.JWT_SECRET
+}
+
 /* ── Token expiry constants ── */
 const ACCESS_TOKEN_EXPIRY  = 15 * 60          // 15 minutes (seconds)
 const REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60 // 7 days (seconds)
 
 /* ================================================================
    ENSURE ADMIN TABLE
-   FIX: Added refresh_token column (needed for refresh + logout)
 ================================================================ */
 
 async function ensureAdminTable(db) {
@@ -64,7 +74,7 @@ async function ensureAdminTable(db) {
       )
     `).run()
 
-    // FIX: Add refresh_token column if table already exists (migration safety)
+    // Add refresh_token column if table already exists (migration safety)
     try {
       await db.prepare(
         "ALTER TABLE admin_users ADD COLUMN refresh_token TEXT DEFAULT NULL"
@@ -78,7 +88,7 @@ async function ensureAdminTable(db) {
 }
 
 /* ================================================================
-   PBKDF2 HELPERS — Web Crypto API (Cloudflare Workers native)
+   PBKDF2 HELPERS — Web Crypto API
    Format: "pbkdf2:sha512:100000:<hex_salt>:<hex_hash>"
 ================================================================ */
 
@@ -241,9 +251,9 @@ async function verifyJWT(token, secret) {
 }
 
 /* ================================================================
-   SEED DEFAULT ADMIN — Agar table empty ho
+   SEED DEFAULT ADMIN — if the table is empty
    Username: admin
-   Password: from ADMIN_INITIAL_PASSWORD secret, or a fresh random
+   Password: from ADMIN_INITIAL_PASSWORD env var, or a fresh random
              password generated per-deploy (never hardcoded in source —
              a static hash here would mean every deployment of this
              file shares one admin password until someone remembers
@@ -277,15 +287,16 @@ async function seedDefaultAdmin(db, env = {}) {
       `).bind(storedPassword, now()).run()
 
       if (usingProvidedSecret) {
-        console.log("✅ Default admin seeded using ADMIN_INITIAL_PASSWORD secret")
+        console.log("✅ Default admin seeded using ADMIN_INITIAL_PASSWORD env var")
       } else {
-        // Printed once, only in the Workers runtime log at first request after deploy —
-        // never written to a file, never returned over the API, never stored anywhere else.
+        // Printed once, only to the process's own log at first request after
+        // deploy — never written to a file, never returned over the API,
+        // never stored anywhere else.
         console.log(
           "✅ Default admin seeded — ADMIN_INITIAL_PASSWORD was not set, " +
           `so a random password was generated: ${plainPassword}\n` +
           "   ⚠️  Save this now and change it after first login — it will not be shown again. " +
-          "   To set your own instead: wrangler secret put ADMIN_INITIAL_PASSWORD"
+          "   To set your own instead: add ADMIN_INITIAL_PASSWORD=... to your .env file and restart."
         )
       }
     }
@@ -296,37 +307,41 @@ async function seedDefaultAdmin(db, env = {}) {
 
 /* ================================================================
    EXPORTED MIDDLEWARE — requireAuth
-   Used by: system.js, securityAdmin.js, firewall.js, and all
-            Part 2/3 files that need authentication
+   Used by: index.js's adminRoutes, gating every admin route
 ================================================================ */
 
 export function requireAuth(env) {
   return async (c, next) => {
-    const authHeader = c.req.header("Authorization") || ""
-    const token      = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : null
+    try {
+      const authHeader = c.req.header("Authorization") || ""
+      const token      = authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7).trim()
+        : null
 
-    if (!token) {
-      return c.json(failure("Token required"), 401)
+      if (!token) {
+        return c.json(failure("Token required"), 401)
+      }
+
+      const secret  = requireSecret(env)
+      const payload = await verifyJWT(token, secret)
+
+      if (!payload) {
+        return c.json(failure("Invalid or expired token"), 401)
+      }
+
+      // Attach decoded admin info to context
+      c.set("admin", payload)
+      return next()
+
+    } catch (err) {
+      console.error("requireAuth:", err)
+      return c.json(failure("Auth check failed"), 500)
     }
-
-    const secret  = env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
-    const payload = await verifyJWT(token, secret)
-
-    if (!payload) {
-      return c.json(failure("Invalid or expired token"), 401)
-    }
-
-    // Attach decoded admin info to context
-    c.set("admin", payload)
-    return next()
   }
 }
 
 /* ================================================================
    POST /auth/login
-   FIX: Now generates AND stores refresh token in DB
 ================================================================ */
 
 app.post("/auth/login", async (c) => {
@@ -360,7 +375,7 @@ app.post("/auth/login", async (c) => {
       return c.json(failure("Invalid credentials"), 401)
     }
 
-    const secret = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+    const secret = requireSecret(c.env)
     const nowSec = Math.floor(Date.now() / 1000)
 
     /* Generate access token — 15 minutes */
@@ -374,7 +389,7 @@ app.post("/auth/login", async (c) => {
     }
     const accessToken = await signJWT(accessPayload, secret)
 
-    /* FIX: Generate refresh token — 7 days */
+    /* Generate refresh token — 7 days */
     const refreshPayload = {
       sub:  String(user.id),
       type: "refresh",
@@ -383,7 +398,7 @@ app.post("/auth/login", async (c) => {
     }
     const refreshToken = await signJWT(refreshPayload, secret)
 
-    /* FIX: Store refresh token in DB + update last_login */
+    /* Store refresh token in DB + update last_login */
     await db.prepare(
       "UPDATE admin_users SET refresh_token=?, last_login=?, login_count=login_count+1 WHERE id=?"
     ).bind(refreshToken, now(), user.id).run()
@@ -417,7 +432,7 @@ app.get("/auth/me", async (c) => {
       return c.json(failure("Token required"), 401)
     }
 
-    const secret  = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+    const secret  = requireSecret(c.env)
     const payload = await verifyJWT(token, secret)
 
     if (!payload) {
@@ -449,9 +464,9 @@ app.get("/auth/me", async (c) => {
 })
 
 /* ================================================================
-   POST /auth/refresh — FIX: This route was completely missing
+   POST /auth/refresh
    Used by: auth.js in frontend (Auth.init() token refresh flow)
-   Dependency: Part 4 auth.js calls POST /api/admin/auth/refresh
+   Dependency: frontend calls POST /api/admin/auth/refresh
 ================================================================ */
 
 app.post("/auth/refresh", async (c) => {
@@ -463,7 +478,7 @@ app.post("/auth/refresh", async (c) => {
       return c.json(failure("Refresh token required"), 400)
     }
 
-    const secret  = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+    const secret  = requireSecret(c.env)
     const payload = await verifyJWT(refreshToken, secret)
 
     if (!payload) {
@@ -475,7 +490,7 @@ app.post("/auth/refresh", async (c) => {
       return c.json(failure("Invalid token type"), 401)
     }
 
-    /* FIX: Verify refresh token matches what's stored in DB */
+    /* Verify refresh token matches what's stored in DB */
     const db = c.env.DB
     await ensureAdminTable(db)
 
@@ -511,8 +526,8 @@ app.post("/auth/refresh", async (c) => {
 
 /* ================================================================
    POST /auth/logout
-   FIX: Now properly invalidates refresh token in DB
-        (Previously was just a "courtesy response" — no actual logout)
+   Invalidates the refresh token in DB — actual session invalidation,
+   not just a courtesy response.
 ================================================================ */
 
 app.post("/auth/logout", async (c) => {
@@ -523,11 +538,11 @@ app.post("/auth/logout", async (c) => {
       : null
 
     if (token) {
-      const secret  = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+      const secret  = requireSecret(c.env)
       const payload = await verifyJWT(token, secret)
 
       if (payload?.sub) {
-        /* FIX: Clear refresh token from DB — actual session invalidation */
+        /* Clear refresh token from DB — actual session invalidation */
         const db = c.env.DB
         await ensureAdminTable(db)
         await db.prepare(
@@ -545,9 +560,8 @@ app.post("/auth/logout", async (c) => {
 
 /* ================================================================
    POST /auth/change-password
-   FIX: Route renamed from /auth/change-password to match
-        blueprint's /auth/reset-password path too
-        Both paths supported for compatibility
+   Both /auth/change-password and /auth/reset-password paths
+   supported for frontend compatibility.
 ================================================================ */
 
 async function handleChangePassword(c) {
@@ -560,7 +574,7 @@ async function handleChangePassword(c) {
 
     if (!token) return c.json(failure("Token required"), 401)
 
-    const secret  = c.env.JWT_SECRET || "animehunt-fallback-secret-change-in-env"
+    const secret  = requireSecret(c.env)
     const payload = await verifyJWT(token, secret)
     if (!payload)  return c.json(failure("Invalid token"), 401)
 
@@ -605,5 +619,3 @@ app.post("/auth/change-password", handleChangePassword)
 app.post("/auth/reset-password",  handleChangePassword)
 
 export default app
-
-
