@@ -273,7 +273,19 @@ app.post("/dashboard/sync-check", async (c) => {
 app.post("/dashboard/ai-scan", async (c) => {
   try {
     /* Import and run the AI engine */
-    const { runPlayerAI } = await import("../ai/playerEngine.js")
+    let runPlayerAI
+    try {
+      ;({ runPlayerAI } = await import("../ai/playerEngine.js"))
+    } catch (importErr) {
+      if (importErr.code === "ERR_MODULE_NOT_FOUND") {
+        // ai/playerEngine.js wasn't part of this deployment's file set yet
+        // (see src/index.js's scope note at the top) — surface that plainly
+        // instead of a raw Node module-resolution error.
+        return c.json(failure("AI player-scan engine (ai/playerEngine.js) is not deployed yet"), 501)
+      }
+      throw importErr
+    }
+
     await runPlayerAI(c.env)
 
     return c.json(success({
