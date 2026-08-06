@@ -65,7 +65,6 @@ export async function systemGuard(c, next) {
   const path = c.req.path
 
   if (path.startsWith("/api/admin")) return next()
-  if (path.startsWith("/api/auth"))  return next()
   if (path === "/api/system/health" || path === "/api/health") return next()
 
   try {
