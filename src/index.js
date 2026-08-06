@@ -3,25 +3,40 @@
    File: src/index.js
    Node.js (via @hono/node-server) — migrated from Cloudflare Workers
 
-   MIGRATION NOTES (everything below the "AI ENGINES" import block,
-   i.e. from "NODE ENV OBJECT" onward, is new/changed for the VPS
-   migration. Every other route import and app.route(...)/adminRoutes
-   registration below is unchanged from the Workers version — they
-   didn't need to change, because c.env.DB and c.env.KV are populated
-   by the adapters instead of Workers bindings.
+   ── SCOPE NOTE — READ BEFORE DEPLOYING ──────────────────────────
+   This revision is built only from the files actually provided in
+   this round. Six imports from the version this was based on point
+   at files that were NOT included here, so they've been removed
+   rather than left as dangling imports that would crash on boot:
 
-   ✅ FIX (security audit, dual-mount vulnerability): downloads.js and
-   ads.js used to each be ONE router mounted both publicly (app.route
-   ("/api", ...), no auth) and under adminRoutes (auth required) — since
-   it's the same Hono() object in both places, every admin write route
-   inside them (hosts, download entries, ads/popup/shortlink/redirect
-   libraries, monetization config) was reachable unauthenticated at
-   /api/..., bypassing adminAuth entirely. Each file is now split:
-   downloads.js/ads.js contain ONLY public routes (mounted under
-   app.route("/api", ...)); downloadsAdmin.js/adsAdmin.js contain ONLY
-   admin routes (mounted only under adminRoutes, so requireAuth applies).
-   Every individual route's logic/SQL is unchanged — only which file
-   it lives in, and therefore where it's reachable, changed.
+     ./routes/player.js            ./routes/downloads.js
+     ./routes/playerAdmin.js       ./routes/downloadsAdmin.js
+     ./routes/ads.js               ./ai/playerEngine.js
+     ./routes/adsAdmin.js
+
+   Nothing else in this codebase imports any of those six files, so
+   removing them here is self-contained — verified by grepping every
+   provided file for references to each path. When you have those
+   files, restore their import lines + `app.route(...)` /
+   `adminRoutes.route(...)` registrations (search this file for
+   "NOT INCLUDED" below to find exactly where each one plugs back
+   in). Two things worth carrying forward when you do:
+
+     1. Public/admin split — if player.js/downloads.js/ads.js still
+        contain BOTH public and admin-only routes in one file, mount
+        that same Hono() instance in only one place (public app.route
+        OR adminRoutes.route, never both) — mounting one router
+        object in two places exposes every route in it at both
+        prefixes, auth included.
+     2. c.executionCtx.waitUntil() — now works on Node via the shim
+        below, so playerEngine.js's own waitUntil() calls (if any)
+        need no changes either.
+
+   Everything else below is otherwise a routing/infra pass over what
+   Workers gave you for free: c.env.DB / c.env.KV are populated by
+   the adapters instead of Workers bindings, c.executionCtx.waitUntil
+   is polyfilled (see EXECUTION CONTEXT below), and the Cron Trigger
+   is replaced by a secret-gated HTTP route (see /internal/run-cron).
 ================================================ */
 
 // MUST be the very first import — loads .env into process.env before
@@ -30,6 +45,7 @@
 // that aren't already set).
 import "dotenv/config"
 
+import { createHash, timingSafeEqual } from "node:crypto"
 import { Hono } from "hono"
 import { cors }  from "hono/cors"
 import { serve } from "@hono/node-server"
@@ -41,56 +57,50 @@ import { dbSync }      from "./middleware/dbSync.js"
 import { firewall }    from "./middleware/firewall.js"
 import { systemGuard } from "./middleware/systemGuard.js"
 import adminAuthApp, { requireAuth } from "./middleware/adminAuth.js"
+import { executionCtxShim } from "./adapters/executionCtx.js"
 
 /* ================= ROUTE IMPORTS ================= */
 
-// (public site-user auth removed — confirmed no visitor login exists on
-// the live site, admin-only login stays via adminAuth.js/adminAuthApp below)
+// No public/visitor login is mounted anywhere in this file — only the
+// admin panel authenticates, via adminAuth.js/adminAuthApp below.
 import dashboard       from "./routes/dashboard.js"
 import anime           from "./routes/anime.js"
 import publicAnime     from "./routes/public.js"
 import episodes        from "./routes/episodes.js"
 import categories      from "./routes/categories.js"
 import banners         from "./routes/banners.js"
-import bannersPublic   from "./routes/bannersPublic.js"  // ✅ FIX (audit ISSUE-025): public click-tracking route only
+import bannersPublic   from "./routes/bannersPublic.js"    // ← public click-tracking route only
 import adminServers    from "./routes/adminServers.js"
-import player          from "./routes/player.js"
-import playerAdmin     from "./routes/playerAdmin.js"  // ✅ FIX (audit ISSUE-020): admin-only player write routes
-import downloads       from "./routes/downloads.js"        // ← public routes only
-import downloadsAdmin  from "./routes/downloadsAdmin.js"   // ← admin routes only (see file header — split from downloads.js, security fix)
-import ads             from "./routes/ads.js"               // ← public routes only
-import adsAdmin        from "./routes/adsAdmin.js"          // ← admin routes only (see file header — split from ads.js, security fix)
-import analytics       from "./routes/analytics.js"        // ← public tracking routes only (see file header — split, security/prefix fix)
-import analyticsAdmin  from "./routes/analyticsAdmin.js"   // ← admin dashboard routes only (see file header — split, security/prefix fix)
+// NOT INCLUDED in this round: ./routes/player.js, ./routes/playerAdmin.js
+// NOT INCLUDED in this round: ./routes/downloads.js, ./routes/downloadsAdmin.js
+// NOT INCLUDED in this round: ./routes/ads.js, ./routes/adsAdmin.js
+import analytics       from "./routes/analytics.js"        // ← public tracking routes only
+import analyticsAdmin  from "./routes/analyticsAdmin.js"   // ← admin dashboard routes only
 import searchAdmin     from "./routes/searchAdmin.js"
 import publicSearch    from "./routes/publicSearch.js"
 import seoAdmin        from "./routes/seoAdmin.js"
-import publicSEO       from "./routes/publicSEO.js"          // ← /api/seo/meta, /api/seo/schema (prefix fix, see file header)
-import publicSEORoot   from "./routes/publicSEORoot.js"      // ← robots.txt, sitemap*.xml — mounted at domain root, NOT /api (see file header)
+import publicSEO       from "./routes/publicSEO.js"          // ← /api/seo/meta, /api/seo/schema
+import publicSEORoot   from "./routes/publicSEORoot.js"      // ← robots.txt, sitemap*.xml — mounted at domain root, NOT /api
 import sidebar         from "./routes/sidebar.js"
 import footer          from "./routes/footer.js"
 import homepage        from "./routes/homepage.js"
 import ai              from "./routes/ai.js"
-import { runAIEngines } from "./routes/ai.js"  // ✅ FIX (audit ISSUE-010): named export, wired into /internal/run-cron below
+import { runAIEngines } from "./routes/ai.js"  // named export, wired into /internal/run-cron below
 import securityAdmin   from "./routes/securityAdmin.js"
 import performance     from "./routes/performance.js"
 import system          from "./routes/system.js"
 import deploy          from "./routes/deploy.js"
 import upload          from "./routes/upload.js"
 import recommendations from "./routes/recommendations.js"
-// (robots.js and sitemap.js removed — publicSEORoot.js has complete,
-// more capable implementations of both routes that were silently winning
-// over these two anyway; found during the final QA pass, see README.
-// Split out of publicSEO.js and mounted at the domain root — see
-// publicSEORoot.js's file header for why.)
 import trending        from "./routes/trending.js"
 import dbRestore       from "./routes/dbRestore.js"
-import bulkUpload      from "./routes/bulk-upload.js"    // ← CRITICAL FIX #4
+import bulkUpload      from "./routes/bulk-upload.js"
 
 /* ================= AI ENGINES ================= */
 
-import { runPlayerAI } from "./ai/playerEngine.js"
-import { playerProgressRoutes } from "./ai/playerEngine.js"  // ✅ FIX (audit ISSUE-017): watch-progress/video-config routes, now mountable
+// NOT INCLUDED in this round: ./ai/playerEngine.js (runPlayerAI, playerProgressRoutes)
+// — confirmed nothing else in the provided codebase imports it, so this is a
+// clean removal, not a partial one. See the scope note at the top of this file.
 import { runFooterAI } from "./ai/footerAI.js"
 
 /* ================= NODE ENV OBJECT (replaces Workers bindings) =================
@@ -107,13 +117,12 @@ import { runFooterAI } from "./ai/footerAI.js"
 
    Scope note on DB3: this env object makes the second Turso database
    available as a working connection (env.TURSO_REPLICA, plus the raw
-   URL/token below). Actually repointing the existing per-route
-   syncToReplicas()/syncToTurso() write-path helpers (in anime.js,
-   categories.js, banners.js, adminServers.js, episodes.js, dashboard.js)
-   to push to *this* database instead of re-hitting the primary is a
-   separate, bounded follow-up — say the word and I'll go do that pass;
-   holding off here since it touches files beyond what was asked for in
-   this round (adapters + index.js + deploy.yml). */
+   URL/token below). Whether each route file's own syncToReplicas()/
+   syncToTurso() write-path helper (anime.js, categories.js, banners.js,
+   adminServers.js, episodes.js, dashboard.js) actually targets this
+   database internally is that file's own concern — this object just
+   makes the credentials/client available under the same env.TURSO_REPLICA_*
+   names each of those helpers already expects. */
 
 import { createD1Compatible } from "./adapters/d1Libsql.js"
 import { RedisKV }            from "./adapters/kvRedis.js"
@@ -176,25 +185,35 @@ const nodeEnv = {
 
   CRON_SECRET: process.env.CRON_SECRET,
 
-  // ✅ FIX (audit): playerEngine.js's stream-token feature (ISSUE-018 —
-  // an optional signed-token alternative to the Origin/Referer embed
-  // check, for legitimate non-browser callers) reads env.STREAM_TOKEN_SECRET,
-  // but this key was missing from nodeEnv entirely — env.STREAM_TOKEN_SECRET
-  // was always undefined here regardless of what was set in .env, which
-  // silently disabled the whole feature (hasValidToken can never be true
-  // when the secret is undefined). The Origin/Referer check itself is
-  // unaffected either way — this only restores the optional token path.
+  // Used by anime.js's POST /anime/auto-add and episodes.js's POST
+  // /episodes/auto-add (TMDB metadata import). Despite the name, this
+  // should be TMDB's "API Read Access Token" (a long JWT starting
+  // "eyJ...", from your TMDB account under Settings → API) — see
+  // src/utils/tmdb.js's header comment for why. Optional: if unset,
+  // those two routes return a clear "not configured" error; nothing
+  // else in this app depends on it.
+  TMDB_API_KEY: process.env.TMDB_API_KEY,
+
+  // Optional signed-token alternative to playerEngine.js's Origin/Referer
+  // embed check, for legitimate non-browser callers. Harmless to leave wired
+  // even while playerEngine.js itself isn't part of this round's files.
   STREAM_TOKEN_SECRET: process.env.STREAM_TOKEN_SECRET
 }
 
-// Fail loudly at boot rather than silently signing JWTs with the fallback
-// string baked into adminAuth.js if this is ever left unset.
+// Fail loudly at boot rather than silently signing JWTs with an insecure
+// fallback if this is ever left unset (adminAuth.js also refuses to sign
+// or verify anything without a real secret — see that file for why this
+// isn't the only line of defense).
 if (!nodeEnv.JWT_SECRET) {
   console.error("❌ FATAL: JWT_SECRET is not set in the environment. Refusing to start.")
   process.exit(1)
 }
 if (!nodeEnv.TURSO_URL || !nodeEnv.TURSO_AUTH_TOKEN) {
   console.error("❌ FATAL: TURSO_URL / TURSO_AUTH_TOKEN are not set. Refusing to start.")
+  process.exit(1)
+}
+if (!nodeEnv.CRON_SECRET) {
+  console.error("❌ FATAL: CRON_SECRET is not set in the environment. Refusing to start.")
   process.exit(1)
 }
 
@@ -209,14 +228,16 @@ app.use("*", async (c, next) => {
   await next()
 })
 
-/* ================= CORS ================= */
-/* Domain Cloudflare env var se aata hai — code edit nahi karna padega.
-   wrangler.toml ya dashboard mein ALLOWED_ORIGINS set karo, comma-separated:
-   ALLOWED_ORIGINS = "https://animehunt.in,https://www.animehunt.in,https://admin.animehunt.in"
-   Naya domain add/change karna ho to sirf env var update karo aur redeploy karo — yeh file touch nahi hogi.
-   (Unchanged from Workers version — on Node this now reads from the .env
-   file / systemd environment instead of a wrangler.toml [vars] block, but
-   the code here doesn't need to know the difference.) */
+/* ================= EXECUTION CONTEXT (Node equivalent of Workers'
+   ctx.waitUntil — see src/adapters/executionCtx.js for why this exists) ================= */
+app.use("*", executionCtxShim)
+
+/* ================= CORS =================
+   ALLOWED_ORIGINS comes from the environment (.env / systemd / PM2), comma-
+   separated, e.g.:
+     ALLOWED_ORIGINS=https://animehunt.in,https://www.animehunt.in,https://admin.animehunt.in
+   Add or change a domain by updating that env var and restarting the
+   process — this file doesn't need to change. */
 app.use("*", async (c, next) => {
   const allowed = (c.env.ALLOWED_ORIGINS || "")
     .split(",")
@@ -227,7 +248,7 @@ app.use("*", async (c, next) => {
     origin: allowed.length ? allowed : "*",
     allowHeaders: ["Content-Type", "Authorization"],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    credentials:  allowed.length > 0,   // wildcard "*" ke saath credentials:true invalid hai
+    credentials:  allowed.length > 0,   // wildcard "*" is invalid together with credentials:true
     maxAge:       86400
   })
 
@@ -256,11 +277,11 @@ app.use("*", async (c, next) => {
 })
 
 /* ================= FIREWALL + SYSTEM GUARD =================
-   The /api/auth exemption that used to live here is gone along with
-   routes/auth.js — nothing is mounted at that path anymore, so there's
-   nothing left to exempt. /api/admin/auth/login (the real, admin-only
-   login) was never exempted from these and still isn't — it has its own
-   tight rate limit instead (firewall.js: 5 attempts / 5 minutes). */
+   No public /api/auth route is mounted anywhere in this file, so there's
+   nothing to exempt at that path. /api/admin/auth/login (the real,
+   admin-only login) has never been exempted from these and isn't now
+   either — it has its own tight rate limit instead (firewall.js: 5
+   attempts / 5 minutes). */
 app.use("*", firewall)
 app.use("*", systemGuard)
 
@@ -312,34 +333,28 @@ app.get("/api/health", async (c) => {
 //
 // Set CRON_SECRET in your .env to any long random string and use the
 // same value in the crontab line above. This route is intentionally
-// registered before the firewall/systemGuard middleware below has any
+// registered before the firewall/systemGuard middleware above has any
 // effect on it — it's a small, fixed, secret-gated surface, not a public
 // endpoint.
 //
-// Note: this only replicates what the old scheduled() actually called
-// (runPlayerAI + runFooterAI). routes/ai.js exports a separate
-// runAIEngines() that its own comment says is "called by cron every 5
-// minutes", but nothing in the original scheduled() handler actually
-// called it — that gap already existed before this migration.
+// Secret comparison is constant-time (same standard adminAuth.js already
+// holds itself to for password verification) rather than a plain !== —
+// bearer-token checks are exactly the kind of comparison a timing
+// side-channel can target.
 //
-// ✅ FIX (audit ISSUE-010): added below. runAIEngines() covers the
-// server/analytics/category/banner/seo/homepage/backup/search/deploy/
-// download engines (see ai.js) — previously these only ran when an admin
-// manually clicked "Run Now" on the AI Brain page, including the
-// auto-failover logic that's supposed to activate a backup server when
-// all others are down (see the ISSUE-016 fix in ai.js) — a feature whose
-// entire value is in running unattended, on schedule, not on-demand.
+// Note: playerEngine.js's runPlayerAI() isn't wired in here because
+// ai/playerEngine.js wasn't part of this round's files — see the scope
+// note at the top of this file for how to add it back.
 app.post("/internal/run-cron", async (c) => {
   const authHeader = c.req.header("Authorization") || ""
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null
 
-  if (!c.env.CRON_SECRET || token !== c.env.CRON_SECRET) {
+  if (!token || !secretsMatch(token, c.env.CRON_SECRET)) {
     return c.json({ success: false, message: "Unauthorized" }, 401)
   }
 
   console.log(`⏰ Cron: manual trigger at ${new Date().toISOString()}`)
   const results = await Promise.allSettled([
-    runPlayerAI(c.env),
     runFooterAI(c.env),
     runAIEngines(c.env)
   ])
@@ -351,13 +366,24 @@ app.post("/internal/run-cron", async (c) => {
   })
 })
 
+// Constant-time string comparison for the cron bearer token. Node's
+// timingSafeEqual() throws on mismatched buffer lengths, so both inputs
+// are hashed to a fixed-length digest first — this also means the
+// comparison itself never leaks the real secret's length.
+function secretsMatch(a, b) {
+  if (!a || !b) return false
+  const bufA = createHash("sha256").update(a).digest()
+  const bufB = createHash("sha256").update(b).digest()
+  return timingSafeEqual(bufA, bufB)
+}
+
 /* ================= PUBLIC ROUTES ================= */
 app.route("/api", publicAnime)
-app.route("/api", player)
-app.route("/api", playerProgressRoutes)  // ✅ FIX (audit ISSUE-017): /api/player/validate, /progress, /config — previously dead, never mounted
-app.route("/api", bannersPublic)  // ✅ FIX (audit ISSUE-025): /api/banners/:id/click — was admin-only, so real visitor clicks never recorded
-app.route("/api", downloads)      // ← /api/go, /api/session/:id, /api/knight-data, /api/public/download-hosts, /api/public/episodes, /api/analytics
-app.route("/api", ads)            // ← /api/public/page-ads, /api/public/nav-fire, /api/public/ads/:adId/click
+// NOT INCLUDED in this round: app.route("/api", player) — ./routes/player.js
+// NOT INCLUDED in this round: app.route("/api", playerProgressRoutes) — ./ai/playerEngine.js
+app.route("/api", bannersPublic)  // ← /api/banners/:id/click
+// NOT INCLUDED in this round: app.route("/api", downloads) — ./routes/downloads.js
+// NOT INCLUDED in this round: app.route("/api", ads) — ./routes/ads.js
 app.route("/api", analytics)      // ← /api/track/view, /api/track/download, /api/track/search, /api/track/banner
 app.route("/api", publicSearch)
 app.route("/api", publicSEO)
@@ -366,7 +392,7 @@ app.route("/api", recommendations)
 app.route("/api", trending)
 
 /* ================= ADMIN LOGIN (NO AUTH MIDDLEWARE — this IS the login endpoint) ================= */
-app.route("/api/admin", adminAuthApp)        // ← FIX: adminAuthApp's internal routes already start with /auth/, so mount at /api/admin (not /api/admin/auth) to compose correctly: /api/admin + /auth/login = /api/admin/auth/login
+app.route("/api/admin", adminAuthApp)        // ← adminAuthApp's internal routes start with /auth/, so mounting at /api/admin (not /api/admin/auth) composes to /api/admin/auth/login
 
 /* ================= ADMIN ROUTES (AUTH REQUIRED) ================= */
 const adminRoutes = new Hono()
@@ -377,10 +403,10 @@ adminRoutes.route("/", anime)
 adminRoutes.route("/", episodes)
 adminRoutes.route("/", categories)
 adminRoutes.route("/", banners)
-adminRoutes.route("/", playerAdmin)  // ✅ FIX (audit ISSUE-020): POST /player, POST /player/reset now require auth
+// NOT INCLUDED in this round: adminRoutes.route("/", playerAdmin) — ./routes/playerAdmin.js
 adminRoutes.route("/", adminServers)
-adminRoutes.route("/", downloadsAdmin)    // ← /api/admin/downloads/*, /api/admin/hosts/*
-adminRoutes.route("/", adsAdmin)          // ← /api/admin/ads-library/*, /api/admin/popup-library/*, etc.
+// NOT INCLUDED in this round: adminRoutes.route("/", downloadsAdmin) — ./routes/downloadsAdmin.js
+// NOT INCLUDED in this round: adminRoutes.route("/", adsAdmin) — ./routes/adsAdmin.js
 adminRoutes.route("/", analyticsAdmin)
 adminRoutes.route("/", homepage)
 adminRoutes.route("/", footer)
@@ -394,7 +420,7 @@ adminRoutes.route("/", ai)
 adminRoutes.route("/", deploy)
 adminRoutes.route("/", upload)
 adminRoutes.route("/", dbRestore)
-adminRoutes.route("/", bulkUpload)   // ← CRITICAL FIX #4: bulk-upload admin routes
+adminRoutes.route("/", bulkUpload)
 
 app.route("/api/admin", adminRoutes)
 
@@ -422,4 +448,3 @@ process.on("SIGTERM", async () => {
   await redisClient.quit()
   process.exit(0)
 })
-
