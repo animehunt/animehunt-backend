@@ -11,6 +11,7 @@
 
 // FIX: Combined into one import line
 import { getDB, Database } from "../db.js"
+import { getClientIP }     from "../utils/clientIp.js"
 
 /* ─────────────────────────────────────────────────────────────
    KV-BASED DISTRIBUTED RATE LIMITER
@@ -104,7 +105,7 @@ export async function dbSync(c, next) {
   const isWrite = ["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method)
 
   if (isWrite) {
-    const ip = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+    const ip = getClientIP(c)
     const rateLimitResult = await checkRateLimit(c.env, ip)
     if (!rateLimitResult.allowed) {
       return c.json({
