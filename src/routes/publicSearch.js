@@ -26,6 +26,7 @@
 ============================================================ */
 
 import { Hono } from "hono"
+import { getClientIP } from "../utils/clientIp.js"
 
 const app  = new Hono()
 const ok   = d => ({ success: true,  data: d })
@@ -90,7 +91,7 @@ app.get("/search", async (c) => {
   const page   = (isNaN(rawPage)  || rawPage  < 1)  ? 1  : rawPage
   const limit  = Math.min(50, Math.max(1, isNaN(rawLimit) ? 20 : rawLimit))
   const offset = (page - 1) * limit
-  const ip     = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+  const ip     = getClientIP(c)
 
   if (q.length < 2) {
     return c.json(ok({ query: q, results: [], count: 0, pagination: { page, limit, total: 0, pages: 0 } }))
