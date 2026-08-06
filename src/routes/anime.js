@@ -4,6 +4,15 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { uploadBufferToImageKit } from "./upload.js"
+import {
+  resolveTmdbTarget,
+  tmdbFetch,
+  tmdbImageUrl,
+  mapTmdbGenres,
+  mapTmdbStatus,
+  extractYear
+} from "../utils/tmdb.js"
 
 const animeRoute = new Hono()
 
@@ -563,6 +572,214 @@ animeRoute.post("/anime/bulk-status", async (c) => {
 
   } catch (err) {
     console.error("anime bulk-status error:", err)
+    return c.json(failure(err.message), 500)
+  }
+})
+
+/* ========================= */
+/* TMDB AUTO-ADD             */
+/* (NEW FEATURE)             */
+/* ========================= */
+
+// TMDB "original"-size images (poster/backdrop) are occasionally
+// larger than the 5 MB cap config.js enforces for manual browser
+// uploads — that cap exists to stop an admin from accidentally
+// uploading something huge through a form, which isn't the situation
+// here (the source is TMDB's own CDN, not arbitrary user input).
+// Still enforcing *some* ceiling as a sanity check against a
+// malformed/unexpectedly huge response.
+const TMDB_IMAGE_MAX_BYTES = 20 * 1024 * 1024 // 20 MB
+
+async function downloadTmdbImage(imageUrl) {
+  let res
+  try {
+    res = await fetch(imageUrl)
+  } catch (networkErr) {
+    // one retry — TMDB's image CDN is generally reliable, but a bare
+    // single network blip shouldn't fail the whole auto-add
+    res = await fetch(imageUrl)
+  }
+
+  if (!res.ok) {
+    throw new Error(`TMDB image download failed: HTTP ${res.status}`)
+  }
+
+  const contentType = res.headers.get("Content-Type") || "image/jpeg"
+  if (!contentType.startsWith("image/")) {
+    throw new Error(`TMDB returned a non-image response (${contentType})`)
+  }
+
+  const buffer = await res.arrayBuffer()
+  if (buffer.byteLength === 0) {
+    throw new Error("TMDB image download returned an empty file")
+  }
+  if (buffer.byteLength > TMDB_IMAGE_MAX_BYTES) {
+    throw new Error(`TMDB image exceeds ${TMDB_IMAGE_MAX_BYTES / 1024 / 1024}MB — refusing to upload`)
+  }
+
+  return { buffer, contentType }
+}
+
+async function downloadAndUploadTmdbImage(env, imageUrl, baseName) {
+  const { buffer, contentType } = await downloadTmdbImage(imageUrl)
+  const ext      = contentType.split("/")[1]?.replace("jpeg", "jpg") || "jpg"
+  const fileName = `${baseName}_${Date.now()}.${ext}`
+  const blob     = new Blob([buffer], { type: contentType })
+
+  const result = await uploadBufferToImageKit(env, blob, fileName, {
+    folder: "/animehunt/tmdb",
+    tags:   "anime-site,tmdb-import"
+  })
+
+  return result.url
+}
+
+// POST /api/admin/anime/auto-add
+// Body: { tmdb_id?: string|number, title?: string, media_type?: "movie"|"tv", year?: number }
+// At least one of tmdb_id or title is required. media_type/year are
+// optional disambiguation hints — see resolveTmdbTarget() in
+// src/utils/tmdb.js for exactly how tmdb_id-only and title-only
+// lookups are resolved.
+animeRoute.post("/anime/auto-add", async (c) => {
+  try {
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
+    const { tmdb_id, title, media_type, year } = body || {}
+    if (!tmdb_id && !title?.trim()) {
+      return c.json(failure("tmdb_id or title is required"), 400)
+    }
+
+    /* 1) Resolve tmdb_id + movie/tv */
+    let tmdbId, mediaType
+    try {
+      ;({ tmdbId, mediaType } = await resolveTmdbTarget(c.env, { tmdb_id, title, media_type, year }))
+    } catch (err) {
+      return c.json(failure(err.message), 404)
+    }
+
+    /* 2) Fetch full details + images in a single TMDB call */
+    let details
+    try {
+      details = await tmdbFetch(c.env, `/${mediaType}/${tmdbId}`, { append_to_response: "images" })
+    } catch (err) {
+      console.error("auto-add TMDB fetch error:", err)
+      return c.json(failure(err.message), 502)
+    }
+
+    const tmdbTitle = mediaType === "movie" ? details.title : details.name
+    if (!tmdbTitle?.trim()) {
+      return c.json(failure("TMDB returned no usable title for this id"), 502)
+    }
+
+    /* 3) Poster — REQUIRED (validate() below rejects a missing poster) */
+    const posterSrc = tmdbImageUrl(details.poster_path, "original")
+    if (!posterSrc) {
+      return c.json(failure("TMDB has no poster for this title — cannot auto-add without one"), 502)
+    }
+
+    let posterUrl
+    try {
+      posterUrl = await downloadAndUploadTmdbImage(c.env, posterSrc, `tmdb_${tmdbId}_poster`)
+    } catch (err) {
+      console.error("auto-add poster upload failed:", err)
+      return c.json(failure(`Poster image failed: ${err.message}`), 502)
+    }
+
+    /* 4) Backdrop — OPTIONAL, soft-fail (banner has no NOT-NULL-ish
+       requirement in validate(), unlike poster) */
+    let bannerUrl = ""
+    const backdropSrc = tmdbImageUrl(details.backdrop_path, "original")
+    if (backdropSrc) {
+      try {
+        bannerUrl = await downloadAndUploadTmdbImage(c.env, backdropSrc, `tmdb_${tmdbId}_backdrop`)
+      } catch (err) {
+        console.error("auto-add backdrop upload failed — continuing without one:", err)
+      }
+    }
+
+    /* 5) Map TMDB fields onto this CMS's schema */
+    const draftBody = {
+      title:       tmdbTitle,
+      // type: TMDB movies map to "movie"; tv maps to this schema's
+      // "anime" default (the episodic/series case episodes.js's
+      // auto-add is built for). Adjust if your CMS uses a finer
+      // taxonomy (ova/ona/special) — TMDB doesn't distinguish those,
+      // it's tv either way.
+      type:        mediaType === "movie" ? "movie" : "anime",
+      status:      mapTmdbStatus(details.status, mediaType),
+      poster:      posterUrl,
+      banner:      bannerUrl,
+      year:        extractYear(details.release_date || details.first_air_date),
+      // vote_average is already 0-10 — same scale validate() expects,
+      // no conversion needed. null (not 0) when TMDB has no votes yet.
+      rating:      (typeof details.vote_average === "number" && details.vote_average > 0)
+                     ? Math.round(details.vote_average * 10) / 10 : null,
+      language:    details.original_language || "",
+      duration:    mediaType === "movie"
+                     ? (details.runtime ? `${details.runtime} min` : "")
+                     : (details.episode_run_time?.[0] ? `${details.episode_run_time[0]} min` : ""),
+      genres:      mapTmdbGenres(details.genres),
+      // TMDB has no equivalent of this CMS's freeform "tags" field —
+      // left empty rather than guessed at.
+      tags:        [],
+      description: details.overview || ""
+    }
+
+    const validationErr = validate(draftBody)
+    if (validationErr) {
+      return c.json(failure(`TMDB data failed validation: ${validationErr}`), 502)
+    }
+
+    const slug = makeSlug(draftBody.title)
+    if (!slug) return c.json(failure("Could not generate a slug from the TMDB title"), 400)
+
+    const exists = await db.prepare(
+      "SELECT id FROM anime WHERE LOWER(slug)=LOWER(?)"
+    ).bind(slug).first()
+    if (exists) {
+      return c.json(failure("Slug already exists — this title may already be in your CMS"), 400)
+    }
+
+    /* 6) Insert — identical INSERT statement to manual POST /anime */
+    const id        = crypto.randomUUID()
+    const timestamp = now()
+    const row = buildRow({ ...draftBody, slug }, id, timestamp, timestamp)
+
+    await db.prepare(`
+      INSERT INTO anime (
+        id,title,slug,type,status,poster,banner,year,rating,
+        language,duration,genres,tags,
+        is_home,is_trending,is_most_viewed,is_banner,is_hidden,active,
+        description,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(
+      row.id, row.title, row.slug, row.type, row.status,
+      row.poster, row.banner, row.year, row.rating,
+      row.language, row.duration, row.genres, row.tags,
+      row.is_home, row.is_trending, row.is_most_viewed,
+      row.is_banner, row.is_hidden, row.active,
+      row.description, row.created_at, row.updated_at
+    ).run()
+
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", row))
+    } else {
+      syncToReplicas(c.env, "insert", row)
+    }
+
+    return c.json(success({
+      ...mapAnime(row),
+      tmdb_id:         tmdbId,
+      media_type:      mediaType,
+      banner_uploaded: !!bannerUrl
+    }), 201)
+
+  } catch (err) {
+    console.error("anime auto-add error:", err)
     return c.json(failure(err.message), 500)
   }
 })
