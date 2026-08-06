@@ -4,6 +4,10 @@
 ================================================ */
 
 import { Hono } from "hono"
+import {
+  tmdbFetch,
+  tmdbImageUrl
+} from "../utils/tmdb.js"
 
 const app = new Hono()
 
@@ -572,5 +576,152 @@ app.delete("/episodes/anime/:animeId", async (c) => {
    and independently serves the real public versions of this data, using
    a newer episode_id-based design for servers rather than this file's
    older (:animeId, :season, :episode) composite-key approach. */
+
+/* ================= TMDB AUTO-ADD (NEW FEATURE) ================= */
+
+// POST /api/admin/episodes/auto-add
+// Body: { anime_id: string, tmdb_id: string|number, season?: number }
+// season defaults to 1. Fetches the full episode list for that
+// season from TMDB in one call and inserts everything not already
+// in the DB — existing (anime_id, season, episode) rows are skipped,
+// not overwritten, so this is safe to re-run on a show you've
+// already partially added (e.g. to pick up newly-aired episodes)
+// without erroring out or duplicating what's there.
+//
+// TMDB doesn't have a direct equivalent of this schema's `servers`
+// field (that's your own video-hosting data, not metadata TMDB
+// tracks) — auto-added episodes get servers: [] and need those added
+// separately, same as episodes created through the regular admin UI.
+const MAX_AUTO_ADD_EPISODES = 100 // safety cap, matches this file's other bulk routes
+
+app.post("/episodes/auto-add", async (c) => {
+  try {
+    const db = c.env.DB
+
+    let body
+    try { body = await c.req.json() }
+    catch { return c.json(failure("Invalid JSON body"), 400) }
+
+    const anime_id = body?.anime_id
+    const tmdb_id  = body?.tmdb_id
+    const season   = String(body?.season || "1")
+
+    if (!anime_id) return c.json(failure("anime_id required"), 400)
+    if (!tmdb_id)  return c.json(failure("tmdb_id required"), 400)
+
+    /* Confirm the anime_id is real before doing a whole batch of
+       inserts against it — cheap check, avoids a batch of orphaned
+       episodes from a typo'd id. */
+    const anime = await db.prepare(
+      "SELECT id, title FROM anime WHERE id=?"
+    ).bind(anime_id).first()
+    if (!anime) return c.json(failure("anime_id not found in your CMS"), 404)
+
+    /* Fetch the season's full episode list — one call, TMDB embeds
+       every episode's number/title/overview/still directly in the
+       response, no per-episode request needed. */
+    let seasonData
+    try {
+      seasonData = await tmdbFetch(c.env, `/tv/${tmdb_id}/season/${season}`, {})
+    } catch (err) {
+      console.error("episodes auto-add TMDB fetch error:", err)
+      return c.json(failure(err.message), 502)
+    }
+
+    const tmdbEpisodes = (seasonData?.episodes || []).slice(0, MAX_AUTO_ADD_EPISODES)
+    if (!tmdbEpisodes.length) {
+      return c.json(failure(`TMDB returned no episodes for season ${season}`), 502)
+    }
+
+    const inserted = []
+    const skipped   = []
+
+    for (const ep of tmdbEpisodes) {
+      const episodeNum = Number(ep.episode_number)
+      if (!Number.isFinite(episodeNum) || episodeNum < 1) continue // defensive — TMDB always sends this, but don't trust blindly
+
+      const dup = await db.prepare(`
+        SELECT id FROM episodes
+        WHERE anime_id=? AND season=? AND episode=?
+      `).bind(anime_id, season, episodeNum).first()
+
+      if (dup) {
+        skipped.push(episodeNum)
+        continue
+      }
+
+      const id        = crypto.randomUUID()
+      const timestamp = now()
+
+      const row = {
+        id,
+        anime_id:    String(anime_id),
+        anime_title: anime.title || "",
+        season,
+        episode:     episodeNum,
+        title:       ep.name        || `Episode ${episodeNum}`,
+        description: ep.overview    || "",
+        // Direct TMDB CDN link, not re-uploaded to ImageKit — episode
+        // stills weren't part of this route's spec (titles/numbers/
+        // descriptions only), and hotlinking costs nothing extra here.
+        thumbnail:   tmdbImageUrl(ep.still_path, "w300") || "",
+        servers:     toJSON([]),
+        ongoing:     0,
+        featured:    0,
+        created_at:  timestamp,
+        updated_at:  timestamp
+      }
+
+      await db.prepare(`
+        INSERT INTO episodes (
+          id,anime_id,anime_title,season,episode,
+          title,description,thumbnail,servers,
+          ongoing,featured,sort_order,created_at,updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,
+          (SELECT COALESCE(MAX(sort_order),0)+1 FROM episodes WHERE anime_id=?),
+          ?,?)
+      `).bind(
+        row.id, row.anime_id, row.anime_title,
+        row.season, row.episode, row.title, row.description,
+        row.thumbnail, row.servers,
+        row.ongoing, row.featured,
+        row.anime_id,
+        row.created_at, row.updated_at
+      ).run()
+
+      const insertedRow = await db.prepare(
+        "SELECT sort_order FROM episodes WHERE id=?"
+      ).bind(row.id).first()
+      row.sort_order = insertedRow?.sort_order || 1
+
+      inserted.push(row)
+    }
+
+    if (inserted.length) {
+      const syncAll = Promise.all(inserted.map(row => syncToReplicas(c.env, "insert", row)))
+      if (c.executionCtx?.waitUntil) {
+        c.executionCtx.waitUntil(syncAll)
+      } else {
+        syncAll.catch(() => {})
+      }
+    }
+
+    return c.json(success({
+      anime_id,
+      anime_title:     anime.title,
+      tmdb_id:         String(tmdb_id),
+      season,
+      total_in_season: seasonData.episodes.length,
+      inserted:        inserted.length,
+      skipped:         skipped.length,
+      skipped_episodes: skipped,
+      episodes:        inserted.map(r => ({ id: r.id, episode: r.episode, title: r.title }))
+    }), 201)
+
+  } catch (err) {
+    console.error("episodes auto-add error:", err)
+    return c.json(failure(err.message), 500)
+  }
+})
 
 export default app
