@@ -7,6 +7,15 @@
    2. deleteOldImage() function added (was missing)
    3. Config imported from config.js
 
+   FEATURE (TMDB auto-add support):
+   4. Core "upload this binary payload to ImageKit" logic factored
+      out into uploadBufferToImageKit() and exported, so anime.js's
+      POST /anime/auto-add can reuse the exact same upload path for
+      TMDB poster/backdrop images (downloaded to memory, not a
+      browser-submitted multipart file) instead of duplicating it.
+      The /upload route below now just validates the incoming file,
+      then calls the same shared function.
+
    Auth handled by adminAuth middleware in index.js
 ================================================ */
 
@@ -19,7 +28,7 @@ const success = (data) => ({ success: true,  data })
 const failure = (msg)  => ({ success: false, message: msg })
 
 /* ================= RETRY ================= */
-async function retry(fn, attempts = 3) {
+export async function retry(fn, attempts = 3) {
   let lastErr
   for (let i = 0; i < attempts; i++) {
     try { return await fn() }
@@ -62,7 +71,55 @@ export async function deleteOldImage(env, fileId) {
   }
 }
 
-/* ================= UPLOAD ================= */
+/* ================= SHARED UPLOAD CORE ================= */
+/* Uploads a binary payload to ImageKit. `file` can be:
+     - a File/Blob (from c.req.parseBody() — the /upload route below)
+     - a Buffer/Uint8Array/ArrayBuffer wrapped in a Blob (auto-add,
+       after downloading a TMDB image — see anime.js)
+   opts.folder/opts.tags let callers namespace uploads (e.g.
+   "/animehunt/tmdb" + "tmdb-import" for auto-added images, vs the
+   default "/animehunt" + "anime-site" for manual uploads) without
+   duplicating the request-building logic below. */
+export async function uploadBufferToImageKit(env, file, fileName, opts = {}) {
+  const PRIVATE_KEY = env.IMAGEKIT_PRIVATE_KEY
+  if (!PRIVATE_KEY) {
+    throw new Error('ImageKit not configured — set IMAGEKIT_PRIVATE_KEY secret')
+  }
+
+  const folder = opts.folder || '/animehunt'
+  const tags   = opts.tags   || 'anime-site'
+
+  const uploadFn = async () => {
+    // ✅ short string → btoa is safe for auth token only
+    const authToken = btoa(`${PRIVATE_KEY}:`)
+
+    const fd = new FormData()
+    fd.append('file',              file, fileName)   // direct binary — no btoa on file content
+    fd.append('fileName',          fileName)
+    fd.append('useUniqueFileName', 'true')
+    fd.append('folder',            folder)
+    fd.append('tags',              tags)
+    // Do NOT set Content-Type header — fetch sets the multipart boundary automatically
+
+    const res = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
+      method:  'POST',
+      headers: { 'Authorization': `Basic ${authToken}` },
+      body:    fd
+    })
+
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(data?.message || `ImageKit error: ${res.status}`)
+    }
+
+    return data
+  }
+
+  return retry(uploadFn, 3)
+}
+
+/* ================= UPLOAD (browser multipart form) ================= */
 uploadRoute.post('/upload', async (c) => {
   try {
     const body = await c.req.parseBody()
@@ -82,53 +139,13 @@ uploadRoute.post('/upload', async (c) => {
       return c.json(failure('Invalid file type — only JPG, PNG, WebP allowed'), 400)
     }
 
-    const PRIVATE_KEY  = c.env.IMAGEKIT_PRIVATE_KEY
-    const URL_ENDPOINT = c.env.IMAGEKIT_URL_ENDPOINT   // not used in upload path but available
-
-    if (!PRIVATE_KEY) {
+    if (!c.env.IMAGEKIT_PRIVATE_KEY) {
       return c.json(failure('ImageKit not configured — set IMAGEKIT_PRIVATE_KEY secret'), 500)
     }
 
     const fileName = `${Date.now()}_${(file.name || 'image').replace(/\s+/g, '_')}`
 
-    /* ─── FIXED: Direct binary upload — no btoa(Uint8Array.reduce) ───
-       Old code:
-         const buffer = await file.arrayBuffer()
-         const base64 = btoa(new Uint8Array(buffer).reduce(...))   ← OOM for >1 MB files
-         fd.append('file', `data:${file.type};base64,${base64}`)
-
-       New code: pass the File/Blob object directly — Cloudflare Workers
-       FormData supports binary values natively.
-       ImageKit upload API accepts both base64 data URIs AND raw binary.
-    */
-    const uploadFn = async () => {
-      // ✅ FIX: short string → btoa is safe for auth token only
-      const authToken = btoa(`${PRIVATE_KEY}:`)
-
-      const fd = new FormData()
-      fd.append('file',            file)          // ✅ direct binary — no btoa on file content
-      fd.append('fileName',        fileName)
-      fd.append('useUniqueFileName', 'true')
-      fd.append('folder',          '/animehunt')
-      fd.append('tags',            'anime-site')
-      // Do NOT set Content-Type header — browser/worker sets multipart boundary automatically
-
-      const res = await fetch('https://upload.imagekit.io/api/v1/files/upload', {
-        method:  'POST',
-        headers: { 'Authorization': `Basic ${authToken}` },
-        body:    fd
-      })
-
-      const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data?.message || `ImageKit error: ${res.status}`)
-      }
-
-      return data
-    }
-
-    const result = await retry(uploadFn, 3)
+    const result = await uploadBufferToImageKit(c.env, file, fileName)
 
     return c.json(success({
       url:      result.url,
@@ -145,5 +162,3 @@ uploadRoute.post('/upload', async (c) => {
 })
 
 export default uploadRoute
-
-
