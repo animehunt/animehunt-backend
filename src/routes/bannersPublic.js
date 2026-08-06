@@ -20,6 +20,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { getClientIP } from "../utils/clientIp.js"
 
 const app = new Hono()
 
@@ -30,7 +31,7 @@ app.post("/banners/:id/click", async (c) => {
   try {
     const db  = c.env.DB
     const id  = c.req.param("id")
-    const ip  = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+    const ip  = getClientIP(c)
 
     const banner = await db.prepare(
       "SELECT id, link FROM banners WHERE id=?"
