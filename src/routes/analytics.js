@@ -37,6 +37,7 @@
 ============================================================ */
 
 import { Hono } from "hono"
+import { getClientIP } from "../utils/clientIp.js"
 
 const app = new Hono()
 
@@ -50,7 +51,7 @@ const fail = (msg="Error") => ({ success: false, message: msg })
 app.post("/track/view", async (c) => {
   const db   = c.env.DB
   const body = await c.req.json().catch(() => ({}))
-  const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+  const ip   = getClientIP(c)
   const ua   = c.req.header("User-Agent") || ""
 
   try {
@@ -70,7 +71,7 @@ app.post("/track/view", async (c) => {
 app.post("/track/download", async (c) => {
   const db   = c.env.DB
   const body = await c.req.json().catch(() => ({}))
-  const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+  const ip   = getClientIP(c)
 
   try {
     await db.prepare(`
@@ -91,7 +92,7 @@ app.post("/track/download", async (c) => {
 app.post("/track/search", async (c) => {
   const db   = c.env.DB
   const body = await c.req.json().catch(() => ({}))
-  const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+  const ip   = getClientIP(c)
 
   try {
     await db.prepare(`
