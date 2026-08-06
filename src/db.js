@@ -1,9 +1,17 @@
 // ============================================================
 // src/db.js  —  AnimeHunt Universal DB Client v2.2
 // ============================================================
-// PRIMARY   : Cloudflare D1  (env.DB)
-// REPLICA 1 : Turso / LibSQL (env.TURSO_URL + env.TURSO_AUTH_TOKEN)
+// PRIMARY   : Turso, via the D1-compatible adapter (env.DB — see
+//             src/adapters/d1Libsql.js; was literally Cloudflare D1
+//             pre-migration, same .prepare/.bind/.all/.first/.run/
+//             .batch shape either way, so nothing below needed to change)
+// REPLICA 1 : Turso / LibSQL, second independent DB — DB3 in index.js
+//             (env.TURSO_REPLICA_URL + env.TURSO_REPLICA_AUTH_TOKEN)
 // REPLICA 2 : Supabase REST  (env.SUPABASE_URL + env.SUPABASE_KEY)
+//
+// None of this file talks to Cloudflare-specific APIs directly — it's
+// already portable fetch()/env.DB calls, so this migration pass only
+// touched the comment above, not the logic below.
 //
 // FIXES v2.2 (on top of v2.1):
 //   ✅ FIX 7: Database.queryOne() — was returning raw .first() value
