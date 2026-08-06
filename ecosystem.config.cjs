@@ -1,12 +1,19 @@
 /* PM2 process manager config — replaces the process supervision Workers
    gave you for free.
 
+   Named .cjs, not .js: package.json sets "type": "module" for the rest of
+   this project (needed for the ESM `import` syntax used everywhere else),
+   but PM2 loads this file with require(), which can't parse ES module
+   syntax. A plain .js file here would inherit "type": "module" from
+   package.json and fail to load; .cjs forces Node to treat it as
+   CommonJS regardless, which is what module.exports below actually is.
+
    Usage on the VPS:
      npm install -g pm2
-     pm2 start ecosystem.config.js
+     pm2 start ecosystem.config.cjs
      pm2 save
      pm2 startup        # follow the printed instructions to survive reboots
-     pm2 install pm2-logrotate   # see report §7 — logs grow unbounded otherwise
+     pm2 install pm2-logrotate   # logs grow unbounded otherwise
 */
 module.exports = {
   apps: [
