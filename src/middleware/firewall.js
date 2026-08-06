@@ -9,7 +9,18 @@
     ✅ FIX 4: blockIP/unblockIP exported for securityAdmin.js
     ✅ FIX 5: c.text() headers fixed — Hono doesn't accept headers
               as 3rd arg to c.text(); use c.header() then c.text()
+    ✅ FIX 6 (VPS migration): client IP resolution now goes through
+              getClientIP() — x-forwarded-for first (what nginx
+              actually sets on this deployment), CF-Connecting-IP as
+              a fallback, correctly handling a comma-separated
+              x-forwarded-for chain. Previously checked
+              CF-Connecting-IP first, which is backwards for a
+              reverse-proxy-only deployment and meant every IP-keyed
+              rate limit / ban here was keying off "unknown" or a
+              proxy hop's own address instead of the real client.
 ============================================================ */
+
+import { getClientIP } from "../utils/clientIp.js"
 
 const RATE_LIMIT_RULES = {
   "/api/admin/auth/login":   { limit: 5,   window: 300 },
@@ -149,7 +160,7 @@ export async function firewall(c, next) {
       return await next()
     }
 
-    const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "0.0.0.0"
+    const ip   = getClientIP(c, "0.0.0.0")
     const ua   = (c.req.header("user-agent") || "").toLowerCase()
     const path = new URL(c.req.url).pathname
 
