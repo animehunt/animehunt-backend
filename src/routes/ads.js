@@ -32,6 +32,7 @@
  */
 
 import { Hono } from "hono"
+import { getClientIP } from "../utils/clientIp.js"
 
 const ads = new Hono()
 
@@ -165,7 +166,12 @@ async function trackUniqueClick(env, adId, ip) {
 ads.post("/public/ads/:adId/click", async (c) => {
   const db   = c.env.DB
   const adId = parseInt(c.req.param("adId"))
-  const ip   = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+  // ✅ FIX (audit): was c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for")
+  // — the old cf-connecting-ip-first priority, backwards for this nginx-fronted
+  // deployment (see utils/clientIp.js's header comment). Wrong IP here meant
+  // trackUniqueClick()'s per-IP dedup key could group different real visitors
+  // together (or fail to dedup at all), undercounting or overcounting unique ad clicks.
+  const ip   = getClientIP(c, "unknown")
   try {
     const ad = await db.prepare("SELECT id, clicks FROM ads_library WHERE id=?").bind(adId).first()
     if (!ad) return fail(c, "Ad not found", 404)
