@@ -11,6 +11,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 import { invalidateSystemSettingsCache } from "../middleware/systemGuard.js"
 
 const app = new Hono()
@@ -23,6 +24,17 @@ const bool    = (v)    => (v ? 1 : 0)
 /* ── Ensure all required tables exist ── */
 async function ensureRow(db) {
   try {
+    // ✅ FIX (audit): added robots_txt — schema.sql's own system_settings
+    // definition has this column (used by seoAdmin.js's POST
+    // /seo/robots/update and publicSEORoot.js's GET /robots.txt), but it
+    // was missing here. CREATE TABLE IF NOT EXISTS is a no-op whenever
+    // schema.sql already created this table first (the normal deploy
+    // order), so this gap is latent rather than always-active — but on
+    // any path where this file's own CREATE TABLE is what actually
+    // creates system_settings (e.g. a fresh DB where schema.sql wasn't
+    // run first), the table would come up missing this column entirely,
+    // and seoAdmin.js's UPDATE system_settings SET robots_txt=... would
+    // then fail with "no such column".
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS system_settings (
         id               INTEGER PRIMARY KEY DEFAULT 1,
@@ -45,6 +57,7 @@ async function ensureRow(db) {
         rateLimitGlobal  INTEGER DEFAULT 1,
         cdnEnabled       INTEGER DEFAULT 1,
         imageProxy       INTEGER DEFAULT 1,
+        robots_txt       TEXT    DEFAULT '',
         updated_at       TEXT
       )
     `).run()
@@ -131,26 +144,37 @@ function format(r) {
 /* ── Sync settings to Turso + Supabase replicas (fire & forget) ── */
 async function syncToReplicas(env, row) {
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
-    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+    fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         requests: [{
           type: "execute",
           stmt: {
+            // ✅ FIX (audit): robots_txt was missing from this INSERT —
+            // schema has 22 system_settings columns, this only synced
+            // 20 (same bug class as banners.js's trailer_url and
+            // episodes.js's active/air_date). POST /seo/robots/update
+            // (seoAdmin.js) writes robots_txt directly to the primary
+            // DB, completely independent of this file's own POST
+            // /system route — so a Turso replica would never see
+            // whatever custom robots.txt the admin configured, no
+            // matter how many times either endpoint saved successfully.
             sql: `INSERT OR REPLACE INTO system_settings (
               id,systemOn,maintenanceSoft,maintenanceHard,lockCMS,readOnly,env,
               theme,animation,geoBlock,ageLock,schedule,shadow,
               autoBackup,autoBackupHours,debugMode,apiLogs,
-              rateLimitGlobal,cdnEnabled,imageProxy,updated_at
-            ) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+              rateLimitGlobal,cdnEnabled,imageProxy,robots_txt,updated_at
+            ) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             args: [
               row.systemOn, row.maintenanceSoft, row.maintenanceHard,
               row.lockCMS, row.readOnly, row.env,
               row.theme, row.animation,
               row.geoBlock, row.ageLock, row.schedule, row.shadow,
               row.autoBackup, row.autoBackupHours, row.debugMode, row.apiLogs,
-              row.rateLimitGlobal, row.cdnEnabled, row.imageProxy, row.updated_at
+              row.rateLimitGlobal, row.cdnEnabled, row.imageProxy,
+              row.robots_txt ?? "",
+              row.updated_at
             ].map(v => ({ type: typeof v === "number" ? "integer" : "text", value: String(v ?? "") }))
           }
         }]
@@ -245,6 +269,15 @@ export async function rollbackConfig(env, versionId) {
   ).run()
 
   await invalidateSystemSettingsCache(env)
+
+  // ✅ FIX (audit, same reasoning as POST /system above): this UPDATE
+  // never touches robots_txt either, and neither does the `row` object
+  // built from the version snapshot — syncing `row` directly would wipe
+  // the Turso replica's robots_txt on every rollback. Re-select the
+  // full row so the sync carries the real current value.
+  const freshRow = await env.DB.prepare("SELECT * FROM system_settings WHERE id=1").first()
+  syncToReplicas(env, freshRow || row)
+
   return { success: true, rolledBackTo: versionId, config }
 }
 
@@ -317,7 +350,16 @@ app.post("/system", async (c) => {
     ).run()
 
     await invalidateSystemSettingsCache(c.env)
-    syncToReplicas(c.env, row)
+
+    // ✅ FIX (audit): this UPDATE never touches robots_txt (that column
+    // is exclusively owned by seoAdmin.js's POST /seo/robots/update),
+    // so the `row` object above never carries it either — syncing `row`
+    // directly would push robots_txt="" into the Turso replica on every
+    // single System Settings save, wiping out whatever custom
+    // robots.txt content was actually saved on the primary DB. Re-select
+    // the full row so the sync carries the real current value instead.
+    const freshRow = await db.prepare("SELECT * FROM system_settings WHERE id=1").first()
+    syncToReplicas(c.env, freshRow || row)
     await logAction(db, "SETTINGS_SAVED", `env=${row.env}`)
 
     return c.json(success({ saved: true, updated_at: timestamp }))
@@ -347,6 +389,14 @@ app.post("/system/reset", async (c) => {
     `).bind(ts).run()
 
     await invalidateSystemSettingsCache(c.env)
+
+    // ✅ FIX (audit): this never called syncToReplicas() — resetting
+    // system settings to defaults only ever reached the primary DB,
+    // so a Turso/Supabase replica would keep serving the pre-reset
+    // config (including any maintenance/lock flags) indefinitely.
+    const freshRow = await db.prepare("SELECT * FROM system_settings WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
+
     await logAction(db, "SYSTEM_RESET", "Reset to defaults")
     return c.json(success({ reset: true, updated_at: ts }))
   } catch (err) {
@@ -365,6 +415,17 @@ app.post("/system/kill", async (c) => {
     ).bind(ts).run()
 
     await invalidateSystemSettingsCache(c.env)
+
+    // ✅ FIX (audit — this one matters most): this never called
+    // syncToReplicas(). The kill switch is meant to take the entire
+    // site down in an emergency, but without this, a reader served
+    // from a Turso/Supabase replica instead of the primary DB would
+    // never see systemOn=0/maintenanceHard=1 — the emergency shutdown
+    // would silently not apply to any replica-served traffic, which
+    // defeats the purpose of an emergency kill switch.
+    const freshRow = await db.prepare("SELECT * FROM system_settings WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
+
     await logAction(db, "KILL_SWITCH", "Emergency shutdown activated")
     return c.json(success({ halted: true, updated_at: ts }))
   } catch (err) {
@@ -383,6 +444,15 @@ app.post("/system/recover", async (c) => {
     ).bind(ts).run()
 
     await invalidateSystemSettingsCache(c.env)
+
+    // ✅ FIX (audit, mirrors the kill-switch fix above): this never
+    // called syncToReplicas() either — recovery from an emergency
+    // shutdown needs to reach every replica just as much as the kill
+    // switch itself did, or a replica-served reader could stay stuck
+    // in the old maintenance state after the primary DB has recovered.
+    const freshRow = await db.prepare("SELECT * FROM system_settings WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
+
     await logAction(db, "SYSTEM_RECOVERED", "System brought back online")
     return c.json(success({ recovered: true, updated_at: ts }))
   } catch (err) {
