@@ -300,6 +300,3 @@ app.post("/dashboard/ai-scan", async (c) => {
 })
 
 export default app
-
-
-
