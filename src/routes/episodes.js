@@ -4,6 +4,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 import {
   tmdbFetch,
   tmdbImageUrl
@@ -45,7 +46,7 @@ async function syncToReplicas(env, action, data) {
 
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
     promises.push(
-      fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+      fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -239,6 +240,7 @@ app.get("/episodes", async (c) => {
     const offset = (page - 1) * limit
     const animeId = c.req.query("anime_id") || ""
     const season  = c.req.query("season")   || ""
+    const episode = c.req.query("episode")  || ""
     const search  = c.req.query("search")   || ""
 
     let where    = "WHERE 1=1"
@@ -246,6 +248,15 @@ app.get("/episodes", async (c) => {
 
     if (animeId) { where += " AND anime_id=?"; params.push(animeId) }
     if (season)  { where += " AND season=?";   params.push(season)  }
+    // ✅ FIX (audit): this route never read the `episode` query param at
+    // all — downloads.html's autoFillEpisodeTitle() calls
+    // GET /episodes?anime_id=&season=&episode=<N> expecting exactly one
+    // matching episode back, but without this filter the query only
+    // ever scoped by anime_id+season, so it returned every episode in
+    // that season and the frontend's j.data[0] would silently grab
+    // whichever episode sorted first — not necessarily the one the
+    // admin typed the number for.
+    if (episode) { where += " AND episode=?";  params.push(Number(episode)) }
     if (search)  {
       where += " AND (title LIKE ? OR anime_title LIKE ?)"
       params.push(`%${search}%`, `%${search}%`)
@@ -498,6 +509,23 @@ app.post('/episodes/reorder', async (c) => {
     )
 
     await db.batch(statements)
+
+    // ✅ FIX (audit, same bug class as banners.js/categories.js's reorder
+    // routes): this never called syncToReplicas() — episode order
+    // changes from admin panel drag-and-drop only ever reached the
+    // primary DB, so any reader served from a Turso/Supabase replica
+    // kept showing episodes in the old order indefinitely.
+    const syncAll = Promise.all(
+      orderedIds.map(async (id) => {
+        const fullRow = await db.prepare("SELECT * FROM episodes WHERE id=?").bind(id).first()
+        if (fullRow) return syncToReplicas(c.env, "insert", fullRow)
+      })
+    )
+    if (c.executionCtx?.waitUntil) {
+      c.executionCtx.waitUntil(syncAll)
+    } else {
+      await syncAll.catch(() => {})
+    }
 
     return c.json(success({ reordered: orderedIds.length }))
 
