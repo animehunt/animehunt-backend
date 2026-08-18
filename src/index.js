@@ -3,34 +3,15 @@
    File: src/index.js
    Node.js (via @hono/node-server) — migrated from Cloudflare Workers
 
-   ── SCOPE NOTE — READ BEFORE DEPLOYING ──────────────────────────
-   This revision is built only from the files actually provided in
-   this round. Six imports from the version this was based on point
-   at files that were NOT included here, so they've been removed
-   rather than left as dangling imports that would crash on boot:
-
-     ./routes/player.js            ./routes/downloads.js
-     ./routes/playerAdmin.js       ./routes/downloadsAdmin.js
-     ./routes/ads.js               ./ai/playerEngine.js
-     ./routes/adsAdmin.js
-
-   Nothing else in this codebase imports any of those six files, so
-   removing them here is self-contained — verified by grepping every
-   provided file for references to each path. When you have those
-   files, restore their import lines + `app.route(...)` /
-   `adminRoutes.route(...)` registrations (search this file for
-   "NOT INCLUDED" below to find exactly where each one plugs back
-   in). Two things worth carrying forward when you do:
-
-     1. Public/admin split — if player.js/downloads.js/ads.js still
-        contain BOTH public and admin-only routes in one file, mount
-        that same Hono() instance in only one place (public app.route
-        OR adminRoutes.route, never both) — mounting one router
-        object in two places exposes every route in it at both
-        prefixes, auth included.
-     2. c.executionCtx.waitUntil() — now works on Node via the shim
-        below, so playerEngine.js's own waitUntil() calls (if any)
-        need no changes either.
+   ── SCOPE NOTE ──────────────────────────────────────────────────
+   player.js / playerAdmin.js / downloads.js / downloadsAdmin.js /
+   ads.js / adsAdmin.js / ai/playerEngine.js were missing from an
+   earlier round of this codebase and are now present and wired in
+   below. Each pair keeps the public/admin split documented in its
+   own file header (public reads mounted via app.route("/api", ...),
+   admin writes mounted only under adminRoutes so requireAuth
+   applies) — do not mount the admin half publicly, that reintroduces
+   the unauthenticated-write bug those files' headers describe.
 
    Everything else below is otherwise a routing/infra pass over what
    Workers gave you for free: c.env.DB / c.env.KV are populated by
@@ -71,9 +52,12 @@ import categories      from "./routes/categories.js"
 import banners         from "./routes/banners.js"
 import bannersPublic   from "./routes/bannersPublic.js"    // ← public click-tracking route only
 import adminServers    from "./routes/adminServers.js"
-// NOT INCLUDED in this round: ./routes/player.js, ./routes/playerAdmin.js
-// NOT INCLUDED in this round: ./routes/downloads.js, ./routes/downloadsAdmin.js
-// NOT INCLUDED in this round: ./routes/ads.js, ./routes/adsAdmin.js
+import player          from "./routes/player.js"           // ← public reads only, see file header (ISSUE-020 split)
+import playerAdmin     from "./routes/playerAdmin.js"      // ← admin writes only, mounted under adminRoutes below
+import downloads       from "./routes/downloads.js"        // ← public reads only, see file header (dual-mount fix)
+import downloadsAdmin  from "./routes/downloadsAdmin.js"   // ← admin writes only, mounted under adminRoutes below
+import ads             from "./routes/ads.js"              // ← public reads only, see file header (dual-mount fix)
+import adsAdmin        from "./routes/adsAdmin.js"         // ← admin writes only, mounted under adminRoutes below
 import analytics       from "./routes/analytics.js"        // ← public tracking routes only
 import analyticsAdmin  from "./routes/analyticsAdmin.js"   // ← admin dashboard routes only
 import searchAdmin     from "./routes/searchAdmin.js"
@@ -98,10 +82,8 @@ import bulkUpload      from "./routes/bulk-upload.js"
 
 /* ================= AI ENGINES ================= */
 
-// NOT INCLUDED in this round: ./ai/playerEngine.js (runPlayerAI, playerProgressRoutes)
-// — confirmed nothing else in the provided codebase imports it, so this is a
-// clean removal, not a partial one. See the scope note at the top of this file.
 import { runFooterAI } from "./ai/footerAI.js"
+import { runPlayerAI, playerProgressRoutes } from "./ai/playerEngine.js"
 
 /* ================= NODE ENV OBJECT (replaces Workers bindings) =================
    On Workers, c.env.DB / c.env.KV / c.env.SOMETHING_SECRET were populated
@@ -342,9 +324,6 @@ app.get("/api/health", async (c) => {
 // bearer-token checks are exactly the kind of comparison a timing
 // side-channel can target.
 //
-// Note: playerEngine.js's runPlayerAI() isn't wired in here because
-// ai/playerEngine.js wasn't part of this round's files — see the scope
-// note at the top of this file for how to add it back.
 app.post("/internal/run-cron", async (c) => {
   const authHeader = c.req.header("Authorization") || ""
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null
@@ -356,7 +335,8 @@ app.post("/internal/run-cron", async (c) => {
   console.log(`⏰ Cron: manual trigger at ${new Date().toISOString()}`)
   const results = await Promise.allSettled([
     runFooterAI(c.env),
-    runAIEngines(c.env)
+    runAIEngines(c.env),
+    runPlayerAI(c.env)
   ])
 
   return c.json({
@@ -379,11 +359,11 @@ function secretsMatch(a, b) {
 
 /* ================= PUBLIC ROUTES ================= */
 app.route("/api", publicAnime)
-// NOT INCLUDED in this round: app.route("/api", player) — ./routes/player.js
-// NOT INCLUDED in this round: app.route("/api", playerProgressRoutes) — ./ai/playerEngine.js
+app.route("/api", player)             // ← GET /api/player, /api/player/public
+app.route("/api", playerProgressRoutes) // ← /api/player/validate, /progress, /config (resume + per-user prefs)
 app.route("/api", bannersPublic)  // ← /api/banners/:id/click
-// NOT INCLUDED in this round: app.route("/api", downloads) — ./routes/downloads.js
-// NOT INCLUDED in this round: app.route("/api", ads) — ./routes/ads.js
+app.route("/api", downloads)          // ← /api/public/download-*, /api/go, /api/session/:id, /api/knight-data, /api/download/:episodeId
+app.route("/api", ads)                // ← /api/public/page-ads, /api/public/nav-fire, /api/public/ads/:adId/click
 app.route("/api", analytics)      // ← /api/track/view, /api/track/download, /api/track/search, /api/track/banner
 app.route("/api", publicSearch)
 app.route("/api", publicSEO)
@@ -403,10 +383,10 @@ adminRoutes.route("/", anime)
 adminRoutes.route("/", episodes)
 adminRoutes.route("/", categories)
 adminRoutes.route("/", banners)
-// NOT INCLUDED in this round: adminRoutes.route("/", playerAdmin) — ./routes/playerAdmin.js
+adminRoutes.route("/", playerAdmin)     // ← POST /api/admin/player, /api/admin/player/reset
 adminRoutes.route("/", adminServers)
-// NOT INCLUDED in this round: adminRoutes.route("/", downloadsAdmin) — ./routes/downloadsAdmin.js
-// NOT INCLUDED in this round: adminRoutes.route("/", adsAdmin) — ./routes/adsAdmin.js
+adminRoutes.route("/", downloadsAdmin)  // ← /api/admin/downloads/*, /api/admin/hosts/*, /api/admin/bulk-upload/download-links
+adminRoutes.route("/", adsAdmin)        // ← /api/admin/ads-library, /popup-library, /shortlinks-library, /redirect-library, /host-monetization, /page-monetization, /nav-monetization
 adminRoutes.route("/", analyticsAdmin)
 adminRoutes.route("/", homepage)
 adminRoutes.route("/", footer)
@@ -448,5 +428,3 @@ process.on("SIGTERM", async () => {
   await redisClient.quit()
   process.exit(0)
 })
-
-
