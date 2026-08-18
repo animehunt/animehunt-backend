@@ -126,5 +126,3 @@ app.post("/track/banner", async (c) => {
 })
 
 export default app
-
-
