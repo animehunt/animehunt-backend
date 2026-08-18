@@ -55,3 +55,4 @@ app.post("/banners/:id/click", async (c) => {
 })
 
 export default app
+
