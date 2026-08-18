@@ -22,6 +22,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 const app = new Hono()
 
@@ -135,7 +136,7 @@ function syncToReplicas(env, action, row) {
           }))
         }
 
-    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+    fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -304,6 +305,15 @@ app.patch("/sidebar/:id/toggle", async (c) => {
       .bind(newVal, now(), id).run()
 
     await invalidateCache(c.env)
+
+    // ✅ FIX (audit, same bug class as banners.js/categories.js/homepage.js
+    // toggle routes): this never called syncToReplicas() — toggling a
+    // sidebar item on/off in the admin panel only ever reached the
+    // primary DB, so a replica-served reader could keep showing an
+    // item that was turned off (or miss one turned back on).
+    const fullRow = await db.prepare("SELECT * FROM sidebar WHERE id=?").bind(id).first()
+    if (fullRow) syncToReplicas(c.env, "insert", fullRow)
+
     return c.json(success({ id, active: !!newVal }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -369,6 +379,17 @@ app.post("/sidebar/reorder", async (c) => {
     await db.batch(statements)
     await invalidateCache(c.env)
 
+    // ✅ FIX (audit, same bug class as banners.js/categories.js/
+    // episodes.js/homepage.js reorder routes): this never called
+    // syncToReplicas() — priority order changes from admin panel
+    // drag-and-drop only ever reached the primary DB, so a
+    // replica-served reader kept seeing sidebar items in the old
+    // order indefinitely.
+    for (const item of body.order) {
+      const fullRow = await db.prepare("SELECT * FROM sidebar WHERE id=?").bind(item.id).first()
+      if (fullRow) syncToReplicas(c.env, "insert", fullRow)
+    }
+
     return c.json(success({ updated: body.order.length }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -383,7 +404,19 @@ app.post("/sidebar/default", async (c) => {
   try {
     const db = c.env.DB
     await ensureTable(db)
+
+    // ✅ FIX (audit, same bug class as homepage.js's auto-build route):
+    // fetch existing IDs BEFORE deleting so the delete can be synced
+    // to replicas below — otherwise a replica ends up with both the
+    // old items (never deleted there) and the 5 new defaults, instead
+    // of just the defaults like the primary DB has after this route runs.
+    const { results: existingRows } = await db.prepare("SELECT id FROM sidebar").all()
+
     await db.prepare("DELETE FROM sidebar").run()
+
+    for (const r of existingRows || []) {
+      syncToReplicas(c.env, "delete", { id: r.id })
+    }
 
     const defaults = [
       { title: "About AnimeHunt", icon: "ℹ️",  url: "about.html",           priority: 1 },
