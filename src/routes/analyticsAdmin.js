@@ -132,6 +132,36 @@ app.get("/analytics", async (c) => {
   ADMIN — EXPORT CSV
 ============================================================ */
 
+/* ✅ FIX (audit, two real issues): CSV export previously did
+   [r.type, r.ref_id||"", ...].join(",") with no escaping at all.
+
+   1. CSV column-breaking: any field containing a comma (a search
+      query like "naruto, shippuden" is common and completely
+      unvalidated on the way in) would misalign every column after it
+      once opened in Excel/Sheets — an admin exporting analytics could
+      get systematically wrong data with no error or warning.
+   2. Formula/CSV injection (OWASP-documented): a field starting with
+      =, +, -, or @ is interpreted as a formula by Excel/Sheets/
+      LibreOffice when the CSV is opened — e.g. a search query of
+      =cmd|'/C calc'!A1 stored via the completely unvalidated public
+      search-tracking endpoint would execute when an admin opened this
+      export. r.q (the search query) is the one user-controlled field
+      here and the one that matters most, but every field is escaped
+      the same way for consistency and because ref_id/slug could
+      contain attacker-influenced strings via other paths.
+*/
+function csvField(value) {
+  let s = String(value ?? "")
+  // Neutralize formula injection: prefix a leading =, +, -, or @ with
+  // a tab character, which Excel/Sheets render as plain text instead
+  // of evaluating as a formula, without visibly altering the value.
+  if (/^[=+\-@]/.test(s)) s = "\t" + s
+  // Standard CSV quoting: wrap in quotes and double any internal
+  // quotes, whenever the field contains a comma, quote, or newline.
+  if (/[",\n]/.test(s)) s = `"${s.replace(/"/g, '""')}"`
+  return s
+}
+
 app.get("/analytics/export", async (c) => {
   const db    = c.env.DB
   const range = c.req.query("range") || "7"
@@ -147,7 +177,7 @@ app.get("/analytics/export", async (c) => {
     `).bind(since).all()
 
     const rows = results.map(r =>
-      [r.type, r.ref_id||"", r.slug||"", r.q||"", r.ip||"", r.created_at].join(",")
+      [r.type, r.ref_id||"", r.slug||"", r.q||"", r.ip||"", r.created_at].map(csvField).join(",")
     )
     const csv = ["type,ref_id,slug,query,ip,created_at", ...rows].join("\n")
 
