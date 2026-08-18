@@ -4,6 +4,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 const app = new Hono()
 
@@ -50,7 +51,7 @@ async function syncToReplicas(env, action, data) {
 
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
     promises.push(
-      fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+      fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -77,10 +78,20 @@ function buildTursoPayload(action, data) {
       requests: [{
         type: "execute",
         stmt: {
+          // ✅ FIX (audit): trailer_url/trailer_autoplay/trailer_muted were
+          // missing from this INSERT — the banners table has 15 columns
+          // (confirmed against schema), this only synced 12. Any banner
+          // with trailer config set (via POST /banners/:id/trailer below)
+          // would save correctly to the primary DB but silently drift
+          // from the Turso replica, which would keep trailer_url NULL and
+          // trailer_autoplay/trailer_muted at their schema default (0)
+          // forever, regardless of what was actually configured.
           sql: `INSERT OR REPLACE INTO banners (
             id,page,category,position,title,image,link,
-            banner_order,active,auto_rotate,created_at,updated_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+            banner_order,active,auto_rotate,
+            trailer_url,trailer_autoplay,trailer_muted,
+            created_at,updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           args: [
             { type:"text",    value: data.id },
             { type:"text",    value: data.page },
@@ -92,6 +103,16 @@ function buildTursoPayload(action, data) {
             { type:"integer", value: String(data.banner_order) },   // ✅ FIX: Turso needs string-encoded integers
             { type:"integer", value: String(data.active) },         // ✅ FIX
             { type:"integer", value: String(data.auto_rotate) },    // ✅ FIX
+            { type:"text",    value: data.trailer_url ?? null },
+            // ✅ FIX: distinguish "field not present" (create route —
+            // primary DB's INSERT doesn't touch these columns, so
+            // SQLite fills its own DEFAULTs: trailer_autoplay=0,
+            // trailer_muted=1 — confirmed in schema) from an explicit
+            // false. A plain `data.trailer_muted ? 1 : 0` would send 0
+            // for the undefined case here, diverging from what the
+            // primary DB actually has (1) for every newly created banner.
+            { type:"integer", value: String(data.trailer_autoplay === undefined ? 0 : (data.trailer_autoplay ? 1 : 0)) },
+            { type:"integer", value: String(data.trailer_muted    === undefined ? 1 : (data.trailer_muted    ? 1 : 0)) },
             { type:"text",    value: data.created_at },
             { type:"text",    value: data.updated_at }
           ]
@@ -333,10 +354,23 @@ app.put("/banners/:id", async (c) => {
     ).run()
 
     const syncRow = { ...row, created_at: existing.created_at || timestamp }
+    // ✅ FIX (audit): re-select the full row instead of syncing the
+    // manually-built `row` object above — `row` never carries
+    // trailer_url/trailer_autoplay/trailer_muted (this form doesn't
+    // edit those; POST /banners/:id/trailer does), so syncing `row`
+    // directly would push undefined→null/0 for those three columns
+    // into the Turso replica via INSERT OR REPLACE, silently wiping
+    // out trailer config that was previously set through that other
+    // endpoint — even though this PUT's own UPDATE statement above
+    // never touches those columns in the primary DB. Re-selecting
+    // keeps the replica's full row in sync with whatever the primary
+    // DB actually has, not just the fields this form knows about.
+    const fullRow = await db.prepare("SELECT * FROM banners WHERE id=?").bind(id).first()
+    const rowToSync = fullRow || syncRow
     if (c.executionCtx?.waitUntil) {
-      c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", syncRow))
+      c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", rowToSync))
     } else {
-      syncToReplicas(c.env, "insert", syncRow)
+      syncToReplicas(c.env, "insert", rowToSync)
     }
 
     return c.json(success({ id }))
@@ -363,6 +397,20 @@ app.patch("/banners/:id/toggle", async (c) => {
     await db.prepare(
       "UPDATE banners SET active=?,updated_at=? WHERE id=?"
     ).bind(newVal, now(), id).run()
+
+    // ✅ FIX (audit): this route never called syncToReplicas() at all —
+    // toggling a banner active/inactive on the primary DB never
+    // propagated to Turso/Supabase, so a banner turned off in the
+    // admin panel could keep showing as active (and vice versa) on
+    // any reader hitting a replica instead of the primary DB.
+    const fullRow = await db.prepare("SELECT * FROM banners WHERE id=?").bind(id).first()
+    if (fullRow) {
+      if (c.executionCtx?.waitUntil) {
+        c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", fullRow))
+      } else {
+        syncToReplicas(c.env, "insert", fullRow)
+      }
+    }
 
     return c.json(success({ id, active: !!newVal }))
 
@@ -425,6 +473,28 @@ app.post("/banners/reorder", async (c) => {
     )
 
     await db.batch(stmts)
+
+    // ✅ FIX (audit): this never synced to replicas — banner order
+    // changes from drag-and-drop reordering in the admin panel only
+    // ever reached the primary DB, so any reader served from a Turso/
+    // Supabase replica would keep showing banners in the old order
+    // indefinitely. Re-select each updated row (full column set, so
+    // trailer_url/trailer_autoplay/trailer_muted stay correct too —
+    // same reasoning as the PUT/toggle/trailer fixes above) and sync
+    // each one. Sequential awaits are fine here: this only runs after
+    // an admin reorder action, not on a hot request path, and the
+    // number of banners being reordered is small.
+    const ids = body.order.map(item => item.id)
+    for (const id of ids) {
+      const fullRow = await db.prepare("SELECT * FROM banners WHERE id=?").bind(id).first()
+      if (fullRow) {
+        if (c.executionCtx?.waitUntil) {
+          c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", fullRow))
+        } else {
+          await syncToReplicas(c.env, "insert", fullRow)
+        }
+      }
+    }
 
     return c.json(success({ updated: body.order.length }))
 
@@ -502,6 +572,19 @@ app.post("/banners/:id/trailer", async (c) => {
       now(),
       id
     ).run()
+
+    // ✅ FIX (audit): this route never synced to replicas — trailer
+    // config saved correctly to the primary DB but never reached
+    // Turso/Supabase (see buildTursoPayload's own fix above for the
+    // matching column-list side of this same bug).
+    const fullRow = await db.prepare("SELECT * FROM banners WHERE id=?").bind(id).first()
+    if (fullRow) {
+      if (c.executionCtx?.waitUntil) {
+        c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", fullRow))
+      } else {
+        syncToReplicas(c.env, "insert", fullRow)
+      }
+    }
 
     return c.json(success({ updated: true, id }))
 
