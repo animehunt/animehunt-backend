@@ -178,5 +178,3 @@ app.get("/trending/movies", async (c) => {
 })
 
 export default app
-
-
