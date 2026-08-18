@@ -5,6 +5,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 const app = new Hono()
 
@@ -61,7 +62,7 @@ async function syncToReplicas(env, action, data) {
 
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
     promises.push(
-      fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+      fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -435,6 +436,22 @@ app.post("/categories/reorder", async (c) => {
     )
 
     await db.batch(stmts)
+
+    // ✅ FIX (audit, same bug class as banners.js's reorder route):
+    // this never called syncToReplicas() — category order changes
+    // from admin panel drag-and-drop only ever reached the primary
+    // DB, so any reader served from a Turso/Supabase replica kept
+    // showing categories in the old order indefinitely.
+    for (const item of body.order) {
+      const fullRow = await db.prepare("SELECT * FROM categories WHERE id=?").bind(item.id).first()
+      if (fullRow) {
+        if (c.executionCtx?.waitUntil) {
+          c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", fullRow))
+        } else {
+          await syncToReplicas(c.env, "insert", fullRow)
+        }
+      }
+    }
 
     return c.json(success({ updated: body.order.length }))
 
