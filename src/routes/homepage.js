@@ -4,6 +4,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 const app = new Hono()
 
@@ -98,7 +99,7 @@ async function syncToReplicas(env, action, row) {
           ]
         }
 
-    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+    fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -342,6 +343,14 @@ app.patch("/homepage/:id/toggle", async (c) => {
       "UPDATE homepage_rows SET active=?,updated_at=? WHERE id=?"
     ).bind(newVal, now(), id).run()
 
+    // ✅ FIX (audit, same bug class as banners.js/categories.js toggle
+    // routes): this never called syncToReplicas() — toggling a
+    // homepage row on/off in the admin panel only ever reached the
+    // primary DB, so a replica-served reader could keep showing a
+    // row that was turned off (or hide one that was turned back on).
+    const fullRow = await db.prepare("SELECT * FROM homepage_rows WHERE id=?").bind(id).first()
+    if (fullRow) syncToReplicas(c.env, "insert", fullRow)
+
     return c.json(success({ id, active: !!newVal }))
 
   } catch (err) {
@@ -399,6 +408,16 @@ app.post("/homepage/reorder", async (c) => {
 
     await db.batch(stmts)
 
+    // ✅ FIX (audit, same bug class as banners.js/categories.js/
+    // episodes.js reorder routes): this never called syncToReplicas()
+    // — row order changes from admin panel drag-and-drop only ever
+    // reached the primary DB, so a replica-served reader kept seeing
+    // homepage rows in the old order indefinitely.
+    for (const item of body.order) {
+      const fullRow = await db.prepare("SELECT * FROM homepage_rows WHERE id=?").bind(item.id).first()
+      if (fullRow) syncToReplicas(c.env, "insert", fullRow)
+    }
+
     return c.json(success({ updated: body.order.length }))
 
   } catch (err) {
@@ -415,8 +434,28 @@ app.post("/homepage/auto-build", async (c) => {
     const db = c.env.DB
     await ensureTable(db)
 
+    // ✅ FIX (audit): fetch existing IDs BEFORE deleting them — needed
+    // to sync the delete to replicas below. The delete itself already
+    // ran unconditionally on the primary DB regardless of whether any
+    // rows existed; this only adds the missing replica-side mirror of
+    // that same delete.
+    const { results: existingRows } = await db.prepare(
+      "SELECT id FROM homepage_rows"
+    ).all()
+
     /* Clear existing rows */
     await db.prepare("DELETE FROM homepage_rows").run()
+
+    // ✅ FIX (audit): this never synced the clear-existing-rows delete
+    // to replicas — auto-build wipes the primary DB's homepage_rows
+    // before inserting the 10 defaults below (which DO sync, via the
+    // syncToReplicas("insert", row) call already in the loop), but
+    // without this, a replica would end up with BOTH the old rows
+    // (never deleted there) AND the new defaults, rather than just
+    // the new defaults like the primary DB has.
+    for (const r of existingRows || []) {
+      syncToReplicas(c.env, "delete", { id: r.id })
+    }
 
     const DEFAULT_ROWS = [
       { title: "🔥 Trending Now",      type: "trending",   layout: "scroll", limit: 12, icon: "🔥" },
