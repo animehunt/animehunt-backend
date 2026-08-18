@@ -4,6 +4,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 import { uploadBufferToImageKit } from "./upload.js"
 import {
   resolveTmdbTarget,
@@ -129,7 +130,7 @@ async function syncToReplicas(env, action, data) {
   /* ---- Turso ---- */
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
     promises.push(
-      fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+      fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -786,5 +787,3 @@ animeRoute.post("/anime/auto-add", async (c) => {
 
 // ✅ FIX: export default at true end — bulk-status route registered BEFORE export
 export default animeRoute
-
-
