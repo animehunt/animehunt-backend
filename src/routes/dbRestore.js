@@ -38,23 +38,40 @@ function passThrough(sql) {
 const router = new Hono()
 
 /* ─────────────────────────────────────────────────────────────
-   ALL TABLES (same as animehunt_database.sql + sync tables)
+   ALL TABLES (matches FINAL_COMPLETE_schema-FIXED-3.sql — every
+   real data table except the sync-infra/meta tables and the FTS
+   virtual mirror table, which are excluded below on purpose)
+   ✅ FIX: previous list used "ads"/"ads_logs" (never-existing table
+   names) and was missing 40+ real tables — every restore/reconcile/
+   snapshot/checksum loop below iterates this list, so any table not
+   in it was silently never replicated, and any name in it that
+   isn't real (ads, ads_logs) made every one of those loops warn/fail
+   on a SELECT against a table that doesn't exist.
 ───────────────────────────────────────────────────────────── */
 const ALL_TABLES = [
-  "anime", "episodes", "categories", "banners", "servers",
-  "homepage_rows", "sidebar", "footer_config", "player_settings",
-  "seo_settings", "seo_meta", "performance_settings",
-  "security_settings", "banned_ips", "threat_logs",
-  "search_settings", "search_logs", "system_settings", "system_logs",
-  "deploy_state", "deploy_backups", "deploy_versions",
-  "ai_state", "ai_settings", "ai_logs", "cache_store",
-  "ads", "ads_logs", "downloads", "analytics"
+  "ad_assignments", "ad_stats", "admin_users", "ads_library",
+  "ai_logs", "ai_settings", "ai_state", "analytics",
+  "analytics_downloads", "analytics_views", "anime", "audit_logs",
+  "banned_ips", "banner_clicks", "banners", "broken_link_reports",
+  "cache_store", "categories", "config_versions", "deploy_backups",
+  "deploy_state", "deploy_versions", "download_entries",
+  "download_host_entries", "download_links", "download_sessions",
+  "downloads", "episodes", "footer_config", "homepage_rows",
+  "host_monetization", "hosts", "impression_counters",
+  "nav_monetization", "page_monetization", "performance_settings",
+  "player_sessions", "player_settings", "popup_library",
+  "redirect_library", "search_logs", "search_settings",
+  "security_settings", "seo_meta", "seo_settings", "servers",
+  "shortlinks_library", "sidebar", "system_logs", "system_settings",
+  "threat_logs", "user_video_config", "watch_progress"
 ]
 
 // Sync infrastructure tables (don't replicate these — they're meta)
+// ✅ FIX: "sync_checksums" isn't a table in the schema — sync_audit_log
+// has a `checksum` *column* instead (used by rowChecksum() in db.js).
 const SYNC_TABLES = [
   "sync_event_log", "sync_processed_events",
-  "sync_dead_letter", "sync_audit_log", "sync_checksums"
+  "sync_dead_letter", "sync_audit_log"
 ]
 
 // ✅ FIX (audit ISSUE-011): /db/replay-events and /db/dead-letter/retry both
