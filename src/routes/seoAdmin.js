@@ -29,6 +29,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 const app = new Hono()
 
@@ -209,7 +210,7 @@ function formatRow(r) {
 
 function syncToReplicas(env, row) {
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
-    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+    fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
