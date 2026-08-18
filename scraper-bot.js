@@ -66,14 +66,29 @@ async function scrapeTelegramChannel() {
   }
 }
 
+function csvField(value) {
+  // ✅ FIX (audit): quote-wrap any field containing a comma, quote, or
+  // newline — downloadsAdmin.js's own parseCsvLine() (the parser this
+  // file's CSV is meant to feed) IS quote-aware, but this generator
+  // never actually quoted anything, so a comma inside episode_title or
+  // link (e.g. a URL with query-string commas, or a future
+  // dynamically-scraped title) would silently misalign every column
+  // after it once uploaded — the exact same class of bug fixed in
+  // analyticsAdmin.js's CSV export, just on the generating side instead
+  // of the exporting side.
+  const s = String(value ?? "")
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
 function generateCSV(data) {
   let csvContent = CSV_HEADERS;
 
   data.forEach(ep => {
+    const title = csvField(ep.title);
     // Knight Mode Host Format for qualities
-    if (ep.links['1080p']) csvContent += `${ANIME_ID},episode,${SEASON},${ep.episode},${ep.title},${HOST_ID},,1080p,${ep.links['1080p']}\n`;
-    if (ep.links['720p'])  csvContent += `${ANIME_ID},episode,${SEASON},${ep.episode},${ep.title},${HOST_ID},,720p,${ep.links['720p']}\n`;
-    if (ep.links['480p'])  csvContent += `${ANIME_ID},episode,${SEASON},${ep.episode},${ep.title},${HOST_ID},,480p,${ep.links['480p']}\n`;
+    if (ep.links['1080p']) csvContent += `${ANIME_ID},episode,${SEASON},${ep.episode},${title},${HOST_ID},,1080p,${csvField(ep.links['1080p'])}\n`;
+    if (ep.links['720p'])  csvContent += `${ANIME_ID},episode,${SEASON},${ep.episode},${title},${HOST_ID},,720p,${csvField(ep.links['720p'])}\n`;
+    if (ep.links['480p'])  csvContent += `${ANIME_ID},episode,${SEASON},${ep.episode},${title},${HOST_ID},,480p,${csvField(ep.links['480p'])}\n`;
   });
 
   fs.writeFileSync(OUTPUT_FILE, csvContent);
