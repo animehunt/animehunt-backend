@@ -5,6 +5,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 const app = new Hono()
 
@@ -56,7 +57,7 @@ async function syncToReplicas(env, action, data) {
 
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
     promises.push(
-      fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+      fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -579,4 +580,4 @@ app.delete("/servers/:id", async (c) => {
 })
 
 export default app
-                                              
+                                          
