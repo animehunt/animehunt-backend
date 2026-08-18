@@ -24,6 +24,20 @@
    this route being updated to match. Removed the broken duplicate here
    — see downloadsAdmin.js for the one real implementation of this
    route.
+
+   ✅ FIX (audit, block-ips route): this only ever wrote to KV
+   (`blocklist:${ip}`) and never touched the banned_ips DB table.
+   firewall.js's isIPBlocked() DB-fallback (used once the KV entry's
+   TTL expires) reads banned_ips, not KV, so every bulk-blocked IP
+   silently stopped being blocked the moment its KV entry expired —
+   with no DB row to fall back to. It also meant securityAdmin.js's
+   GET /security/banned (SELECT * FROM banned_ips, the admin "Banned
+   IPs" list) never showed IPs blocked through this route at all, so
+   an admin bulk-blocking IPs would see nothing in the list afterward.
+   Now inserts into banned_ips (with expires_at, matching how
+   firewall.js's blockIP()/autoBan() do it) in one batch statement
+   alongside the existing KV writes, so both stay in sync the same
+   way the single-IP POST /security/ban path already does.
 ================================================ */
 
 import { Hono }  from "hono"
@@ -68,7 +82,8 @@ bulkUpload.post("/bulk-upload/block-ips", async (c) => {
 
     // Safety cap — max 100 at a time
     const toBlock     = validIPs.slice(0, 100)
-    const ttl         = Number(duration) || 86400  // default: 24 h
+    const ttlRaw       = Number(duration)
+    const ttl          = Number.isFinite(ttlRaw) && ttlRaw > 0 ? Math.floor(ttlRaw) : 86400  // default: 24 h
     const blockReason = reason || "Bulk blocked by admin"
     const now         = new Date().toISOString()
 
@@ -82,6 +97,30 @@ bulkUpload.post("/bulk-upload/block-ips", async (c) => {
         )
       )
     )
+
+    // ✅ FIX: mirror into banned_ips so the DB fallback (post-KV-expiry)
+    // and the admin "Banned IPs" list both see these too. INSERT OR
+    // IGNORE — an IP already banned keeps its existing DB row/reason/
+    // expiry untouched (same "don't clobber an existing ban" behavior
+    // securityAdmin.js's autoBan() already relies on); it still gets
+    // the fresh KV entry above either way.
+    if (c.env.DB) {
+      try {
+        await Promise.all(
+          toBlock.map(ip =>
+            c.env.DB.prepare(
+              "INSERT OR IGNORE INTO banned_ips (ip, reason, ban_count, expires_at, created_at) VALUES (?, ?, 1, datetime('now', ? || ' seconds'), datetime('now'))"
+            ).bind(ip, blockReason, String(ttl)).run()
+          )
+        )
+      } catch (dbErr) {
+        // KV blocks are already in effect at this point — don't fail
+        // the whole request over the DB mirror, just log it. The IPs
+        // are still blocked for the KV TTL window; only the
+        // DB-fallback-after-expiry and the admin list would miss them.
+        console.error("bulk-upload block-ips: banned_ips insert failed:", dbErr)
+      }
+    }
 
     return ok(c, {
       blocked:  toBlock.length,
@@ -98,4 +137,3 @@ bulkUpload.post("/bulk-upload/block-ips", async (c) => {
 })
 
 export default bulkUpload
-
