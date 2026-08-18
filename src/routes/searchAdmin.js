@@ -26,6 +26,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 const app = new Hono()
 
@@ -191,7 +192,7 @@ async function ensureLogsTable(db) {
 
 function syncToReplicas(env, settings) {
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
-    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+    fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -356,6 +357,14 @@ app.post("/search/reset", async (c) => {
       DEFAULTS.safe_mode, DEFAULTS.track_popular,
       DEFAULTS.seo_urls, DEFAULTS.cache_seconds, timestamp
     ).run()
+
+    // ✅ FIX (audit, same bug class as footer.js/performance.js/system.js
+    // reset routes): this never called syncToReplicas() — resetting
+    // search settings to defaults only ever reached the primary DB, so
+    // a Turso/Supabase replica would keep serving the pre-reset config
+    // indefinitely.
+    const freshRow = await db.prepare("SELECT * FROM search_settings WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
 
     return c.json(success({ reset: true, updated_at: timestamp }))
   } catch (err) {
