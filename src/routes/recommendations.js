@@ -174,5 +174,3 @@ app.get("/recommendations/:animeId", async (c) => {
 })
 
 export default app
-
-
