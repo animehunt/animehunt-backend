@@ -4,6 +4,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 const app = new Hono()
 
@@ -166,7 +167,7 @@ function formatRow(r) {
 
 async function syncToReplicas(env, row) {
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
-    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+    fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -327,6 +328,14 @@ app.post("/performance/reset", async (c) => {
       WHERE id=1
     `).bind(timestamp).run()
 
+    // ✅ FIX (audit, same bug class as footer.js's reset/kill routes):
+    // this never called syncToReplicas() — resetting performance
+    // settings to defaults only ever reached the primary DB, so a
+    // Turso/Supabase replica would keep serving the pre-reset config
+    // indefinitely.
+    const freshRow = await db.prepare("SELECT * FROM performance_settings WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
+
     return c.json(success({ reset: true, updated_at: timestamp }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -351,6 +360,11 @@ app.post("/performance/enable-all", async (c) => {
         imgWebP=1,imgResponsive=1,updated_at=?
       WHERE id=1
     `).bind(timestamp).run()
+
+    // ✅ FIX (audit, same bug class as this file's own reset route):
+    // this never called syncToReplicas() either.
+    const freshRow = await db.prepare("SELECT * FROM performance_settings WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
 
     return c.json(success({ enabled: true, updated_at: timestamp }))
   } catch (err) {
