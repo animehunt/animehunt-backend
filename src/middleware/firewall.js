@@ -34,7 +34,17 @@ const FIREWALL_LEVEL_LIMITS = {
   1: 200, 2: 150, 3: 100, 4: 60, 5: 30
 }
 
-/* ── IP Blocklist: KV fast-path + DB fallback ── */
+/* ── IP Blocklist: KV fast-path + DB fallback ──
+   ✅ FIX (audit): the DB fallback used to be `SELECT ip FROM banned_ips
+   WHERE ip=?` with no expiry check, so once the KV cache entry expired
+   (its TTL is set independently from the ban's actual duration — see
+   blockIP()), the DB fallback treated every ban row as permanent
+   regardless of what duration the admin actually requested. A 1-hour
+   ban and a 100-year ban were indistinguishable here once KV forgot
+   about them. Now expired rows are treated as not-banned (and swept
+   away for good below), and the KV re-cache TTL is derived from the
+   row's real remaining time instead of a flat 3600s that could
+   silently extend a shorter ban or truncate a longer one. */
 async function isIPBlocked(env, ip, db) {
   if (env.KV) {
     try {
@@ -47,15 +57,34 @@ async function isIPBlocked(env, ip, db) {
 
   try {
     const banned = await db.prepare(
-      "SELECT ip FROM banned_ips WHERE ip=?"
+      "SELECT ip, expires_at FROM banned_ips WHERE ip=?"
     ).bind(ip).first()
 
-    if (banned && env.KV) {
-      env.KV.put(`blocklist:${ip}`, "1", { expirationTtl: 3600 })
-        .catch(e => console.warn("⚠️ KV blocklist cache write failed:", e.message))
+    if (!banned) return false
+
+    if (banned.expires_at) {
+      const remainingMs = new Date(banned.expires_at).getTime() - Date.now()
+      if (remainingMs <= 0) {
+        // Ban has lapsed — clean up the stale row so future lookups
+        // (and the admin "Banned IPs" list) don't show it as active.
+        db.prepare("DELETE FROM banned_ips WHERE ip=?").bind(ip).run()
+          .catch(e => console.warn("⚠️ Stale ban cleanup failed:", e.message))
+        return false
+      }
+      if (env.KV) {
+        const ttl = Math.max(1, Math.min(3600, Math.ceil(remainingMs / 1000)))
+        env.KV.put(`blocklist:${ip}`, "1", { expirationTtl: ttl })
+          .catch(e => console.warn("⚠️ KV blocklist cache write failed:", e.message))
+      }
       return true
     }
-    return false
+
+    // No expires_at on the row (permanent ban) — cache for up to 1h as before.
+    if (env.KV) {
+      env.KV.put(`blocklist:${ip}`, "1", { expirationTtl: 3600 })
+        .catch(e => console.warn("⚠️ KV blocklist cache write failed:", e.message))
+    }
+    return true
   } catch {
     return false
   }
@@ -91,11 +120,16 @@ async function checkRateLimit(env, ip, path, firewallLevel = 3) {
   }
 }
 
-/* ── Auto-ban: DB insert + KV cache ── */
+/* ── Auto-ban: DB insert + KV cache ──
+   ✅ FIX (audit): now sets expires_at (24h, matching the KV cache TTL
+   this already used below) so auto-bans lapse the same way manual
+   bans do — previously this left expires_at NULL, which the schema
+   treats as "no expiry" (see isIPBlocked's permanent-ban branch above),
+   so every bot/scraper/rate-limit auto-ban was silently permanent. */
 async function autoBan(env, db, ip, reason) {
   try {
     await db.prepare(
-      "INSERT OR IGNORE INTO banned_ips (ip, reason, ban_count, created_at) VALUES (?, ?, 1, datetime('now'))"
+      "INSERT OR IGNORE INTO banned_ips (ip, reason, ban_count, expires_at, created_at) VALUES (?, ?, 1, datetime('now', '+1 day'), datetime('now'))"
     ).bind(ip, reason).run()
 
     if (env.KV) {
@@ -107,7 +141,16 @@ async function autoBan(env, db, ip, reason) {
   }
 }
 
-/* ── Exported: blockIP / unblockIP — used by securityAdmin.js ── */
+/* ── Exported: blockIP / unblockIP — used by securityAdmin.js ──
+   ✅ FIX (audit): expires_at was never written on either the
+   first-ban INSERT or the repeat-ban UPDATE, even though the caller
+   (POST /security/ban in securityAdmin.js) already collects and
+   passes a real `durationSeconds` from the admin's request — that
+   duration only ever reached the KV cache, never the DB row. Once
+   the KV entry expired, isIPBlocked's DB fallback (see above) found
+   a row with no expiry and treated the ban as permanent, regardless
+   of what the admin actually chose. Both paths below now persist the
+   real expiry so DB and KV agree. */
 export async function blockIP(env, ip, reason = "manual", durationSeconds = 86400) {
   if (!env.DB) return
 
@@ -118,12 +161,12 @@ export async function blockIP(env, ip, reason = "manual", durationSeconds = 8640
 
     if (existing) {
       await env.DB.prepare(
-        "UPDATE banned_ips SET ban_count=ban_count+1, reason=? WHERE ip=?"
-      ).bind(reason, ip).run()
+        "UPDATE banned_ips SET ban_count=ban_count+1, reason=?, expires_at=datetime('now', ? || ' seconds') WHERE ip=?"
+      ).bind(reason, String(durationSeconds), ip).run()
     } else {
       await env.DB.prepare(
-        "INSERT INTO banned_ips (ip, reason, ban_count, created_at) VALUES (?, ?, 1, datetime('now'))"
-      ).bind(ip, reason).run()
+        "INSERT INTO banned_ips (ip, reason, ban_count, expires_at, created_at) VALUES (?, ?, 1, datetime('now', ? || ' seconds'), datetime('now'))"
+      ).bind(ip, reason, String(durationSeconds)).run()
     }
 
     if (env.KV) {
