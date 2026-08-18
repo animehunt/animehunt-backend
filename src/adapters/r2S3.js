@@ -86,4 +86,3 @@ export function createR2Compatible({ accountId, accessKeyId, secretAccessKey, bu
     }
   }
 }
-
