@@ -101,7 +101,7 @@ sudo chmod 700 /home/deploy/deploy.sh
 sudo -u deploy -H bash
 cd /var/www/animehunt-backend
 cp .env.example .env   # then fill in real values
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 pm2 save
 exit
 
