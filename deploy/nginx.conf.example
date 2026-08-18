@@ -30,12 +30,22 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        # Only relevant if you go fully origin-direct (no Cloudflare in
-        # front) — see report §1.1. If Cloudflare stays in front,
-        # CF-Connecting-IP arrives already set and this header becomes
-        # a secondary/backup signal, which is exactly what the code's
-        # new fallback chain (CF-Connecting-IP -> x-forwarded-for) expects.
-        proxy_set_header X-Forwarded-For $remote_addr;
+        # ✅ FIX (audit): this used to be `$remote_addr`, which is a real
+        # bug — $remote_addr is only the IMMEDIATE connecting IP. With
+        # Cloudflare in front, that's Cloudflare's own edge IP, never
+        # the real visitor's IP, so X-Forwarded-For would always report
+        # Cloudflare's address. $proxy_add_x_forwarded_for instead
+        # APPENDS to whatever X-Forwarded-For chain already arrived
+        # (Cloudflare's, if it's in front) rather than overwriting it,
+        # so the real client IP is preserved as the leftmost entry.
+        # This directly feeds src/utils/clientIp.js's getClientIP(),
+        # which every IP-based feature in the backend goes through
+        # (firewall bans, rate limiting, unique-click dedup) — with the
+        # old $remote_addr, all of those would have silently keyed off
+        # Cloudflare's IP instead of each real visitor's, in the
+        # Cloudflare-in-front deployment this file's own comments
+        # describe as the recommended setup.
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_cache_bypass $http_upgrade;
     }
@@ -64,9 +74,11 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $remote_addr;
+        # ✅ FIX (audit): same $remote_addr -> $proxy_add_x_forwarded_for
+        # correction as the server block above, for the same reason —
+        # this domain's /api/ proxies to the same backend that resolves
+        # client IPs via src/utils/clientIp.js.
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-
-
