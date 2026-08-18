@@ -4,6 +4,7 @@
 
 import { Hono }   from "hono"    // ✅ FIX (audit ISSUE-017): needed for playerProgressRoutes below
 import crypto      from "node:crypto"  // ✅ FIX (audit ISSUE-018): for HMAC stream tokens below — Node runtime, available post-migration
+import { getClientIP } from "../utils/clientIp.js"
 
 // Alias for index.js scheduled cron
 export const runPlayerAI = runPlayerEngine
@@ -138,7 +139,7 @@ export async function runPlayerEngine(env, request = null){
     🚦 STREAM RATE LIMIT
     ========================= */
 
-    const rateUserId = request?.headers?.get("cf-connecting-ip") || request?.headers?.get("x-forwarded-for") || "unknown"
+    const rateUserId = getClientIP(request, "unknown")
     const rateCheck   = await checkStreamRateLimit(env, rateUserId)
     if(!rateCheck.allowed){
       return error("Too many stream requests — slow down",429)
@@ -368,7 +369,7 @@ async function trackSession(env, request, serverId){
 
     const db = env.DB
 
-    const ip = request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for") || "unknown"
+    const ip = getClientIP(request, "unknown")
 
     await db.prepare(`
       INSERT INTO player_sessions(ip,server_id,created_at)
@@ -511,7 +512,7 @@ playerProgressRoutes.post("/player/validate", async (c) => {
     return c.json({ error: "Origin not allowed" }, 403)
   }
   const body   = await c.req.json().catch(() => ({}))
-  const userId = body.userId || c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown"
+  const userId = body.userId || getClientIP(c, "unknown")
   const check  = await checkStreamRateLimit(c.env, userId)
   if (!check.allowed) return c.json({ error: "Too many stream requests" }, 429)
   return c.json({ valid: true })
@@ -558,3 +559,5 @@ playerProgressRoutes.get("/player/config/:userId", async (c) => {
   }
   return c.json({ config: parsedConfig })
 })
+
+
