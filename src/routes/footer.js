@@ -19,6 +19,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 
 // ✅ CORRECT: Auth.protect() is handled by adminAuth middleware in index.js
 // ❌ WRONG (deleted): import AuthService from './authService.js'
@@ -167,9 +168,15 @@ function format(r) {
    SYNC TO REPLICAS (non-blocking)
 ================================================ */
 
-function syncToReplicas(env, row) {
+// ✅ FIX (audit): exported — ai/footerAI.js's cron-triggered auto-adjust
+// logic (theme auto-switch, promo auto-disable, mobile-blur throttling)
+// needs to sync its own UPDATEs to replicas too, the same way every
+// admin-triggered write in this file already does. Without an export
+// here, footerAI.js had no way to reuse this and previously didn't
+// sync at all.
+export function syncToReplicas(env, row) {
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
-    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+    fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`,
@@ -370,6 +377,15 @@ app.post("/footer/reset", async (c) => {
       await c.env.KV.delete(KV_FOOTER_KEY).catch(() => {})
     }
 
+    // ✅ FIX (audit): this never called syncToReplicas() — resetting
+    // footer config to defaults only ever reached the primary DB, so
+    // a Turso/Supabase replica would keep serving the pre-reset config
+    // indefinitely. Re-select the full row (reset just wrote literal
+    // values via SQL, not through the `row` object shape
+    // syncToReplicas expects) and sync it the same way POST /footer does.
+    const freshRow = await db.prepare("SELECT * FROM footer_config WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
+
     return c.json(success({ reset: true, updated_at: ts }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -391,6 +407,14 @@ app.post("/footer/kill", async (c) => {
     if (c.env.KV) {
       await c.env.KV.delete(KV_FOOTER_KEY).catch(() => {})
     }
+
+    // ✅ FIX (audit): this never called syncToReplicas() — killing the
+    // footer only ever reached the primary DB, so a Turso/Supabase
+    // replica would keep serving footerOn=1 (or whatever it last had)
+    // indefinitely, defeating the entire point of a kill switch for
+    // any reader hitting a replica instead of the primary.
+    const freshRow = await db.prepare("SELECT * FROM footer_config WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
 
     return c.json(success({ killed: true }))
   } catch (err) {
