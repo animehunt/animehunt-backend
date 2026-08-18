@@ -73,12 +73,48 @@ async function ensureTables(db) {
       )
     `).run()
 
+    // ✅ FIX (audit, same race-condition class as ISSUE-015's deploy_state
+    // fix above): this only defined 4 of seo_settings' real 30 columns
+    // (confirmed against schema.sql and seoAdmin.js's own matching
+    // definition). ensureTables() here runs lazily per-request just like
+    // deploy_state's did — if an admin visits AI Brain before ever
+    // opening SEO Settings on a fresh DB, this narrower CREATE TABLE
+    // would win, and seoAdmin.js's later "UPDATE seo_settings SET
+    // site_title=?, site_desc=?, ..." would then fail with "no such
+    // column: site_title". Matching the full definition here removes
+    // the race entirely, the same way the deploy_state fix already did.
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS seo_settings (
-        id          INTEGER PRIMARY KEY DEFAULT 1,
-        tpl_anime   TEXT DEFAULT '{title} Hindi Dubbed – Watch Online | AnimeHunt',
-        canonical   TEXT DEFAULT 'https://animehunt.in',
-        auto_sitemap INTEGER DEFAULT 0
+        id               INTEGER PRIMARY KEY DEFAULT 1,
+        site_title       TEXT,
+        site_desc        TEXT,
+        site_keywords    TEXT,
+        canonical        TEXT DEFAULT 'https://animehunt.in',
+        indexing         TEXT DEFAULT 'index',
+        home_title       TEXT,
+        home_desc        TEXT,
+        home_keywords    TEXT,
+        home_og          TEXT,
+        tpl_anime        TEXT DEFAULT '{title} Hindi Dubbed – Watch Online | AnimeHunt',
+        tpl_category     TEXT,
+        tpl_episode      TEXT,
+        tpl_search       TEXT,
+        tpl_movie        TEXT,
+        tpl_cartoon      TEXT,
+        og_title         TEXT,
+        og_desc          TEXT,
+        tw_title         TEXT,
+        tw_desc          TEXT,
+        tw_card          TEXT DEFAULT 'summary_large_image',
+        schema_org       INTEGER DEFAULT 1,
+        auto_meta        INTEGER DEFAULT 1,
+        auto_sitemap     INTEGER DEFAULT 0,
+        sitemap_freq     TEXT DEFAULT 'daily',
+        sitemap_priority TEXT DEFAULT '0.8',
+        robots_index     TEXT DEFAULT 'index, follow',
+        robots_noindex   TEXT DEFAULT 'noindex, nofollow',
+        lang             TEXT DEFAULT 'hi-IN',
+        updated_at       TEXT
       )
     `).run()
 
@@ -673,10 +709,29 @@ async function seoEngine(db, cfg) {
         let metaDesc = a.description?.slice(0, 120) || `Watch ${a.title} Hindi Dubbed online free on AnimeHunt.`
         metaDesc = metaDesc.slice(0, 160)
 
+        // ✅ FIX (audit): this INSERT OR REPLACE only listed 6 of
+        // seo_meta's 8 columns — keywords/schema_json were missing
+        // (confirmed against schema.sql and seoAdmin.js's own 8-column
+        // batch-insert, which DOES populate both). INSERT OR REPLACE
+        // replaces the ENTIRE row, so every time this auto-run engine
+        // fired for an anime that already had keywords/schema_json set
+        // via seoAdmin.js's "Bulk Generate SEO" feature, this would
+        // silently wipe both back to NULL. Preserve whatever the
+        // existing row already has for those two columns.
+        const existingMeta = await safeFirst(db,
+          "SELECT keywords, schema_json FROM seo_meta WHERE id=?", [a.id]
+        )
+
         await safeRun(db, `
-          INSERT OR REPLACE INTO seo_meta (id,type,meta_title,meta_desc,og_image,updated_at)
-          VALUES (?,?,?,?,?,?)
-        `, [a.id, a.type || "anime", metaTitle, metaDesc, a.poster || "", now()])
+          INSERT OR REPLACE INTO seo_meta (id,type,meta_title,meta_desc,keywords,og_image,schema_json,updated_at)
+          VALUES (?,?,?,?,?,?,?,?)
+        `, [
+          a.id, a.type || "anime", metaTitle, metaDesc,
+          existingMeta?.keywords    ?? null,
+          a.poster || "",
+          existingMeta?.schema_json ?? null,
+          now()
+        ])
       }
 
       changes.seo_generated = animeList.length
