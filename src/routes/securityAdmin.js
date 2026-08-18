@@ -17,6 +17,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { tursoHttpUrl } from "../utils/tursoUrl.js"
 import { blockIP, unblockIP } from "../middleware/firewall.js"
 
 const app = new Hono()
@@ -214,7 +215,7 @@ async function syncToReplicas(env, row) {
   }))
 
   if (env.TURSO_REPLICA_URL && env.TURSO_REPLICA_AUTH_TOKEN) {
-    fetch(`${env.TURSO_REPLICA_URL}/v2/pipeline`, {
+    fetch(`${tursoHttpUrl(env.TURSO_REPLICA_URL)}/v2/pipeline`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${env.TURSO_REPLICA_AUTH_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -530,7 +531,22 @@ app.post("/security/ban", async (c) => {
       return c.json(failure("Invalid IP format"), 400)
     }
 
-    const durationSeconds = body.duration || 86400
+    /* ✅ FIX (audit): body.duration flowed straight into blockIP() with no
+       validation. blockIP() binds it into SQLite's datetime('now', ? ||
+       ' seconds') modifier — a non-numeric or garbage value doesn't error
+       there, it silently produces expires_at=NULL, which isIPBlocked's
+       DB fallback (firewall.js) treats as a PERMANENT ban. So a bad
+       request body — or a typo in a future caller — could turn an
+       intended temporary ban into a silent permanent one. Validate here
+       so that class of input never reaches blockIP() at all. */
+    let durationSeconds = 86400
+    if (body.duration !== undefined && body.duration !== null) {
+      const n = Number(body.duration)
+      if (!Number.isFinite(n) || n <= 0) {
+        return c.json(failure("duration must be a positive number of seconds"), 400)
+      }
+      durationSeconds = Math.floor(n)
+    }
 
     // FIX: Use shared blockIP from firewall.js (also updates KV blocklist)
     await blockIP(c.env, body.ip.trim(), body.reason || "manual", durationSeconds)
@@ -819,7 +835,15 @@ app.get("/security/audit-logs/export", async (c) => {
     const rows = results || []
 
     const csvEscape = (val) => {
-      const s = String(val ?? "")
+      let s = String(val ?? "")
+      // ✅ FIX (audit, same class as analyticsAdmin.js's CSV export):
+      // comma/quote/newline escaping was already here, but formula-
+      // injection protection was not — a field starting with =, +, -,
+      // or @ is evaluated as a formula by Excel/Sheets/LibreOffice.
+      // audit_logs.target and .detail can carry admin-supplied or
+      // upstream (e.g. TMDB-sourced) text, so the same tab-prefix
+      // neutralization used there is applied here too.
+      if (/^[=+\-@]/.test(s)) s = "\t" + s
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
     }
 
