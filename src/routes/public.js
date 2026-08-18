@@ -503,9 +503,21 @@ app.get("/homepage/public", async (c) => {
       if (cached) return c.json(ok(cached), 200, { "X-Cache": "HIT" })
     }
 
+    // ✅ FIX (audit): this SELECT used to reference showMore/moreLink/
+    // bgColor directly — homepage_rows' real schema columns are
+    // show_more/more_link/bg_color (snake_case; confirmed against
+    // schema.sql and homepage.js's own CREATE TABLE), so this query
+    // failed with "no such column: showMore" on every single request —
+    // GET /api/homepage/public, the route the public homepage actually
+    // calls to render its rows, was completely broken (500 on every
+    // hit). Using AS aliases keeps the snake_case columns the schema
+    // actually has while still returning the camelCase shape this
+    // route's own `{...row, items}` spread below sends straight to
+    // the frontend, matching what homepage.js's admin-side format()
+    // already returns for the same fields.
     const { results: rows } = await db.prepare(`
       SELECT id, title, type, source, layout, row_limit, row_order,
-             icon, bgColor, showMore, moreLink
+             icon, bg_color AS bgColor, show_more AS showMore, more_link AS moreLink
       FROM homepage_rows
       WHERE active=1
       ORDER BY row_order ASC
