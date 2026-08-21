@@ -531,13 +531,13 @@ app.post("/deploy/restore", async (c) => {
         "id","firewall_level","core_bot","core_scraper","core_hotlink","core_embed",
         "core_xss","core_csrf","core_sqli","rate_limit","rate_limit_req","rate_limit_window",
         "rate_limit_ban","ddos_protect","ddos_threshold","ddos_block_time",
-        "admin_login_limit","admin_max_attempts","admin_lockout_min","session_monitor",
+        "admin_login_limit","admin_max_attempts","admin_lockout_min","admin_2fa","session_monitor",
         "geo_block","geo_blocked_countries","vpn_block","tor_block",
         "ai_auto_ban","ai_threat_detect","ai_anomaly","ai_ban_threshold",
         "hsts","csp","xframe","nosniff","updated_at"
       ],
       search_settings: [
-        "id","mode","debounce","ranking_mode","ranking_boost","ranking_weight",
+        "id","enableSearch","liveSearch","mode","debounce","ranking_mode","ranking_boost","ranking_weight",
         "src_anime","src_episode","src_category","src_pages",
         "smart_typo","smart_alias","smart_language",
         "ui_max","ui_thumb","ui_group","ui_highlight",
