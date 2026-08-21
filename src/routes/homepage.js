@@ -280,7 +280,7 @@ app.patch("/homepage/:id", async (c) => {
     if (!body.title?.trim()) return c.json(failure("Title required"), 400)
 
     const existing = await db.prepare(
-      "SELECT id FROM homepage_rows WHERE id=?"
+      "SELECT id, created_at FROM homepage_rows WHERE id=?"
     ).bind(id).first()
     if (!existing) return c.json(failure("Row not found"), 404)
 
@@ -315,7 +315,15 @@ app.patch("/homepage/:id", async (c) => {
       row.updated_at, id
     ).run()
 
-    syncToReplicas(c.env, "insert", { ...row, created_at: now() })
+    // ✅ FIX (audit CONFIRMED-7): this fabricated a fresh created_at:now()
+    // on every edit's replica sync instead of preserving the row's real
+    // creation time (the UPDATE above correctly never touches created_at,
+    // but the sync payload didn't have it available to preserve, since the
+    // `existing` lookup above only selected id). Every edit was permanently
+    // overwriting the replica's created_at to the edit timestamp, causing
+    // primary and replica to drift further apart with each edit -- same
+    // bug class as ISSUE-028 (adminServers.js PUT), just missed here.
+    syncToReplicas(c.env, "insert", { ...row, created_at: existing.created_at || timestamp })
 
     return c.json(success({ id }))
 
