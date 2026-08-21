@@ -358,6 +358,22 @@ app.post("/player/reset", async (c) => {
       WHERE id=1
     `).bind(ts).run()
 
+    // ✅ FIX (audit CONFIRMED-5): this route never called syncToReplicas()
+    // -- same bug class already correctly handled by the main POST /player
+    // save route above. Resetting player settings to defaults only ever
+    // reached the primary DB, so a Turso/Supabase replica kept serving the
+    // pre-reset (possibly insecure, e.g. sec_embed_only=0) settings
+    // indefinitely. Re-selecting the full row mirrors the save route's
+    // pattern exactly.
+    const freshRow = await db.prepare("SELECT * FROM player_settings WHERE id=1").first()
+    if (freshRow) {
+      if (c.executionCtx?.waitUntil) {
+        c.executionCtx.waitUntil(syncToReplicas(c.env, freshRow))
+      } else {
+        syncToReplicas(c.env, freshRow)
+      }
+    }
+
     return c.json(success({ reset: true, updated_at: ts }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -365,3 +381,4 @@ app.post("/player/reset", async (c) => {
 })
 
 export default app
+
