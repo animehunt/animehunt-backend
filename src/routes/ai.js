@@ -49,27 +49,71 @@ async function ensureTables(db) {
     `).run()
 
     /* --- Engine-dependent tables (safe CREATE IF NOT EXISTS) --- */
+    // ✅ FIX (audit CONFIRMED-6): this only defined 7 of servers' real 17
+    // columns (confirmed against schema.sql and adminServers.js's own
+    // matching definition) and was missing anime/anime_id/episode_id/
+    // season/episode/embed/type/verified/last_check/last_used/created_at
+    // entirely -- embed is NOT NULL on the real table. Same lazy-init race
+    // as ISSUE-015 (deploy_state): if AI Brain is visited before Servers
+    // on a fresh DB, this narrower table wins permanently (CREATE TABLE IF
+    // NOT EXISTS is a no-op against an existing table), and every later
+    // adminServers.js write fails with "no such column". Matching the
+    // full definition here removes the race.
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS servers (
         id         TEXT PRIMARY KEY,
-        name       TEXT,
-        url        TEXT,
-        active     INTEGER DEFAULT 1,
-        fail_count INTEGER DEFAULT 0,
-        priority   INTEGER DEFAULT 5,
-        updated_at TEXT
+        name       TEXT NOT NULL,
+        anime      TEXT NOT NULL,
+        anime_id   TEXT DEFAULT '',
+        episode_id TEXT DEFAULT '',
+        season     INTEGER NOT NULL DEFAULT 1,
+        episode    INTEGER NOT NULL DEFAULT 1,
+        embed      TEXT NOT NULL,
+        type       TEXT NOT NULL DEFAULT 'iframe'
+                   CHECK (type IN ('iframe','m3u8','mp4','dash')),
+        priority   INTEGER NOT NULL DEFAULT 99,
+        active     INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+        verified   INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0,1)),
+        fail_count INTEGER NOT NULL DEFAULT 0,
+        last_check TEXT DEFAULT '',
+        last_used  TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+        FOREIGN KEY (anime_id)   REFERENCES anime(id)    ON DELETE CASCADE,
+        FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
       )
     `).run()
 
+    // ✅ FIX (audit CONFIRMED-6): this only defined 7 of banners' real 15
+    // columns (confirmed against schema.sql and banners.js's own matching
+    // definition), missing link/category/position/banner_order/
+    // auto_rotate/updated_at entirely -- and critically missing
+    // trailer_url/trailer_autoplay/trailer_muted, a fully working, tested
+    // feature elsewhere in this codebase (banners.js POST /banners/:id/
+    // trailer). Same lazy-init race as the servers fix above: if this
+    // narrower table won on a fresh DB, that feature's writes would fail
+    // with "no such column: trailer_url". Matching the full definition
+    // here removes the race.
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS banners (
-        id         TEXT PRIMARY KEY,
-        title      TEXT,
-        image      TEXT,
-        page       TEXT DEFAULT 'home',
-        active     INTEGER DEFAULT 0,
-        priority   INTEGER DEFAULT 5,
-        created_at TEXT
+        id                TEXT PRIMARY KEY,
+        page              TEXT NOT NULL DEFAULT 'home'
+                            CHECK (page IN ('home','anime','cartoon','series','movies','search','episode','download','category')),
+        category          TEXT DEFAULT '',
+        position          TEXT NOT NULL DEFAULT 'hero'
+                            CHECK (position IN ('hero','top','middle','bottom')),
+        title             TEXT NOT NULL,
+        image             TEXT NOT NULL,
+        link              TEXT DEFAULT '',
+        banner_order      INTEGER NOT NULL DEFAULT 1,
+        active            INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+        auto_rotate       INTEGER NOT NULL DEFAULT 0 CHECK (auto_rotate IN (0,1)),
+        trailer_url       TEXT DEFAULT NULL,
+        trailer_autoplay  INTEGER NOT NULL DEFAULT 0 CHECK (trailer_autoplay IN (0,1)),
+        trailer_muted     INTEGER NOT NULL DEFAULT 1 CHECK (trailer_muted IN (0,1)),
+        created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `).run()
 
