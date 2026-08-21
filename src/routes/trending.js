@@ -140,7 +140,7 @@ app.get("/trending/ongoing", async (c) => {
 
     const { results } = await c.env.DB.prepare(`
       SELECT ${COLS} FROM anime
-      WHERE status='ongoing' AND is_hidden=0 AND active=1
+      WHERE status IN ('ongoing','airing') AND is_hidden=0 AND active=1
       ORDER BY updated_at DESC LIMIT ?
     `).bind(limit).all()
 
@@ -178,3 +178,4 @@ app.get("/trending/movies", async (c) => {
 })
 
 export default app
+
