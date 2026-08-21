@@ -370,6 +370,14 @@ app.post("/security/reset", async (c) => {
         hsts=1,csp=1,xframe=1,nosniff=1,updated_at=?
       WHERE id=1
     `).bind(ts).run()
+
+    // ✅ FIX (audit CONFIRMED-9): this route never called syncToReplicas()
+    // -- same bug class already correctly handled by POST /security above.
+    // Resetting security settings only ever reached the primary DB, so a
+    // Turso/Supabase replica kept serving the pre-reset configuration.
+    const freshRow = await db.prepare("SELECT * FROM security_settings WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
+
     return c.json(success({ reset: true, updated_at: ts }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -397,6 +405,17 @@ app.post("/security/enable-all", async (c) => {
         hsts=1,csp=1,xframe=1,nosniff=1,updated_at=?
       WHERE id=1
     `).bind(ts).run()
+
+    // ✅ FIX (audit CONFIRMED-9): this route never called syncToReplicas()
+    // -- the highest-stakes instance of this bug class in the codebase.
+    // enable-all exists specifically for an admin responding to an active
+    // threat who wants every protection turned on immediately; without
+    // this sync, any traffic served from a Turso/Supabase replica kept
+    // receiving the OLD, weaker security_settings, silently defeating the
+    // point of an emergency hardening action.
+    const freshRow = await db.prepare("SELECT * FROM security_settings WHERE id=1").first()
+    if (freshRow) syncToReplicas(c.env, freshRow)
+
     return c.json(success({ enabled: true, updated_at: ts }))
   } catch (err) {
     return c.json(failure(err.message), 500)
