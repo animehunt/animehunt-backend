@@ -547,6 +547,23 @@ app.patch("/servers/:id/toggle", async (c) => {
     await db.prepare("UPDATE servers SET active=?,updated_at=? WHERE id=?")
       .bind(newVal, now(), id).run()
 
+    // ✅ FIX (audit CONFIRMED-4): this route never called syncToReplicas()
+    // at all -- same bug class already fixed elsewhere in this file (PUT,
+    // ISSUE-028) and in banners.js/categories.js's toggle routes. Toggling
+    // a server active/inactive in the admin panel never propagated to the
+    // Turso/Supabase replicas, so replica-served traffic kept using the
+    // pre-toggle server list indefinitely. Re-selecting the full row (all
+    // 17 columns) rather than reconstructing it piecemeal avoids the
+    // stale/fabricated-field trap ISSUE-028's fix comment above describes.
+    const fullRow = await db.prepare("SELECT * FROM servers WHERE id=?").bind(id).first()
+    if (fullRow) {
+      if (c.executionCtx?.waitUntil) {
+        c.executionCtx.waitUntil(syncToReplicas(c.env, "insert", fullRow))
+      } else {
+        syncToReplicas(c.env, "insert", fullRow)
+      }
+    }
+
     return c.json(success({ id, active: !!newVal }))
   } catch (err) {
     return c.json(failure(err.message), 500)
@@ -580,4 +597,3 @@ app.delete("/servers/:id", async (c) => {
 })
 
 export default app
-                                          
