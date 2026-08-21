@@ -328,7 +328,7 @@ animeRoute.get("/anime", async (c) => {
     const db = c.env.DB
 
     const page   = Math.max(1, Number(c.req.query("page")  || 1))
-    const limit  = Math.min(50, Math.max(1, Number(c.req.query("limit") || 20)))   // ✅ FIX: floor at 1
+    const limit  = Math.min(200, Math.max(1, Number(c.req.query("limit") || 20)))   // ✅ FIX: floor at 1; cap raised 50->200 (audit CONFIRMED-3) so episodes.html/servers.html/downloads.html's anime-picker dropdowns (?limit=200/100/500) aren't silently truncated for sites with 50+ anime
     const offset = (page - 1) * limit
 
     const search = c.req.query("search") || ""
@@ -787,3 +787,4 @@ animeRoute.post("/anime/auto-add", async (c) => {
 
 // ✅ FIX: export default at true end — bulk-status route registered BEFORE export
 export default animeRoute
+
