@@ -67,7 +67,7 @@ app.get("/dashboard", async (c) => {
       bannerAnime
     ] = await Promise.all([
       safeQuery(db, "SELECT COUNT(*) as total FROM anime WHERE is_trending=1"),
-      safeQuery(db, "SELECT COUNT(*) as total FROM anime WHERE status='ongoing'"),
+      safeQuery(db, "SELECT COUNT(*) as total FROM anime WHERE status IN ('ongoing','airing')"),
       safeQuery(db, "SELECT COUNT(*) as total FROM anime WHERE status='completed'"),
       safeQuery(db, "SELECT COUNT(*) as total FROM anime WHERE rating>=8"),
       safeQuery(db, "SELECT COUNT(*) as total FROM anime WHERE is_hidden=1"),
@@ -300,3 +300,4 @@ app.post("/dashboard/ai-scan", async (c) => {
 })
 
 export default app
+
