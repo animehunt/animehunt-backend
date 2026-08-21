@@ -468,7 +468,7 @@ app.get("/banners/public", async (c) => {
       if (cached) return c.json(ok(cached))
     }
 
-    let query = `SELECT id, title, subtitle, image, link, banner_order, page, position FROM banners WHERE active=1`
+    let query = `SELECT id, title, image, link, banner_order, page, position FROM banners WHERE active=1`
     const bind = []
 
     if (page && page !== "all") { query += ` AND (page=? OR page='all')`; bind.push(page) }
@@ -529,13 +529,19 @@ app.get("/homepage/public", async (c) => {
 
       try {
         const typeQueries = {
-          trending:  `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE is_trending=1 AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
-          ongoing:   `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE status='ongoing' AND is_hidden=0 AND active=1 ORDER BY updated_at DESC LIMIT ?`,
-          movies:    `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE type='movie' AND is_hidden=0 AND active=1 ORDER BY year DESC LIMIT ?`,
-          cartoon:   `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE type='cartoon' AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
-          top_rated: `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
-          completed: `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE status='completed' AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
-          series:    `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE type='series' AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`
+          trending:    `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE is_trending=1 AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
+          ongoing:     `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE status IN ('ongoing','airing') AND is_hidden=0 AND active=1 ORDER BY updated_at DESC LIMIT ?`,
+          movies:      `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE type='movie' AND is_hidden=0 AND active=1 ORDER BY year DESC LIMIT ?`,
+          cartoon:     `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE type='cartoon' AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
+          top_rated:   `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
+          completed:   `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE status='completed' AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
+          series:      `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE type='series' AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`,
+          // ✅ FIX (audit CONFIRMED-8): most_viewed is a real, actively-
+          // maintained column (ai.js's analyticsEngine sets it based on
+          // rating>=7.5) but a row configured as "most_viewed" was falling
+          // into the generic "latest added" default below, rendering
+          // identically to an "auto" row with the wrong label.
+          most_viewed: `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE is_most_viewed=1 AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`
         }
 
         if (typeQueries[row.type]) {
@@ -546,8 +552,33 @@ app.get("/homepage/public", async (c) => {
             `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE genres LIKE ? AND is_hidden=0 AND active=1 ORDER BY rating DESC LIMIT ?`
           ).bind(`%${row.source}%`, limit).all()
           items = results
+        } else if (row.type === "manual" && row.source) {
+          // ✅ FIX (audit CONFIRMED-8): homepage.html's own UI explicitly
+          // tells admins to enter comma-separated anime IDs/slugs into
+          // this field for "manual" rows ("Comma-separated IDs or slugs:
+          // naruto,bleach,one-piece") -- but this row.type was never
+          // handled, so it fell into the same "latest added" default as
+          // "auto", silently discarding the admin's hand-picked list with
+          // no error or indication that curation failed. This parses the
+          // list and preserves the admin's chosen order.
+          const ids = row.source.split(",").map(s => s.trim()).filter(Boolean).slice(0, 50)
+          if (ids.length) {
+            const placeholders = ids.map(() => "?").join(",")
+            const { results } = await db.prepare(
+              `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE (id IN (${placeholders}) OR slug IN (${placeholders})) AND is_hidden=0 AND active=1`
+            ).bind(...ids, ...ids).all()
+            // Preserve the admin's specified order rather than the DB's
+            // natural row order, since curation order is the whole point.
+            const byKey = new Map(results.map(a => [a.id, a]))
+            const bySlug = new Map(results.map(a => [a.slug, a]))
+            items = ids
+              .map(key => byKey.get(key) || bySlug.get(key))
+              .filter(Boolean)
+              .slice(0, limit)
+          }
         } else {
-          // default / auto / manual
+          // default / auto (manual with no source also lands here, since
+          // an empty curation list is better shown as "latest" than empty)
           const { results } = await db.prepare(
             `SELECT id,title,slug,poster,rating,year,type,status FROM anime WHERE is_hidden=0 AND active=1 ORDER BY created_at DESC LIMIT ?`
           ).bind(limit).all()
