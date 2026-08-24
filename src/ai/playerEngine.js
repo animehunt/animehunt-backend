@@ -2,36 +2,15 @@
 🎬 ANIMEHUNT PLAYER ENGINE (FULL PRODUCTION - FIXED)
 ========================================================= */
 
-import { Hono }   from "hono"    // ✅ FIX (audit ISSUE-017): needed for playerProgressRoutes below
-import crypto      from "node:crypto"  // ✅ FIX (audit ISSUE-018): for HMAC stream tokens below — Node runtime, available post-migration
+import { Hono }   from "hono"
+import crypto      from "node:crypto"
 import { getClientIP } from "../utils/clientIp.js"
 
 // Alias for index.js scheduled cron
 export const runPlayerAI = runPlayerEngine
 
 /* =========================================================
-🔑 STREAM TOKEN (audit ISSUE-018)
-
-   The embed-lock check below (EMBED LOCK) correctly guards against
-   unauthorized *browser-based* iframe embedding — Origin/Referer are
-   genuinely set by the browser and can't be forged by a legitimate
-   victim's browser during a real embed. But those headers are entirely
-   client-supplied in a raw, non-browser HTTP request (curl, a script) —
-   a request claiming Origin: https://<this-site> bypasses the check
-   completely, since nothing here is bound to anything the server itself
-   issued.
-
-   This is a limitation inherent to any header-based origin check, not a
-   coding mistake in the check itself — refining the header comparison
-   logic further can't fix it. If protecting the stream URL from
-   non-browser scraping/hotlinking matters (not just from being embedded
-   on other sites), a short-lived signed token closes that gap: issue it
-   when the page first loads the player, then require it on the actual
-   stream request — this binds the request to something the server
-   generated, which Origin/Referer alone cannot provide.
-
-   This is an additional layer, not a replacement for the existing
-   Origin/Referer check — both run.
+🔑 STREAM TOKEN
 ========================================================= */
 
 function generateStreamToken(animeId, ep, secret, expirySeconds = 300) {
@@ -48,63 +27,36 @@ function verifyStreamToken(animeId, ep, token, secret) {
   if (!exp || Date.now() / 1000 > exp) return false
   const expected = crypto.createHmac("sha256", secret)
     .update(`${animeId}:${ep}:${exp}`).digest("hex")
-  // Constant-time comparison to avoid a timing side-channel on the signature check.
+  // Constant-time comparison to avoid a timing side-channel
   const sigBuf = Buffer.from(sig || "", "hex")
   const expBuf = Buffer.from(expected, "hex")
   if (sigBuf.length !== expBuf.length) return false
   return crypto.timingSafeEqual(sigBuf, expBuf)
 }
 
+/* =========================================================
+🎬 LEGACY EMBED RENDERER ENGINE
+========================================================= */
 export async function runPlayerEngine(env, request = null){
-
   const db = env.DB
-
   try{
-
-    /* =========================
-    LOAD CONFIG
-    ========================= */
-
-    const cfg = await db
-      .prepare("SELECT * FROM player_settings WHERE id=1")
-      .first()
-
+    const cfg = await db.prepare("SELECT * FROM player_settings WHERE id=1").first()
     if(!cfg){
       return error("Player config missing",500)
     }
 
-    /* =========================
-    🔒 SECURITY LAYER
-    ========================= */
-
-    /* EMBED LOCK */
     if(cfg.sec_embed_only){
-
       const referer = request?.headers?.get("referer") || ""
-
-      // request ke origin se domain detect karo — hardcode nahi
       const origin = request?.headers?.get("origin") || ""
       const host   = request?.headers?.get("host")   || ""
       let refOrigin = ""
       try { refOrigin = referer ? new URL(referer).hostname : "" } catch { refOrigin = "" }
 
-      // origin.includes(host) security bypass fixed.
-      //    'evil.com/trusted.com' se bypass possible tha — exact match use karo.
-      // MIGRATION: dropped the .pages.dev / .workers.dev checks that used to
-      // allow-list embeds served from Cloudflare Pages/Workers preview URLs —
-      // dead weight once this isn't running on Workers itself.
       const allowed =
         refOrigin === host ||
         origin === `https://${host}` ||
         origin === `http://${host}`
 
-      // ✅ FIX (audit ISSUE-018): when a stream token is present and
-      // STREAM_TOKEN_SECRET is configured, honor a valid token as an
-      // alternative to the Origin/Referer check — this is what lets a
-      // legitimate non-browser caller (if one is ever needed) through
-      // without weakening the check for everyone else. When no token is
-      // sent, behavior is unchanged from before this fix — the
-      // Origin/Referer check alone still decides.
       const animeId = request?.animeId ?? null
       const ep      = request?.episode ?? null
       const token    = request?.headers?.get("x-stream-token") || ""
@@ -114,30 +66,14 @@ export async function runPlayerEngine(env, request = null){
       if(!allowed && !hasValidToken){
         return error("Embed only access",403)
       }
-
     }
 
-    /* REGION BLOCK
-       MIGRATION: cf-ipcountry is a Cloudflare-only header. This only keeps
-       working if you keep Cloudflare's proxy (orange-cloud DNS) in front of
-       the VPS — see the migration report §1.1/§3.3. If you go fully
-       origin-direct instead, `country` below is always "", so this block
-       quietly becomes a no-op rather than breaking anything — if you need
-       real geo-blocking without Cloudflare in front, swap this for an
-       IP-geolocation lookup (e.g. a MaxMind GeoLite2 database) instead. */
     if(cfg.sec_cloudflare){
-
       const country = request?.headers?.get("cf-ipcountry") || ""
-
       if(["CN","KP"].includes(country)){
         return error("Region blocked",403)
       }
-
     }
-
-    /* =========================
-    🚦 STREAM RATE LIMIT
-    ========================= */
 
     const rateUserId = getClientIP(request, "unknown")
     const rateCheck   = await checkStreamRateLimit(env, rateUserId)
@@ -145,275 +81,135 @@ export async function runPlayerEngine(env, request = null){
       return error("Too many stream requests — slow down",429)
     }
 
-    /* =========================
-    🎯 SERVER SELECTION
-    ========================= */
-
     let server = null
-
     if(cfg.default_server){
-
-      server = await db.prepare(`
-        SELECT * FROM servers
-        WHERE name=? AND active=1
-      `).bind(cfg.default_server).first()
-
+      server = await db.prepare(`SELECT * FROM servers WHERE name=? AND active=1`).bind(cfg.default_server).first()
     }
-
-    /* FALLBACK */
     if(!server){
       server = await getBestServer(db)
     }
-
     if(!server){
       return error("No streaming server available",503)
     }
 
-    /* =========================
-    ⚡ HEALTH CHECK + FAILOVER
-    ========================= */
-
     let alive = await checkServer(server.embed)
-
     if(!alive && cfg.autoswitch){
-
       const fallback = await getBestServer(db, server.id)
-
       if(fallback){
         server = fallback
         alive = true
       }else{
         return error("All servers down",503)
       }
-
     }
 
-    /* =========================
-    📺 BUILD STREAM URL
-    ========================= */
-
     const streamUrl = buildStreamURL(server, request)
-
     if(!streamUrl){
       return error("Invalid stream request",400)
     }
 
-    /* =========================
-    🧠 TRACK SESSION (NON-BLOCKING)
-    ========================= */
-
     trackSession(env, request, server.id).catch(()=>{})
 
-    /* =========================
-    🎛 RESPONSE
-    ========================= */
-
     return new Response(JSON.stringify({
-
       success: true,
-
       stream: streamUrl,
-
       server: server.name,
-
       config:{
         autoplay: !!cfg.autoplay,
         resume: !!cfg.resume,
         autoswitch: !!cfg.autoswitch,
         mode: cfg.mode || "responsive",
-
         ui:{
           servers: !!cfg.ui_servers,
           download: !!cfg.ui_download,
           subscribe: !!cfg.ui_subscribe,
           related: !!cfg.ui_related
         },
-
         security:{
           sandbox: !!cfg.sec_sandbox,
           referrer: cfg.sec_referrer || "strict-origin"
         }
       }
-
     }),{
-      headers:{
-        "Content-Type":"application/json"
-      }
+      headers:{ "Content-Type":"application/json" }
     })
 
   }catch(e){
-
     console.error("PLAYER ENGINE ERROR:", e)
-
     return error("Internal error",500)
-
   }
-
 }
 
-/* =========================================================
-⚙️ GET BEST SERVER (FIXED)
-========================================================= */
-
 async function getBestServer(db, excludeId=null){
-
-  let query = `
-    SELECT * FROM servers
-    WHERE active=1
-  `
-
+  let query = `SELECT * FROM servers WHERE active=1`
   const params = []
-
   if(excludeId){
     query += " AND id != ?"
     params.push(excludeId)
   }
-
-  query += `
-    ORDER BY priority ASC, last_used ASC
-    LIMIT 5
-  `
-
+  query += ` ORDER BY priority ASC, last_used ASC LIMIT 5`
   const { results } = await db.prepare(query).bind(...params).all()
 
   for(const s of results){
-
     const ok = await checkServer(s.embed)
-
     if(ok){
-
-      await db.prepare(`
-        UPDATE servers
-        SET last_used=CURRENT_TIMESTAMP
-        WHERE id=?
-      `).bind(s.id).run()
-
+      await db.prepare(`UPDATE servers SET last_used=CURRENT_TIMESTAMP WHERE id=?`).bind(s.id).run()
       return s
     }
-
   }
-
   return null
 }
 
-/* =========================================================
-🌐 SERVER HEALTH CHECK (IMPROVED)
-========================================================= */
-
 async function checkServer(url){
-
   if(!url) return false
-
   try{
-
     const controller = new AbortController()
-
     const timeout = setTimeout(() => controller.abort(), 3000)
-
-    const res = await fetch(url,{
-      method:"HEAD",
-      signal: controller.signal
-      // MIGRATION: dropped `cf:{ cacheTtl:0 }` — that's a Cloudflare
-      // Workers-only fetch() extension for controlling edge caching.
-      // Node's fetch() doesn't recognize it (it was a harmless no-op on
-      // Node either way), and a HEAD health-check like this isn't going
-      // to get cached by anything in between regardless.
-    })
-
+    const res = await fetch(url,{ method:"HEAD", signal: controller.signal })
     clearTimeout(timeout)
-
     return res.ok || res.status === 405
-
   }catch{
     return false
   }
-
 }
 
-/* =========================================================
-🎬 BUILD STREAM URL (SAFE)
-========================================================= */
-
 function buildStreamURL(server, request){
-
   try{
-
+    if (!request || !request.url) return server.embed
     const url = new URL(request.url)
-
     const animeId = url.searchParams.get("anime")
     const ep = url.searchParams.get("ep")
-
     if(!animeId || !ep) return null
-
-    // UUID aur numbers dono allow karo
     const safeStr = /^[a-zA-Z0-9_\-]+$/
-    if(!safeStr.test(animeId) || !safeStr.test(ep)){
-      return null
-    }
-
+    if(!safeStr.test(animeId) || !safeStr.test(ep)) return null
     return `${server.embed}/stream/${animeId}/${ep}`
-
   }catch{
     return null
   }
-
 }
 
-/* =========================================================
-🧠 TRACK SESSION (SAFE + NON BLOCKING)
-========================================================= */
-
 async function trackSession(env, request, serverId){
-
   try{
-
     const db = env.DB
-
     const ip = getClientIP(request, "unknown")
-
     await db.prepare(`
       INSERT INTO player_sessions(ip,server_id,created_at)
       VALUES (?,?,CURRENT_TIMESTAMP)
-    `)
-    .bind(ip, serverId)
-    .run()
-
-  }catch(e){
-    console.log("Session track failed:", e)
-  }
-
+    `).bind(ip, serverId).run()
+  }catch(e){}
 }
-
-/* =========================================================
-❌ ERROR RESPONSE (STANDARDIZED)
-========================================================= */
 
 function error(msg,status=400){
-
-  return new Response(JSON.stringify({
-    success:false,
-    error: msg
-  }),{
-    status,
-    headers:{
-      "Content-Type":"application/json"
-    }
+  return new Response(JSON.stringify({ success:false, error: msg }),{
+    status, headers:{ "Content-Type":"application/json" }
   })
-
 }
 
-/* =========================================================
-⚡ STREAM RATE LIMITING
-   Spam stream requests block karo
-========================================================= */
-
 async function checkStreamRateLimit(env, userId) {
-  if (!env.KV) return { allowed: true } // KV not bound — skip gracefully
-
+  if (!env.KV) return { allowed: true } 
   const key    = `stream_limit:${userId}`
-  const limit  = 10  // max 10 stream requests per minute per user
-  const window = 60  // seconds
-
+  const limit  = 10  
+  const window = 60  
   const current = await env.KV.get(key)
 
   if (!current) {
@@ -428,23 +224,16 @@ async function checkStreamRateLimit(env, userId) {
   return { allowed: true, count: count + 1 }
 }
 
-/* =========================================================
-📺 WATCH PROGRESS
-   Timestamp tracking per user per episode
-========================================================= */
-
 export async function saveWatchProgress(env, userId, episodeId, timestamp, duration) {
   const db       = env.DB
   const progress = duration > 0 ? Math.round((timestamp / duration) * 100) : 0
   const now      = new Date().toISOString()
-
   await db.prepare(`
     INSERT INTO watch_progress (user_id, episode_id, timestamp, progress, updated_at)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(user_id, episode_id)
     DO UPDATE SET timestamp=excluded.timestamp, progress=excluded.progress, updated_at=excluded.updated_at
   `).bind(userId, episodeId, timestamp, progress, now).run()
-
   return { success: true, progress }
 }
 
@@ -453,11 +242,6 @@ export async function getWatchProgress(env, userId, episodeId) {
     "SELECT * FROM watch_progress WHERE user_id=? AND episode_id=?"
   ).bind(userId, episodeId).first()
 }
-
-/* =========================================================
-🎛 PER-USER VIDEO CONFIG
-   Playback speed, subtitle lang, quality etc.
-========================================================= */
 
 const VALID_CONFIG_KEYS = [
   "playback_speed", "subtitle_lang", "audio_lang",
@@ -469,7 +253,6 @@ export async function saveUserVideoConfig(env, userId, cfg) {
   for (const key of VALID_CONFIG_KEYS) {
     if (cfg[key] !== undefined) safe[key] = cfg[key]
   }
-
   const now = new Date().toISOString()
   const json = JSON.stringify(safe)
   await env.DB.prepare(`
@@ -478,29 +261,12 @@ export async function saveUserVideoConfig(env, userId, cfg) {
     ON CONFLICT(user_id)
     DO UPDATE SET config=excluded.config, updated_at=excluded.updated_at
   `).bind(userId, json, now).run()
-
   return { success: true }
 }
 
-/* =========================================================
-🚦 EXPORTED HTTP HANDLERS (for index.js to mount)
-   These are additional routes beyond runPlayerEngine()
 
-   ✅ FIX (audit ISSUE-017): setupPlayerRoutes() previously used the raw
-   Fetch API pattern ((req) => new Response(...)) instead of Hono's
-   ((c) => c.json(...)) — every other route file in this codebase is a
-   Hono sub-app mounted via app.route(prefix, subApp), and this function's
-   raw-router signature couldn't compose that way. It was written, fully
-   functional against real schema-backed tables (watch_progress,
-   user_video_config), but never actually imported or mounted anywhere in
-   index.js — meaning /api/player/validate, /api/player/progress, and
-   /api/player/config never existed in production, and the entire
-   "resume where you left off" / "remember my playback preferences"
-   feature was completely dead despite being fully built. Rewritten below
-   as a Hono sub-app (playerProgressRoutes) with the exact same logic —
-   rate limiting, origin check, watch-progress read/write, video-config
-   read/write — unchanged. See index.js for the app.route("/api",
-   playerProgressRoutes) mount that makes this reachable.
+/* =========================================================
+🚦 PUBLIC PLAYER API SUB-APP 
 ========================================================= */
 
 export const playerProgressRoutes = new Hono()
@@ -560,4 +326,190 @@ playerProgressRoutes.get("/player/config/:userId", async (c) => {
   return c.json({ config: parsedConfig })
 })
 
+/* =========================================================
+🎬 MASTER JW PLAYER CONFIG GENERATOR (Dynamic Priority & Multi-Audio Engine)
+========================================================= */
+playerProgressRoutes.get("/player/jw-config/:episodeId", async (c) => {
+  const episodeId = c.req.param("episodeId")
+  const db = c.env.DB
 
+  try {
+    // 1. Fetch servers mapped to this episode
+    const { results: servers } = await db.prepare(
+      "SELECT * FROM servers WHERE episode_id=? AND active=1 ORDER BY priority ASC"
+    ).bind(episodeId).all()
+
+    if (!servers || servers.length === 0) {
+      return c.json({ success: false, message: "No servers available for this episode" }, 404)
+    }
+
+    // 2. Strict Priority Failover Cascade Engine (P1 -> P2 -> P3)
+    const p1Sources = [] // Custom Storage / Direct CDN / Telegram (Flexible)
+    const p2Sources = [] // AnimeSalt / Zephyrix API (Regional)
+    const p3Sources = [] // MegaCloud / RapidCloud (Global Scraper)
+
+    for (const s of servers) {
+      const n = (s.name || "").toLowerCase()
+      // Detect P3 Scrapers
+      if (n.includes("mega") || n.includes("rapid")) {
+        p3Sources.push(s)
+      } 
+      // Detect P2 Regional APIs
+      else if (n.includes("salt") || n.includes("zephyrix")) {
+        p2Sources.push(s)
+      } 
+      // Default to P1 custom direct hosting
+      else {
+        p1Sources.push(s)
+      }
+    }
+
+    const orderedServers = [...p1Sources, ...p2Sources, ...p3Sources]
+    const primaryServer = orderedServers[0]
+
+    // 3. Multi-Audio Priority & Auto-Selection Engine
+    const tracks = []
+    const manifestUrl = primaryServer.embed
+
+    // Analyze primary server embed for Hindi tracks if it's an M3U8 manifest
+    if (primaryServer.type === 'm3u8' || manifestUrl.includes('.m3u8')) {
+      try {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 3500)
+        const m3u8Res = await fetch(manifestUrl, { signal: controller.signal })
+        clearTimeout(timeoutId)
+
+        if (m3u8Res.ok) {
+          const m3u8Text = await m3u8Res.text()
+          const hasHindi = m3u8Text.toLowerCase().includes('hindi') || m3u8Text.toLowerCase().includes('language="hi"')
+
+          // MANDATORY LOGIC: Automatically map and prioritize Hindi track directly inside JW Player's config array
+          if (hasHindi) {
+            tracks.push({
+              file: manifestUrl,
+              label: "Hindi",
+              language: "hi",
+              default: true,
+              autoselect: true
+            })
+            tracks.push({
+              file: manifestUrl,
+              label: "English / Japanese",
+              language: "en",
+              default: false
+            })
+          }
+        }
+      } catch (e) {
+        // Soft fail manifest fetch, fallback to standard mappings
+      }
+    }
+
+    // Fallback generic track mapping if Hindi specific logic didn't trigger
+    if (tracks.length === 0) {
+      tracks.push({
+        file: manifestUrl,
+        label: "Default Stream",
+        default: true
+      })
+    }
+
+    // Inject standardized Captions & Subtitles
+    const captions = [
+      { file: "/subs/hindi.vtt", label: "Hindi", kind: "captions" },
+      { file: "/subs/english.vtt", label: "English", kind: "captions" }
+    ]
+
+    const playlistTracks = [...tracks, ...captions]
+
+    // 4. In-Player Ads Control & Monetization System
+    const adSettings = await db.prepare("SELECT * FROM player_settings WHERE id=1").first()
+    
+    let preRollTag = ""
+    let midRollTag = ""
+    let popunderUrl = ""
+
+    try {
+      const { results: adsLib } = await db.prepare("SELECT type, code FROM ads_library WHERE active=1").all()
+      for (const ad of (adsLib || [])) {
+        if (ad.type === "vast" || ad.code.includes(".xml") || ad.code.includes("preroll")) {
+          if (!preRollTag) preRollTag = ad.code
+          else if (!midRollTag) midRollTag = ad.code
+        } else if (ad.type === "popup" || ad.type === "redirect" || ad.type === "clickunder") {
+          popunderUrl = ad.code 
+        }
+      }
+    } catch(e) {}
+
+    const adsControl = {
+      frequencyCapping: {
+        storageType: "localStorage",
+        maxPreRoll: 1,
+        maxPopunder: 2,
+        windowMinutes: 20
+      },
+      vastInjections: {
+        client: "vast",
+        skipoffset: adSettings?.ads_skip_sec || 5,
+        schedule: []
+      },
+      clickunder: {
+        enabled: !!popunderUrl,
+        trigger: "firstPlay",
+        url: popunderUrl
+      },
+      antiAdBlock: {
+        enabled: true,
+        fallbackBanner: "/assets/adblock-fallback.jpg",
+        fallbackLink: "/premium"
+      }
+    }
+
+    // Inject VMAP/VAST offsets
+    if (preRollTag) adsControl.vastInjections.schedule.push({ offset: "pre", tag: preRollTag })
+    if (midRollTag) adsControl.vastInjections.schedule.push({ offset: "50%", tag: midRollTag })
+
+    // 5. Auto-Failover Backup Sources Payload Construction
+    const fallbacks = orderedServers.slice(1).map(s => ({
+      file: s.embed,
+      type: s.type === 'm3u8' ? 'hls' : 'mp4',
+      name: s.name,
+      priority: s.priority
+    }))
+
+    // Final Assembled JW Player Configuration JSON 
+    const jwConfig = {
+      playlist: [{
+        sources: [
+          {
+            file: primaryServer.embed,
+            type: primaryServer.type === 'm3u8' ? 'hls' : 'mp4',
+            label: "Auto" 
+          }
+        ],
+        tracks: playlistTracks
+      }],
+      cast: {},
+      autostart: !!adSettings?.autoplay,
+      advertising: adSettings?.ads_enabled ? adsControl.vastInjections : null,
+      adsControlLayer: adSettings?.ads_enabled ? adsControl : null,
+      autoFailover: {
+        enabled: fallbacks.length > 0,
+        backupSources: fallbacks,
+        eventHandlers: {
+          onSetupError: "function(e) { window.AnimeHuntFailover(e, 'setupError'); }",
+          onError: "function(e) { window.AnimeHuntFailover(e, 'error'); }"
+        }
+      }
+    }
+
+    return c.json({
+      success: true,
+      jwConfig
+    })
+
+  } catch (err) {
+    console.error("JW Config Gen Error:", err)
+    return c.json({ success: false, message: "Internal server error" }, 500)
+  }
+})
