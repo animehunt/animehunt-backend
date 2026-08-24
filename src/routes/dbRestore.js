@@ -1,53 +1,41 @@
 // ============================================================
-// src/routes/dbRestore.js  —  Database Restore & Recovery v2.0
+// src/routes/dbRestore.js  —  Database Restore & Recovery
 // ============================================================
 // Admin-only endpoints:
-//
-//  GET  /api/admin/db/status              ← teeno DB ka health check
-//  GET  /api/admin/db/sync-status         ← event log + queue status
-//  POST /api/admin/db/restore/turso-from-d1
-//  POST /api/admin/db/restore/supabase-from-d1
-//  POST /api/admin/db/restore/d1-from-turso
-//  POST /api/admin/db/restore/d1-from-supabase
-//  POST /api/admin/db/restore/full        ← smart auto-recovery
-//  POST /api/admin/db/snapshot            ← manual snapshot to R2
-//  POST /api/admin/db/snapshot/restore    ← restore from R2 snapshot
-//  POST /api/admin/db/reconcile           ← row-level reconciliation
-//  POST /api/admin/db/replay-events       ← replay event log
-//  GET  /api/admin/db/dead-letter         ← view dead letter queue
-//  POST /api/admin/db/dead-letter/retry   ← retry dead letter events
-//  GET  /api/admin/db/audit-log           ← view audit log
-//  GET  /api/admin/db/checksums           ← verify integrity
+//  GET  /api/admin/db/status
+//  GET  /api/admin/db/sync-status
+//  POST /api/admin/db/restore/full
+//  POST /api/admin/db/snapshot            ← manual snapshot to VPS disk
+//  POST /api/admin/db/snapshot/restore    ← restore from VPS disk snapshot
+//  POST /api/admin/db/reconcile
+//  POST /api/admin/db/replay-events
+//  GET  /api/admin/db/dead-letter
+//  POST /api/admin/db/dead-letter/retry
+//  GET  /api/admin/db/audit-log
+//  GET  /api/admin/db/checksums
 // ============================================================
 
 import { Hono } from "hono"
+import { promises as fs } from "fs"
+import path from "path"
+import crypto from "node:crypto"
 import {
   tursoQuery, supabaseQuery,
-  rowChecksum, resolveConflict, nowISO,
+  resolveConflict, nowISO,
   ORIGIN_D1, ORIGIN_TURSO, ORIGIN_SUPABASE
 } from "../db.js"
 
-// ✅ FIX: convertToPostgres was imported from db.js but is BANNED per MASTER_INDEX.md
-//    (D1 uses SQLite syntax, not Postgres — convertToPostgres breaks parameterized queries)
-//    Replaced with a no-op passthrough: D1-compatible SQL is sent as-is to Supabase
-//    via the exec_sql RPC, which accepts standard SQL.
+const BACKUP_DIR = path.resolve(process.cwd(), "backups")
+
+// Ensure backup directory exists on VPS
+fs.mkdir(BACKUP_DIR, { recursive: true }).catch(() => {})
+
 function passThrough(sql) {
-  return sql  // D1/SQLite SQL is compatible enough for basic CRUD via Supabase RPC
+  return sql  
 }
 
 const router = new Hono()
 
-/* ─────────────────────────────────────────────────────────────
-   ALL TABLES (matches FINAL_COMPLETE_schema-FIXED-3.sql — every
-   real data table except the sync-infra/meta tables and the FTS
-   virtual mirror table, which are excluded below on purpose)
-   ✅ FIX: previous list used "ads"/"ads_logs" (never-existing table
-   names) and was missing 40+ real tables — every restore/reconcile/
-   snapshot/checksum loop below iterates this list, so any table not
-   in it was silently never replicated, and any name in it that
-   isn't real (ads, ads_logs) made every one of those loops warn/fail
-   on a SELECT against a table that doesn't exist.
-───────────────────────────────────────────────────────────── */
 const ALL_TABLES = [
   "ad_assignments", "ad_stats", "admin_users", "ads_library",
   "ai_logs", "ai_settings", "ai_state", "analytics",
@@ -66,20 +54,6 @@ const ALL_TABLES = [
   "threat_logs", "user_video_config", "watch_progress"
 ]
 
-// Sync infrastructure tables (don't replicate these — they're meta)
-// ✅ FIX: "sync_checksums" isn't a table in the schema — sync_audit_log
-// has a `checksum` *column* instead (used by rowChecksum() in db.js).
-const SYNC_TABLES = [
-  "sync_event_log", "sync_processed_events",
-  "sync_dead_letter", "sync_audit_log"
-]
-
-// ✅ FIX (audit ISSUE-011): /db/replay-events and /db/dead-letter/retry both
-// execute event.sql — a raw SQL string read back from sync_event_log /
-// sync_dead_letter — via db.prepare(event.sql).bind(...args).run() with no
-// validation. Any row that ever lands in that table with attacker-influenced
-// sql/args_json content becomes a live, re-executable SQL payload. This check
-// restricts replay to write statements against a known table before execution.
 function isSafeToReplay(sql) {
   if (typeof sql !== "string") return false
   const clean = sql.trim().toUpperCase()
@@ -91,25 +65,15 @@ function isSafeToReplay(sql) {
   return table && ALL_TABLES.includes(table)
 }
 
-/* ─────────────────────────────────────────────────────────────
-   HELPERS: FETCH from each source
-───────────────────────────────────────────────────────────── */
-
 async function fetchAllFromD1(env, table) {
   try {
-    const { results } = await env.DB.prepare(
-      `SELECT * FROM ${table}`
-    ).all()
+    const { results } = await env.DB.prepare(`SELECT * FROM ${table}`).all()
     return results || []
   } catch (e) {
-    console.warn(`D1 fetch failed [${table}]:`, e.message)
     return []
   }
 }
 
-// MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — this used to read
-// env.TURSO_URL directly, which is the same primary database fetchAllFromD1
-// above already reads via env.DB, making the two functions redundant.
 async function fetchAllFromTurso(env, table) {
   try {
     const httpUrl = env.TURSO_REPLICA_URL.replace("libsql://", "https://")
@@ -134,15 +98,13 @@ async function fetchAllFromTurso(env, table) {
       Object.fromEntries(cols.map((col, i) => [col, row[i]?.value ?? null]))
     )
   } catch (e) {
-    console.warn(`Turso fetch failed [${table}]:`, e.message)
     return []
   }
 }
 
 async function fetchAllFromSupabase(env, table) {
   try {
-    const res = await fetch(
-      `${env.SUPABASE_URL}/rest/v1/${table}?select=*`, {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}?select=*`, {
       headers: {
         "apikey": env.SUPABASE_KEY,
         "Authorization": `Bearer ${env.SUPABASE_KEY}`
@@ -151,14 +113,9 @@ async function fetchAllFromSupabase(env, table) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return await res.json()
   } catch (e) {
-    console.warn(`Supabase fetch failed [${table}]:`, e.message)
     return []
   }
 }
-
-/* ─────────────────────────────────────────────────────────────
-   HELPERS: WRITE to each target
-───────────────────────────────────────────────────────────── */
 
 async function bulkWriteToD1(env, table, rows) {
   if (!rows.length) return 0
@@ -170,22 +127,15 @@ async function bulkWriteToD1(env, table, rows) {
     try {
       await env.DB.prepare(sql).bind(...vals).run()
       count++
-    } catch (e) {
-      console.warn(`D1 write error [${table}]:`, e.message)
-    }
+    } catch (e) {}
   }
   return count
 }
 
-// MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — "restore into
-// Turso" now means restoring into the second, independent Turso database,
-// not writing back into the primary through a separate redundant path.
 async function bulkWriteToTurso(env, table, rows) {
   if (!rows.length) return 0
-  if (!env.TURSO_REPLICA_URL || !env.TURSO_REPLICA_AUTH_TOKEN) {
-    console.warn(`Turso write skipped [${table}]: TURSO_REPLICA_URL/TURSO_REPLICA_AUTH_TOKEN not configured`)
-    return 0
-  }
+  if (!env.TURSO_REPLICA_URL || !env.TURSO_REPLICA_AUTH_TOKEN) return 0
+  
   const httpUrl = env.TURSO_REPLICA_URL.replace("libsql://", "https://")
   let count = 0
   for (const row of rows) {
@@ -212,9 +162,7 @@ async function bulkWriteToTurso(env, table, rows) {
         })
       })
       count++
-    } catch (e) {
-      console.warn(`Turso write error [${table}]:`, e.message)
-    }
+    } catch (e) {}
   }
   return count
 }
@@ -234,15 +182,9 @@ async function bulkWriteToSupabase(env, table, rows) {
     })
     if (!res.ok) throw new Error(await res.text())
     return rows.length
-  } catch (e) {
-    console.warn(`Supabase write error [${table}]:`, e.message)
-    return 0
-  }
+  } catch (e) { return 0 }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   HELPER: Health check single DB
-───────────────────────────────────────────────────────────── */
 async function checkD1Health(env) {
   try {
     const r = await env.DB.prepare("SELECT COUNT(*) as n FROM anime").first()
@@ -252,13 +194,6 @@ async function checkD1Health(env) {
   }
 }
 
-// MIGRATION: this used to check env.TURSO_URL directly, which — now that
-// checkD1Health() above queries env.DB (the primary Turso, via the
-// D1-compatible adapter) — meant this function and checkD1Health() were
-// silently checking the exact same database through two different code
-// paths. Repointed at TURSO_REPLICA_URL/TOKEN (DB3, the second independent
-// Turso database) so the three-way comparison below is genuinely three
-// independent sources again, matching the trio architecture.
 async function checkTursoHealth(env) {
   try {
     const httpUrl = env.TURSO_REPLICA_URL?.replace("libsql://", "https://")
@@ -290,8 +225,7 @@ async function checkSupabaseHealth(env) {
     if (!env.SUPABASE_URL || !env.SUPABASE_KEY) {
       return { ok: false, error: "SUPABASE_URL or SUPABASE_KEY not set" }
     }
-    const res = await fetch(
-      `${env.SUPABASE_URL}/rest/v1/anime?select=count`, {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/anime?select=count`, {
       headers: {
         "apikey": env.SUPABASE_KEY,
         "Authorization": `Bearer ${env.SUPABASE_KEY}`,
@@ -306,15 +240,9 @@ async function checkSupabaseHealth(env) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   CHECKSUM VERIFICATION
-───────────────────────────────────────────────────────────── */
 async function computeTableChecksum(rows) {
   if (!rows.length) return "empty"
-  // Sort rows deterministically before hashing
-  const sorted = [...rows].sort((a, b) =>
-    JSON.stringify(a).localeCompare(JSON.stringify(b))
-  )
+  const sorted = [...rows].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
   const raw     = JSON.stringify(sorted)
   const encoded = new TextEncoder().encode(raw)
   const hashBuf = await crypto.subtle.digest("SHA-256", encoded)
@@ -322,13 +250,6 @@ async function computeTableChecksum(rows) {
   return hashArr.map(b => b.toString(16).padStart(2, "0")).join("")
 }
 
-/* ─────────────────────────────────────────────────────────────
-   SNAPSHOT TO R2  (OOM FIX — Blueprint Line 42)
-   ❌ OLD: fetchAllFromD1 loads entire table into RAM
-   ✅ FIX: chunked reads, 100 rows at a time
-───────────────────────────────────────────────────────────── */
-
-// ✅ FIX (Blueprint Line 42): Chunked table read — avoids 128 MB Worker memory limit
 async function fetchTableChunked(env, table, chunkSize = 100) {
   const rows    = []
   let   offset  = 0
@@ -337,12 +258,8 @@ async function fetchTableChunked(env, table, chunkSize = 100) {
   while (hasMore) {
     let chunk
     try {
-      chunk = await env.DB.prepare(
-        `SELECT * FROM ${table} LIMIT ? OFFSET ?`
-      ).bind(chunkSize, offset).all()
-    } catch {
-      break  // table may not exist in this environment
-    }
+      chunk = await env.DB.prepare(`SELECT * FROM ${table} LIMIT ? OFFSET ?`).bind(chunkSize, offset).all()
+    } catch { break }
     if (!chunk.results || chunk.results.length === 0) break
     rows.push(...chunk.results)
     offset  += chunkSize
@@ -351,9 +268,10 @@ async function fetchTableChunked(env, table, chunkSize = 100) {
   return rows
 }
 
-async function snapshotToR2(env, label = "auto") {
-  if (!env.R2_BUCKET) return { ok: false, error: "R2_BUCKET not bound" }
-
+/* ─────────────────────────────────────────────────────────────
+   SNAPSHOT TO LOCAL VPS STORAGE
+───────────────────────────────────────────────────────────── */
+async function snapshotToLocal(env, label = "auto") {
   const snapshot = {
     version:    "2.0",
     label,
@@ -361,36 +279,28 @@ async function snapshotToR2(env, label = "auto") {
     tables:     {}
   }
 
-  // ✅ FIX: chunked reads instead of single fetchAllFromD1 per table
   for (const table of ALL_TABLES) {
     snapshot.tables[table] = await fetchTableChunked(env, table)
   }
 
-  const key  = `snapshots/${label}-${Date.now()}.json`
+  const filename = `snapshot-${label}-${Date.now()}.json`
+  const filePath = path.join(BACKUP_DIR, filename)
   const body = JSON.stringify(snapshot)
 
   try {
-    await env.R2_BUCKET.put(key, body, {
-      httpMetadata: { contentType: "application/json" }
-    })
-    return { ok: true, key, size_kb: Math.round(body.length / 1024) }
+    await fs.writeFile(filePath, body, "utf8")
+    return { ok: true, key: filename, size_kb: Math.round(body.length / 1024) }
   } catch (e) {
     return { ok: false, error: e.message }
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   RESTORE FROM R2 SNAPSHOT
-───────────────────────────────────────────────────────────── */
-async function restoreFromR2(env, key, targets = ["d1", "turso", "supabase"]) {
-  if (!env.R2_BUCKET) return { ok: false, error: "R2_BUCKET not bound" }
-
+async function restoreFromLocal(env, key, targets = ["d1", "turso", "supabase"]) {
   try {
-    const obj  = await env.R2_BUCKET.get(key)
-    if (!obj)  return { ok: false, error: `Snapshot not found: ${key}` }
-
-    const text     = await obj.text()
+    const filePath = path.join(BACKUP_DIR, key)
+    const text = await fs.readFile(filePath, "utf8")
     const snapshot = JSON.parse(text)
+    
     const report   = {}
     let   total    = 0
 
@@ -420,11 +330,6 @@ async function restoreFromR2(env, key, targets = ["d1", "turso", "supabase"]) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   ROW-LEVEL RECONCILIATION
-   Compares D1 vs Turso vs Supabase row by row,
-   resolves conflicts, writes winner to all three
-───────────────────────────────────────────────────────────── */
 async function reconcileTable(env, table) {
   const [d1Rows, tursoRows, supaRows] = await Promise.all([
     fetchAllFromD1(env, table),
@@ -432,7 +337,6 @@ async function reconcileTable(env, table) {
     fetchAllFromSupabase(env, table)
   ])
 
-  // Build maps: id → row for each source
   const toMap = (rows) => {
     const m = new Map()
     for (const row of rows) {
@@ -446,10 +350,7 @@ async function reconcileTable(env, table) {
   const tursoMap = toMap(tursoRows)
   const supaMap  = toMap(supaRows)
 
-  // Collect all unique IDs
-  const allIds = new Set([
-    ...d1Map.keys(), ...tursoMap.keys(), ...supaMap.keys()
-  ])
+  const allIds = new Set([ ...d1Map.keys(), ...tursoMap.keys(), ...supaMap.keys() ])
 
   const conflicts = []
   const synced    = []
@@ -460,7 +361,6 @@ async function reconcileTable(env, table) {
     const tursoRow = tursoMap.get(id) || null
     const supaRow  = supaMap.get(id) || null
 
-    // All three agree → no conflict
     const d1Str    = JSON.stringify(d1Row)
     const tursoStr = JSON.stringify(tursoRow)
     const supaStr  = JSON.stringify(supaRow)
@@ -470,7 +370,6 @@ async function reconcileTable(env, table) {
       continue
     }
 
-    // Resolve: pick winner among present rows
     let winner = d1Row || tursoRow || supaRow
 
     if (d1Row && tursoRow) {
@@ -484,7 +383,6 @@ async function reconcileTable(env, table) {
 
     conflicts.push({ id, winner_source: "resolved" })
 
-    // Write winner to all three databases
     if (winner) {
       await bulkWriteToD1(env, table, [winner])
       await bulkWriteToTurso(env, table, [winner])
@@ -497,12 +395,9 @@ async function reconcileTable(env, table) {
   }
 
   return {
-    table,
-    total:     allIds.size,
-    synced:    synced.length,
-    conflicts: conflicts.length,
-    missing,
-    status:    conflicts.length === 0 ? "in_sync" : "reconciled"
+    table, total: allIds.size, synced: synced.length,
+    conflicts: conflicts.length, missing,
+    status: conflicts.length === 0 ? "in_sync" : "reconciled"
   }
 }
 
@@ -510,646 +405,236 @@ async function reconcileTable(env, table) {
    ROUTES
 ═══════════════════════════════════════════════════════════ */
 
-/* ─── HEALTH CHECK ─── */
 router.get("/db/status", async (c) => {
   const [d1, turso, supabase] = await Promise.all([
-    checkD1Health(c.env),
-    checkTursoHealth(c.env),
-    checkSupabaseHealth(c.env)
+    checkD1Health(c.env), checkTursoHealth(c.env), checkSupabaseHealth(c.env)
   ])
-
   const allOk = d1.ok && turso.ok && supabase.ok
-
   return c.json({
-    success: true,
-    overall: allOk ? "healthy" : "degraded",
-    databases: { d1, turso, supabase },
-    checked_at: nowISO()
+    success: true, overall: allOk ? "healthy" : "degraded",
+    databases: { d1, turso, supabase }, checked_at: nowISO()
   })
 })
 
-/* ─── SYNC STATUS ─── */
 router.get("/db/sync-status", async (c) => {
   try {
     const [pending, failed, deadLetter, recentAudit] = await Promise.all([
-      c.env.DB.prepare(
-        "SELECT COUNT(*) as n FROM sync_event_log WHERE status='pending'"
-      ).first(),
-      c.env.DB.prepare(
-        "SELECT COUNT(*) as n FROM sync_event_log WHERE status='failed'"
-      ).first(),
-      c.env.DB.prepare(
-        "SELECT COUNT(*) as n FROM sync_dead_letter"
-      ).first(),
-      c.env.DB.prepare(
-        "SELECT * FROM sync_audit_log ORDER BY created_at DESC LIMIT 20"
-      ).all()
+      c.env.DB.prepare("SELECT COUNT(*) as n FROM sync_event_log WHERE status='pending'").first(),
+      c.env.DB.prepare("SELECT COUNT(*) as n FROM sync_event_log WHERE status='failed'").first(),
+      c.env.DB.prepare("SELECT COUNT(*) as n FROM sync_dead_letter").first(),
+      c.env.DB.prepare("SELECT * FROM sync_audit_log ORDER BY created_at DESC LIMIT 20").all()
     ])
-
     return c.json({
       success: true,
-      event_log: {
-        pending:     pending?.n || 0,
-        failed:      failed?.n || 0,
-        dead_letter: deadLetter?.n || 0
-      },
-      recent_audit: recentAudit.results || [],
-      checked_at: nowISO()
+      event_log: { pending: pending?.n || 0, failed: failed?.n || 0, dead_letter: deadLetter?.n || 0 },
+      recent_audit: recentAudit.results || [], checked_at: nowISO()
     })
-  } catch (e) {
-    return c.json({ success: false, message: e.message }, 500)
-  }
+  } catch (e) { return c.json({ success: false, message: e.message }, 500) }
 })
 
-/* ─── RESTORE: D1 → Turso ─── */
 router.post("/db/restore/turso-from-d1", async (c) => {
-  const report = {}
-  let total = 0
-
+  const report = {}; let total = 0
   for (const table of ALL_TABLES) {
-    const rows     = await fetchAllFromD1(c.env, table)
+    const rows = await fetchAllFromD1(c.env, table)
     const inserted = await bulkWriteToTurso(c.env, table, rows)
-    report[table]  = inserted
-    total         += inserted
+    report[table] = inserted; total += inserted
   }
-
-  return c.json({
-    success: true,
-    message: `✅ Turso restored from D1 — ${total} rows synced`,
-    source: "d1", target: "turso",
-    report, restored_at: nowISO()
-  })
+  return c.json({ success: true, message: `✅ Turso restored from D1 — ${total} rows`, source: "d1", target: "turso", report, restored_at: nowISO() })
 })
 
-/* ─── RESTORE: D1 → Supabase ─── */
 router.post("/db/restore/supabase-from-d1", async (c) => {
-  const report = {}
-  let total = 0
-
+  const report = {}; let total = 0
   for (const table of ALL_TABLES) {
-    const rows     = await fetchAllFromD1(c.env, table)
+    const rows = await fetchAllFromD1(c.env, table)
     const inserted = await bulkWriteToSupabase(c.env, table, rows)
-    report[table]  = inserted
-    total         += inserted
+    report[table] = inserted; total += inserted
   }
-
-  return c.json({
-    success: true,
-    message: `✅ Supabase restored from D1 — ${total} rows synced`,
-    source: "d1", target: "supabase",
-    report, restored_at: nowISO()
-  })
+  return c.json({ success: true, message: `✅ Supabase restored from D1 — ${total} rows`, source: "d1", target: "supabase", report, restored_at: nowISO() })
 })
 
-/* ─── RESTORE: Turso → D1 ─── */
 router.post("/db/restore/d1-from-turso", async (c) => {
-  const report = {}
-  let total = 0
-
+  const report = {}; let total = 0
   for (const table of ALL_TABLES) {
-    const rows     = await fetchAllFromTurso(c.env, table)
+    const rows = await fetchAllFromTurso(c.env, table)
     const inserted = await bulkWriteToD1(c.env, table, rows)
-    report[table]  = inserted
-    total         += inserted
+    report[table] = inserted; total += inserted
   }
-
-  return c.json({
-    success: true,
-    message: `✅ D1 restored from Turso — ${total} rows synced`,
-    source: "turso", target: "d1",
-    report, restored_at: nowISO()
-  })
+  return c.json({ success: true, message: `✅ D1 restored from Turso — ${total} rows`, source: "turso", target: "d1", report, restored_at: nowISO() })
 })
 
-/* ─── RESTORE: Supabase → D1 ─── */
 router.post("/db/restore/d1-from-supabase", async (c) => {
-  const report = {}
-  let total = 0
-
+  const report = {}; let total = 0
   for (const table of ALL_TABLES) {
-    const rows     = await fetchAllFromSupabase(c.env, table)
+    const rows = await fetchAllFromSupabase(c.env, table)
     const inserted = await bulkWriteToD1(c.env, table, rows)
-    report[table]  = inserted
-    total         += inserted
+    report[table] = inserted; total += inserted
   }
-
-  return c.json({
-    success: true,
-    message: `✅ D1 restored from Supabase — ${total} rows synced`,
-    source: "supabase", target: "d1",
-    report, restored_at: nowISO()
-  })
+  return c.json({ success: true, message: `✅ D1 restored from Supabase — ${total} rows`, source: "supabase", target: "d1", report, restored_at: nowISO() })
 })
 
-/* ─── FULL AUTO-RECOVERY ─── */
-// Smart recovery: checks which DBs are alive, picks best source,
-// restores the missing/broken ones automatically.
 router.post("/db/restore/full", async (c) => {
   const body = await c.req.json().catch(() => ({}))
-  const force_source = body.source  // optional: "d1", "turso", "supabase"
-
-  const [d1Health, tursoHealth, supaHealth] = await Promise.all([
-    checkD1Health(c.env),
-    checkTursoHealth(c.env),
-    checkSupabaseHealth(c.env)
-  ])
-
-  const alive = {
-    d1:       d1Health.ok,
-    turso:    tursoHealth.ok,
-    supabase: supaHealth.ok
-  }
-
-  // Pick source (override or auto)
+  const force_source = body.source  
+  const [d1Health, tursoHealth, supaHealth] = await Promise.all([ checkD1Health(c.env), checkTursoHealth(c.env), checkSupabaseHealth(c.env) ])
+  const alive = { d1: d1Health.ok, turso: tursoHealth.ok, supabase: supaHealth.ok }
   let source = force_source
   if (!source) {
-    if      (alive.d1)       source = "d1"
-    else if (alive.turso)    source = "turso"
+    if (alive.d1) source = "d1"
+    else if (alive.turso) source = "turso"
     else if (alive.supabase) source = "supabase"
-    else {
-      return c.json({
-        success: false,
-        error: "All databases are offline. Cannot auto-recover.",
-        alive
-      }, 503)
-    }
+    else return c.json({ success: false, error: "All databases are offline.", alive }, 503)
   }
-
-  const targets = Object.entries(alive)
-    .filter(([db, ok]) => !ok && db !== source)
-    .map(([db]) => db)
-
-  if (!targets.length) {
-    return c.json({
-      success: true,
-      message: "All databases are healthy — no recovery needed.",
-      alive
-    })
-  }
-
+  const targets = Object.entries(alive).filter(([db, ok]) => !ok && db !== source).map(([db]) => db)
+  if (!targets.length) return c.json({ success: true, message: "All healthy.", alive })
   const results = {}
   for (const target of targets) {
     const key = `${target}-from-${source}`
     try {
       if (source === "d1" && target === "turso") {
-        let t = 0
-        for (const table of ALL_TABLES) {
-          const rows = await fetchAllFromD1(c.env, table)
-          t += await bulkWriteToTurso(c.env, table, rows)
-        }
-        results[key] = { ok: true, rows: t }
+        let t = 0; for (const table of ALL_TABLES) { const rows = await fetchAllFromD1(c.env, table); t += await bulkWriteToTurso(c.env, table, rows) }; results[key] = { ok: true, rows: t }
       } else if (source === "d1" && target === "supabase") {
-        let t = 0
-        for (const table of ALL_TABLES) {
-          const rows = await fetchAllFromD1(c.env, table)
-          t += await bulkWriteToSupabase(c.env, table, rows)
-        }
-        results[key] = { ok: true, rows: t }
+        let t = 0; for (const table of ALL_TABLES) { const rows = await fetchAllFromD1(c.env, table); t += await bulkWriteToSupabase(c.env, table, rows) }; results[key] = { ok: true, rows: t }
       } else if (source === "turso" && target === "d1") {
-        let t = 0
-        for (const table of ALL_TABLES) {
-          const rows = await fetchAllFromTurso(c.env, table)
-          t += await bulkWriteToD1(c.env, table, rows)
-        }
-        results[key] = { ok: true, rows: t }
+        let t = 0; for (const table of ALL_TABLES) { const rows = await fetchAllFromTurso(c.env, table); t += await bulkWriteToD1(c.env, table, rows) }; results[key] = { ok: true, rows: t }
       } else if (source === "turso" && target === "supabase") {
-        let t = 0
-        for (const table of ALL_TABLES) {
-          const rows = await fetchAllFromTurso(c.env, table)
-          t += await bulkWriteToSupabase(c.env, table, rows)
-        }
-        results[key] = { ok: true, rows: t }
+        let t = 0; for (const table of ALL_TABLES) { const rows = await fetchAllFromTurso(c.env, table); t += await bulkWriteToSupabase(c.env, table, rows) }; results[key] = { ok: true, rows: t }
       } else if (source === "supabase" && target === "d1") {
-        let t = 0
-        for (const table of ALL_TABLES) {
-          const rows = await fetchAllFromSupabase(c.env, table)
-          t += await bulkWriteToD1(c.env, table, rows)
-        }
-        results[key] = { ok: true, rows: t }
+        let t = 0; for (const table of ALL_TABLES) { const rows = await fetchAllFromSupabase(c.env, table); t += await bulkWriteToD1(c.env, table, rows) }; results[key] = { ok: true, rows: t }
       } else if (source === "supabase" && target === "turso") {
-        let t = 0
-        for (const table of ALL_TABLES) {
-          const rows = await fetchAllFromSupabase(c.env, table)
-          t += await bulkWriteToTurso(c.env, table, rows)
-        }
-        results[key] = { ok: true, rows: t }
+        let t = 0; for (const table of ALL_TABLES) { const rows = await fetchAllFromSupabase(c.env, table); t += await bulkWriteToTurso(c.env, table, rows) }; results[key] = { ok: true, rows: t }
       }
-    } catch (e) {
-      results[key] = { ok: false, error: e.message }
-    }
+    } catch (e) { results[key] = { ok: false, error: e.message } }
   }
-
-  return c.json({
-    success: true,
-    message: `✅ Auto-recovery complete. Source: ${source}`,
-    source, targets, alive, results,
-    recovered_at: nowISO()
-  })
+  return c.json({ success: true, message: `✅ Auto-recovery complete.`, source, targets, alive, results, recovered_at: nowISO() })
 })
 
-/* ─── MANUAL SNAPSHOT ─── */
 router.post("/db/snapshot", async (c) => {
   const body  = await c.req.json().catch(() => ({}))
   const label = body.label || "manual"
-  const result = await snapshotToR2(c.env, label)
-
+  const result = await snapshotToLocal(c.env, label)
   return c.json({
     success: result.ok,
-    ...(result.ok
-      ? { message: `✅ Snapshot saved to R2`, key: result.key, size_kb: result.size_kb }
-      : { error: result.error }),
+    ...(result.ok ? { message: `✅ Snapshot saved locally`, key: result.key, size_kb: result.size_kb } : { error: result.error }),
     created_at: nowISO()
   })
 })
 
-/* ─── RESTORE FROM SNAPSHOT ─── */
 router.post("/db/snapshot/restore", async (c) => {
   const body    = await c.req.json().catch(() => ({}))
   const { key, targets } = body
-
-  if (!key) {
-    return c.json({ success: false, message: "key required" }, 400)
-  }
-
-  // ✅ FIX (audit ISSUE-012): key was passed straight to env.R2_BUCKET.get(key)
-  // with no check it's actually one of our own snapshot objects — any key in
-  // the bucket could be fetched, parsed as a snapshot, and bulk-written into
-  // the live database. Snapshots are always created under snapshots/ (see
-  // snapshotToR2 below) — enforce that prefix and reject traversal sequences.
-  if (!key.startsWith("snapshots/") || key.includes("..")) {
-    return c.json({ success: false, message: "Invalid snapshot key" }, 400)
-  }
-
-  const result = await restoreFromR2(
-    c.env, key,
-    targets || ["d1", "turso", "supabase"]
-  )
-
-  return c.json({
-    success: result.ok,
-    ...(result.ok ? result : { error: result.error }),
-    restored_at: nowISO()
-  })
+  if (!key || key.includes("/") || key.includes("..")) return c.json({ success: false, message: "Invalid snapshot key" }, 400)
+  const result = await restoreFromLocal(c.env, key, targets || ["d1", "turso", "supabase"])
+  return c.json({ success: result.ok, ...(result.ok ? result : { error: result.error }), restored_at: nowISO() })
 })
 
-/* ─── LIST SNAPSHOTS ─── */
 router.get("/db/snapshots", async (c) => {
-  if (!c.env.R2_BUCKET) {
-    return c.json({ success: false, message: "R2_BUCKET not bound" }, 500)
-  }
   try {
-    const list = await c.env.R2_BUCKET.list({ prefix: "snapshots/" })
-    const objects = list.objects.map(o => ({
-      key:        o.key,
-      size_kb:    Math.round(o.size / 1024),
-      uploaded:   o.uploaded
-    })).sort((a, b) => new Date(b.uploaded) - new Date(a.uploaded))
-
-    return c.json({ success: true, snapshots: objects })
-  } catch (e) {
-    return c.json({ success: false, message: e.message }, 500)
-  }
+    const files = await fs.readdir(BACKUP_DIR)
+    const jsonFiles = files.filter(f => f.endsWith(".json"))
+    const snapshots = []
+    for (const f of jsonFiles) {
+      const stats = await fs.stat(path.join(BACKUP_DIR, f))
+      snapshots.push({ key: f, size_kb: Math.round(stats.size / 1024), uploaded: stats.mtime.toISOString() })
+    }
+    snapshots.sort((a, b) => new Date(b.uploaded) - new Date(a.uploaded))
+    return c.json({ success: true, snapshots })
+  } catch (e) { return c.json({ success: false, message: e.message }, 500) }
 })
 
-/* ─── ROW-LEVEL RECONCILIATION ─── */
 router.post("/db/reconcile", async (c) => {
   const body   = await c.req.json().catch(() => ({}))
   const tables = body.tables || ALL_TABLES
-
-  // ✅ FIX (audit ISSUE-001): body.tables was used directly as a table name in
-  // raw SQL (SELECT * FROM ${table}) inside reconcileTable() with no allowlist
-  // check — any authenticated admin could pass a crafted string as "table" and
-  // have it interpolated into three separate SQL execution paths (D1/Turso
-  // primary, Turso replica, Supabase). Validate against the same ALL_TABLES
-  // allowlist every other route in this file already uses.
   if (body.tables) {
     const invalid = tables.filter(t => !ALL_TABLES.includes(t))
-    if (invalid.length) {
-      return c.json({
-        success: false,
-        message: `Invalid table name(s): ${invalid.join(", ")}`
-      }, 400)
-    }
+    if (invalid.length) return c.json({ success: false, message: `Invalid table(s)` }, 400)
   }
-
   const report = []
-
-  for (const table of tables) {
-    const result = await reconcileTable(c.env, table)
-    report.push(result)
-  }
-
+  for (const table of tables) { report.push(await reconcileTable(c.env, table)) }
   const totalConflicts = report.reduce((s, r) => s + r.conflicts, 0)
-
-  return c.json({
-    success:    true,
-    message:    totalConflicts === 0
-      ? "✅ All tables in sync"
-      : `⚠️ ${totalConflicts} conflicts resolved`,
-    tables:     report.length,
-    conflicts:  totalConflicts,
-    report,
-    reconciled_at: nowISO()
-  })
+  return c.json({ success: true, message: totalConflicts === 0 ? "✅ All synced" : `⚠️ ${totalConflicts} conflicts`, tables: report.length, conflicts: totalConflicts, report, reconciled_at: nowISO() })
 })
 
-/* ─── REPLAY EVENTS from event log ─── */
 router.post("/db/replay-events", async (c) => {
-  const body      = await c.req.json().catch(() => ({}))
-  const from_date = body.from_date || null
-  const limit     = Math.min(body.limit || 100, 1000)
-
+  const body = await c.req.json().catch(() => ({})); const from_date = body.from_date || null; const limit = Math.min(body.limit || 100, 1000)
   try {
-    let q = "SELECT * FROM sync_event_log WHERE status IN ('pending','failed')"
-    const binds = []
-    if (from_date) { q += " AND created_at >= ?"; binds.push(from_date) }
-    q += " ORDER BY created_at ASC LIMIT ?"
-    binds.push(limit)
-
+    let q = "SELECT * FROM sync_event_log WHERE status IN ('pending','failed')"; const binds = []
+    if (from_date) { q += " AND created_at >= ?"; binds.push(from_date) }; q += " ORDER BY created_at ASC LIMIT ?"; binds.push(limit)
     const { results: events } = await c.env.DB.prepare(q).bind(...binds).all()
-
-    let replayed = 0
-    let failed   = 0
-
+    let replayed = 0; let failed = 0
     for (const event of (events || [])) {
       try {
-        // ✅ FIX (audit ISSUE-011): reject any event whose stored SQL doesn't
-        // match a known write statement against an allowlisted table, before
-        // ever executing it — see isSafeToReplay() above.
-        if (!isSafeToReplay(event.sql)) {
-          throw new Error(`Refusing to replay unsafe/unrecognized SQL for event ${event.event_id}`)
-        }
-
+        if (!isSafeToReplay(event.sql)) throw new Error("Unsafe SQL")
         const args = JSON.parse(event.args_json || "[]")
-
-        // Write to all three targets
-        if (event.origin !== ORIGIN_D1) {
-          try {
-            await c.env.DB.prepare(event.sql).bind(...args).run()
-          } catch (e) {
-            console.warn(`Replay D1 error [${event.event_id}]:`, e.message)
-          }
-        }
-
-        // ✅ FIX (audit ISSUE-013): TURSO_REPLICA_URL is optional/unset on a
-        // fresh install per .env.example — calling .replace() on it threw,
-        // silently inflating the "failed" count for every event instead of
-        // clearly skipping the unconfigured replica, inconsistent with the
-        // explicit guard bulkWriteToTurso() already uses elsewhere in this file.
+        if (event.origin !== ORIGIN_D1) await c.env.DB.prepare(event.sql).bind(...args).run().catch(()=>{})
         if (event.origin !== ORIGIN_TURSO && c.env.TURSO_REPLICA_URL && c.env.TURSO_REPLICA_AUTH_TOKEN) {
-          // MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — same
-          // reasoning as fetchAllFromTurso/bulkWriteToTurso above.
           const httpUrl = c.env.TURSO_REPLICA_URL.replace("libsql://", "https://")
-          await fetch(`${httpUrl}/v2/pipeline`, {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${c.env.TURSO_REPLICA_AUTH_TOKEN}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              requests: [
-                {
-                  type: "execute",
-                  stmt: {
-                    sql: event.sql,
-                    args: args.map(v =>
-                      v === null       ? { type: "null" } :
-                      typeof v === "number" ? { type: "integer", value: String(v) } :
-                                         { type: "text", value: String(v) }
-                    )
-                  }
-                },
-                { type: "close" }
-              ]
-            })
-          }).catch(() => null)
+          await fetch(`${httpUrl}/v2/pipeline`, { method: "POST", headers: { "Authorization": `Bearer ${c.env.TURSO_REPLICA_AUTH_TOKEN}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ type: "execute", stmt: { sql: event.sql, args: args.map(v => v === null ? { type: "null" } : typeof v === "number" ? { type: "integer", value: String(v) } : { type: "text", value: String(v) }) } }, { type: "close" }] }) }).catch(()=>null)
         }
-
         if (event.origin !== ORIGIN_SUPABASE) {
-          await fetch(`${c.env.SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
-            method: "POST",
-            headers: {
-              "apikey": c.env.SUPABASE_KEY,
-              "Authorization": `Bearer ${c.env.SUPABASE_KEY}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              // ✅ FIX: convertToPostgres() replaced — BANNED per project rules.
-              //    D1 SQLite syntax is sent as-is; Supabase RPC handles basic SQL.
-              query: passThrough(event.sql)
-            })
-          }).catch(() => null)
+          await fetch(`${c.env.SUPABASE_URL}/rest/v1/rpc/exec_sql`, { method: "POST", headers: { "apikey": c.env.SUPABASE_KEY, "Authorization": `Bearer ${c.env.SUPABASE_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ query: passThrough(event.sql) }) }).catch(()=>null)
         }
-
-        // Mark as applied
-        await c.env.DB.prepare(
-          "UPDATE sync_event_log SET status='applied', updated_at=? WHERE event_id=?"
-        ).bind(nowISO(), event.event_id).run()
-
+        await c.env.DB.prepare("UPDATE sync_event_log SET status='applied', updated_at=? WHERE event_id=?").bind(nowISO(), event.event_id).run()
         replayed++
-      } catch (e) {
-        failed++
-        await c.env.DB.prepare(
-          "UPDATE sync_event_log SET status='failed', error_msg=?, updated_at=? WHERE event_id=?"
-        ).bind(e.message, nowISO(), event.event_id).run()
-      }
+      } catch (e) { failed++; await c.env.DB.prepare("UPDATE sync_event_log SET status='failed', error_msg=?, updated_at=? WHERE event_id=?").bind(e.message, nowISO(), event.event_id).run() }
     }
-
-    return c.json({
-      success:  true,
-      message:  `✅ Replayed ${replayed} events, ${failed} failed`,
-      replayed, failed,
-      replayed_at: nowISO()
-    })
-  } catch (e) {
-    return c.json({ success: false, message: e.message }, 500)
-  }
+    return c.json({ success: true, message: `✅ Replayed ${replayed}`, replayed, failed, replayed_at: nowISO() })
+  } catch (e) { return c.json({ success: false, message: e.message }, 500) }
 })
 
-/* ─── DEAD LETTER QUEUE: VIEW ─── */
 router.get("/db/dead-letter", async (c) => {
   try {
-    const limit = Math.min(Number(c.req.query("limit") || 50), 200)
-    const { results } = await c.env.DB.prepare(
-      "SELECT * FROM sync_dead_letter ORDER BY created_at DESC LIMIT ?"
-    ).bind(limit).all()
-
-    return c.json({
-      success: true,
-      count:   results?.length || 0,
-      items:   results || []
-    })
-  } catch (e) {
-    return c.json({ success: false, message: e.message }, 500)
-  }
+    const { results } = await c.env.DB.prepare("SELECT * FROM sync_dead_letter ORDER BY created_at DESC LIMIT ?").bind(Math.min(Number(c.req.query("limit") || 50), 200)).all()
+    return c.json({ success: true, count: results?.length || 0, items: results || [] })
+  } catch (e) { return c.json({ success: false, message: e.message }, 500) }
 })
 
-/* ─── DEAD LETTER QUEUE: RETRY ─── */
 router.post("/db/dead-letter/retry", async (c) => {
   try {
-    // Get all dead letter event IDs
-    const { results: dlItems } = await c.env.DB.prepare(
-      "SELECT event_id FROM sync_dead_letter"
-    ).all()
-
-    if (!dlItems?.length) {
-      return c.json({ success: true, message: "No dead letter items to retry" })
-    }
-
-    let retried = 0
-    let failed  = 0
-
+    const { results: dlItems } = await c.env.DB.prepare("SELECT event_id FROM sync_dead_letter").all()
+    if (!dlItems?.length) return c.json({ success: true, message: "No items" })
+    let retried = 0; let failed = 0
     for (const dl of dlItems) {
-      // Get original event
-      const event = await c.env.DB.prepare(
-        "SELECT * FROM sync_event_log WHERE event_id = ?"
-      ).bind(dl.event_id).first()
-
+      const event = await c.env.DB.prepare("SELECT * FROM sync_event_log WHERE event_id = ?").bind(dl.event_id).first()
       if (!event) { failed++; continue }
-
       try {
-        // ✅ FIX (audit ISSUE-011): same validation as /db/replay-events —
-        // reject any dead-letter item whose stored SQL doesn't match a known
-        // write statement against an allowlisted table before executing it.
-        if (!isSafeToReplay(event.sql)) {
-          throw new Error(`Refusing to retry unsafe/unrecognized SQL for event ${event.event_id}`)
-        }
-
+        if (!isSafeToReplay(event.sql)) throw new Error("Unsafe SQL")
         const args = JSON.parse(event.args_json || "[]")
-
-        // Try to re-apply
         await c.env.DB.prepare(event.sql).bind(...args).run().catch(() => null)
-
-        // ✅ FIX (audit ISSUE-013): guard against TURSO_REPLICA_URL being unset
-        // (the documented default for a fresh install) — see the matching fix
-        // in /db/replay-events above for full reasoning.
         if (c.env.TURSO_REPLICA_URL && c.env.TURSO_REPLICA_AUTH_TOKEN) {
-        // MIGRATION: repointed at TURSO_REPLICA_URL/TOKEN (DB3) — same
-        // reasoning as fetchAllFromTurso/bulkWriteToTurso above.
-        const httpUrl = c.env.TURSO_REPLICA_URL.replace("libsql://", "https://")
-        await fetch(`${httpUrl}/v2/pipeline`, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${c.env.TURSO_REPLICA_AUTH_TOKEN}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            requests: [
-              {
-                type: "execute",
-                stmt: {
-                  sql: event.sql,
-                  args: args.map(v =>
-                    v === null ? { type: "null" } :
-                    typeof v === "number" ? { type: "integer", value: String(v) } :
-                    { type: "text", value: String(v) }
-                  )
-                }
-              },
-              { type: "close" }
-            ]
-          })
-        }).catch(() => null)
+          const httpUrl = c.env.TURSO_REPLICA_URL.replace("libsql://", "https://")
+          await fetch(`${httpUrl}/v2/pipeline`, { method: "POST", headers: { "Authorization": `Bearer ${c.env.TURSO_REPLICA_AUTH_TOKEN}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ type: "execute", stmt: { sql: event.sql, args: args.map(v => v === null ? { type: "null" } : typeof v === "number" ? { type: "integer", value: String(v) } : { type: "text", value: String(v) }) } }, { type: "close" }] }) }).catch(()=>null)
         }
-
-        // Remove from dead letter
-        await c.env.DB.prepare(
-          "DELETE FROM sync_dead_letter WHERE event_id = ?"
-        ).bind(dl.event_id).run()
-
-        await c.env.DB.prepare(
-          "UPDATE sync_event_log SET status='applied', updated_at=? WHERE event_id=?"
-        ).bind(nowISO(), dl.event_id).run()
-
+        await c.env.DB.prepare("DELETE FROM sync_dead_letter WHERE event_id = ?").bind(dl.event_id).run()
+        await c.env.DB.prepare("UPDATE sync_event_log SET status='applied', updated_at=? WHERE event_id=?").bind(nowISO(), dl.event_id).run()
         retried++
-      } catch (e) {
-        failed++
-      }
+      } catch (e) { failed++ }
     }
-
-    return c.json({
-      success:  true,
-      message:  `✅ Retried ${retried} dead letter items, ${failed} still failed`,
-      retried, failed,
-      retried_at: nowISO()
-    })
-  } catch (e) {
-    return c.json({ success: false, message: e.message }, 500)
-  }
+    return c.json({ success: true, message: `✅ Retried ${retried}`, retried, failed })
+  } catch (e) { return c.json({ success: false, message: e.message }, 500) }
 })
 
-/* ─── AUDIT LOG ─── */
 router.get("/db/audit-log", async (c) => {
   try {
-    const limit  = Math.min(Number(c.req.query("limit") || 100), 500)
-    const table  = c.req.query("table") || null
-    const origin = c.req.query("origin") || null
-
-    let q = "SELECT * FROM sync_audit_log WHERE 1=1"
-    const binds = []
-    if (table)  { q += " AND table_name=?"; binds.push(table) }
-    if (origin) { q += " AND origin=?";     binds.push(origin) }
-    q += " ORDER BY created_at DESC LIMIT ?"
-    binds.push(limit)
-
+    const limit = Math.min(Number(c.req.query("limit") || 100), 500); const table = c.req.query("table") || null; const origin = c.req.query("origin") || null
+    let q = "SELECT * FROM sync_audit_log WHERE 1=1"; const binds = []
+    if (table) { q += " AND table_name=?"; binds.push(table) }
+    if (origin) { q += " AND origin=?"; binds.push(origin) }
+    q += " ORDER BY created_at DESC LIMIT ?"; binds.push(limit)
     const { results } = await c.env.DB.prepare(q).bind(...binds).all()
-
-    return c.json({
-      success: true,
-      count:   results?.length || 0,
-      logs:    results || []
-    })
-  } catch (e) {
-    return c.json({ success: false, message: e.message }, 500)
-  }
+    return c.json({ success: true, count: results?.length || 0, logs: results || [] })
+  } catch (e) { return c.json({ success: false, message: e.message }, 500) }
 })
 
-/* ─── CHECKSUM INTEGRITY VERIFICATION ─── */
 router.get("/db/checksums", async (c) => {
   const report = []
-
   for (const table of ALL_TABLES) {
-    const [d1Rows, tursoRows, supaRows] = await Promise.all([
-      fetchAllFromD1(c.env, table),
-      fetchAllFromTurso(c.env, table),
-      fetchAllFromSupabase(c.env, table)
-    ])
-
-    const [d1Checksum, tursoChecksum, supaChecksum] = await Promise.all([
-      computeTableChecksum(d1Rows),
-      computeTableChecksum(tursoRows),
-      computeTableChecksum(supaRows)
-    ])
-
+    const [d1Rows, tursoRows, supaRows] = await Promise.all([ fetchAllFromD1(c.env, table), fetchAllFromTurso(c.env, table), fetchAllFromSupabase(c.env, table) ])
+    const [d1Checksum, tursoChecksum, supaChecksum] = await Promise.all([ computeTableChecksum(d1Rows), computeTableChecksum(tursoRows), computeTableChecksum(supaRows) ])
     const allMatch = d1Checksum === tursoChecksum && tursoChecksum === supaChecksum
-
-    report.push({
-      table,
-      in_sync: allMatch,
-      row_counts: {
-        d1:       d1Rows.length,
-        turso:    tursoRows.length,
-        supabase: supaRows.length
-      },
-      checksums: {
-        d1:       d1Checksum,
-        turso:    tursoChecksum,
-        supabase: supaChecksum
-      }
-    })
+    report.push({ table, in_sync: allMatch, row_counts: { d1: d1Rows.length, turso: tursoRows.length, supabase: supaRows.length }, checksums: { d1: d1Checksum, turso: tursoChecksum, supabase: supaChecksum } })
   }
-
   const totalMismatch = report.filter(r => !r.in_sync).length
-
-  return c.json({
-    success:   true,
-    all_synced: totalMismatch === 0,
-    mismatch_tables: totalMismatch,
-    report,
-    checked_at: nowISO()
-  })
+  return c.json({ success: true, all_synced: totalMismatch === 0, mismatch_tables: totalMismatch, report, checked_at: nowISO() })
 })
 
 export default router
-
-
