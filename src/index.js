@@ -9,6 +9,7 @@ import { createHash, timingSafeEqual } from "node:crypto"
 import { Hono } from "hono"
 import { cors }  from "hono/cors"
 import { serve } from "@hono/node-server"
+import { serveStatic } from "@hono/node-server/serve-static"
 import Redis from "ioredis"
 
 /* ================= MIDDLEWARE IMPORTS ================= */
@@ -54,6 +55,9 @@ import recommendations from "./routes/recommendations.js"
 import trending        from "./routes/trending.js"
 import dbRestore       from "./routes/dbRestore.js"
 import bulkUpload      from "./routes/bulk-upload.js"
+
+/* ================= SSR ENGINE ================= */
+import seoSSR          from "./routes/seoSSR.js"
 
 /* ================= AI ENGINES ================= */
 import { runFooterAI } from "./ai/footerAI.js"
@@ -105,16 +109,8 @@ const nodeEnv = {
   STREAM_TOKEN_SECRET: process.env.STREAM_TOKEN_SECRET
 }
 
-if (!nodeEnv.JWT_SECRET) {
-  console.error("❌ FATAL: JWT_SECRET is not set in the environment. Refusing to start.")
-  process.exit(1)
-}
-if (!nodeEnv.TURSO_URL || !nodeEnv.TURSO_AUTH_TOKEN) {
-  console.error("❌ FATAL: TURSO_URL / TURSO_AUTH_TOKEN are not set. Refusing to start.")
-  process.exit(1)
-}
-if (!nodeEnv.CRON_SECRET) {
-  console.error("❌ FATAL: CRON_SECRET is not set in the environment. Refusing to start.")
+if (!nodeEnv.JWT_SECRET || !nodeEnv.TURSO_URL || !nodeEnv.TURSO_AUTH_TOKEN || !nodeEnv.CRON_SECRET) {
+  console.error("❌ FATAL: Missing Environment Variables. Refusing to start.")
   process.exit(1)
 }
 
@@ -129,11 +125,7 @@ app.use("*", async (c, next) => {
 app.use("*", executionCtxShim)
 
 app.use("*", async (c, next) => {
-  const allowed = (c.env.ALLOWED_ORIGINS || "")
-    .split(",")
-    .map(o => o.trim())
-    .filter(Boolean)
-
+  const allowed = (c.env.ALLOWED_ORIGINS || "").split(",").map(o => o.trim()).filter(Boolean)
   const corsMiddleware = cors({
     origin: allowed.length ? allowed : "*",
     allowHeaders: ["Content-Type", "Authorization", "x-stream-token"],
@@ -141,16 +133,13 @@ app.use("*", async (c, next) => {
     credentials:  allowed.length > 0,
     maxAge:       86400
   })
-
   return corsMiddleware(c, next)
 })
 
 app.options("*", (c) => c.text("", 200))
 
 app.use("*", async (c, next) => {
-  if (!c.env.DB) {
-    return c.json({ success: false, message: "DB NOT CONFIGURED" }, 500)
-  }
+  if (!c.env.DB) return c.json({ success: false, message: "DB NOT CONFIGURED" }, 500)
   await next()
 })
 
@@ -166,23 +155,12 @@ app.use("*", async (c, next) => {
 app.use("*", firewall)
 app.use("*", systemGuard)
 
-app.get("/", (c) => c.json({
-  success:   true,
-  message:   "AnimeHunt Backend Running 🚀",
-  version:   "2.0.1-node",
-  timestamp: new Date().toISOString()
-}))
+/* ================= SSR & ROOT ================= */
+// Intercept requests for SEO rendering
+app.route("/", seoSSR)
 
-app.get("/health", async (c) => {
-  let dbOk = false
-  try { await c.env.DB.prepare("SELECT 1").run(); dbOk = true } catch {}
-  return c.json({
-    success: true,
-    status:  dbOk ? "ok" : "degraded",
-    db:      dbOk ? "connected" : "error",
-    timestamp: new Date().toISOString()
-  }, dbOk ? 200 : 503)
-})
+// Handle robots.txt and sitemap
+app.route("/", publicSEORoot)     
 
 app.get("/api/health", async (c) => {
   let dbOk = false
@@ -234,7 +212,6 @@ app.route("/api", ads)
 app.route("/api", analytics)      
 app.route("/api", publicSearch)
 app.route("/api", publicSEO)
-app.route("/", publicSEORoot)     
 app.route("/api", recommendations)
 app.route("/api", trending)
 
@@ -271,6 +248,11 @@ adminRoutes.route("/", bulkUpload)
 
 app.route("/api/admin", adminRoutes)
 
+/* ================= STATIC FRONTEND SERVING ================= */
+// Serve the rest of the static frontend (index.html, css, js)
+const frontendDir = process.env.FRONTEND_DIR || "../animehunt-frontend"
+app.use("/*", serveStatic({ root: frontendDir }))
+
 /* ================= ERROR HANDLER ================= */
 app.onError((err, c) => {
   console.error(`🔥 GLOBAL ERROR [${c.req.method} ${c.req.path}]:`, err)
@@ -295,5 +277,3 @@ process.on("SIGTERM", async () => {
   await redisClient.quit()
   process.exit(0)
 })
-
-
