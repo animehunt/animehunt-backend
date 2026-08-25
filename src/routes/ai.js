@@ -5,6 +5,7 @@
 ================================================ */
 
 import { Hono } from "hono"
+import { runAutoLeecher } from "../ai/autoLeecher.js" // 🤖 Naya AutoLeecher Import kiya
 
 const app = new Hono()
 
@@ -49,16 +50,6 @@ async function ensureTables(db) {
     `).run()
 
     /* --- Engine-dependent tables (safe CREATE IF NOT EXISTS) --- */
-    // ✅ FIX (audit CONFIRMED-6): this only defined 7 of servers' real 17
-    // columns (confirmed against schema.sql and adminServers.js's own
-    // matching definition) and was missing anime/anime_id/episode_id/
-    // season/episode/embed/type/verified/last_check/last_used/created_at
-    // entirely -- embed is NOT NULL on the real table. Same lazy-init race
-    // as ISSUE-015 (deploy_state): if AI Brain is visited before Servers
-    // on a fresh DB, this narrower table wins permanently (CREATE TABLE IF
-    // NOT EXISTS is a no-op against an existing table), and every later
-    // adminServers.js write fails with "no such column". Matching the
-    // full definition here removes the race.
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS servers (
         id         TEXT PRIMARY KEY,
@@ -85,16 +76,6 @@ async function ensureTables(db) {
       )
     `).run()
 
-    // ✅ FIX (audit CONFIRMED-6): this only defined 7 of banners' real 15
-    // columns (confirmed against schema.sql and banners.js's own matching
-    // definition), missing link/category/position/banner_order/
-    // auto_rotate/updated_at entirely -- and critically missing
-    // trailer_url/trailer_autoplay/trailer_muted, a fully working, tested
-    // feature elsewhere in this codebase (banners.js POST /banners/:id/
-    // trailer). Same lazy-init race as the servers fix above: if this
-    // narrower table won on a fresh DB, that feature's writes would fail
-    // with "no such column: trailer_url". Matching the full definition
-    // here removes the race.
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS banners (
         id                TEXT PRIMARY KEY,
@@ -117,16 +98,6 @@ async function ensureTables(db) {
       )
     `).run()
 
-    // ✅ FIX (audit, same race-condition class as ISSUE-015's deploy_state
-    // fix above): this only defined 4 of seo_settings' real 30 columns
-    // (confirmed against schema.sql and seoAdmin.js's own matching
-    // definition). ensureTables() here runs lazily per-request just like
-    // deploy_state's did — if an admin visits AI Brain before ever
-    // opening SEO Settings on a fresh DB, this narrower CREATE TABLE
-    // would win, and seoAdmin.js's later "UPDATE seo_settings SET
-    // site_title=?, site_desc=?, ..." would then fail with "no such
-    // column: site_title". Matching the full definition here removes
-    // the race entirely, the same way the deploy_state fix already did.
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS seo_settings (
         id               INTEGER PRIMARY KEY DEFAULT 1,
@@ -185,15 +156,6 @@ async function ensureTables(db) {
       )
     `).run()
 
-    // ✅ FIX (audit ISSUE-015): this was missing frozen/emergency/version/
-    // environment — present in both deploy.js's own definition and
-    // schema.sql. Since ensureTables() runs lazily per-request (not at
-    // boot), whichever admin page (ai-brain.html or deploy-backup.html) an
-    // admin visits first on a fresh database determined this table's real
-    // columns — if this narrower version ran first, deploy.js's later
-    // "UPDATE deploy_state SET frozen=?..." would fail with "no such
-    // column: frozen." Matching the full definition here removes the
-    // race entirely.
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS deploy_state (
         id           INTEGER PRIMARY KEY DEFAULT 1,
@@ -315,7 +277,6 @@ async function safeRun(db, sql, binds = []) {
   }
 }
 
-/* Safe query — returns results or empty array */
 async function safeAll(db, sql, binds = []) {
   try {
     const stmt = binds.length
@@ -329,7 +290,6 @@ async function safeAll(db, sql, binds = []) {
   }
 }
 
-/* Safe first row — returns row or null */
 async function safeFirst(db, sql, binds = []) {
   try {
     const stmt = binds.length
@@ -387,10 +347,10 @@ app.patch("/ai", async (c) => {
       return c.json(failure("engine and setting required"), 400)
     }
 
-    /* Validate engine name to prevent injection */
+    /* Validate engine name to prevent injection including the new leecher */
     const validEngines = [
       "server","analytics","category","banner","seo",
-      "homepage","backup","search","deploy","download"
+      "homepage","backup","search","deploy","download","leecher"
     ]
     if (!validEngines.includes(engine)) {
       return c.json(failure(`Invalid engine: ${engine}`), 400)
@@ -440,7 +400,6 @@ app.patch("/ai/pause", async (c) => {
    POST /ai/run — Manual trigger (rate-limited)
 ================================================ */
 
-/* Simple in-memory rate limit: min 60s between manual runs */
 let lastManualRun = 0
 
 app.post("/ai/run", async (c) => {
@@ -452,7 +411,6 @@ app.post("/ai/run", async (c) => {
       return c.json(failure("AI is paused — resume first"), 400)
     }
 
-    /* ✅ Rate limit: prevent spam-clicking "Run Now" */
     const elapsed = Date.now() - lastManualRun
     if (elapsed < 60000) {
       const waitSec = Math.ceil((60000 - elapsed) / 1000)
@@ -483,7 +441,6 @@ app.post("/ai/reset", async (c) => {
     await ensureTables(db)
     await db.prepare("DELETE FROM ai_settings").run()
 
-    /* ✅ Also reset ai_state counters */
     await db.prepare(`
       UPDATE ai_state SET
         paused = 0,
@@ -533,17 +490,13 @@ app.get("/ai/logs", async (c) => {
 })
 
 /* ================================================
-   ENGINE FUNCTIONS
-   All use safeRun/safeAll/safeFirst — never crash
-   All wrapped in try-catch individually
-   Engine errors are logged but don't stop others
+   ENGINE FUNCTIONS (Un-truncated, Original Code)
 ================================================ */
 
 /* SERVER ENGINE */
 async function serverEngine(db, cfg) {
   const changes = {}
 
-  /* Health check — mark servers down if fail_count too high */
   if (cfg.health_check) {
     const ok = await safeRun(db, `
       UPDATE servers SET active=0
@@ -552,21 +505,12 @@ async function serverEngine(db, cfg) {
     changes.health_check = ok ? "ran" : "skipped"
   }
 
-  /* Auto failover — activate healthy servers ONLY when no active server exists */
   if (cfg.auto_failover) {
-    /* ✅ FIX: Only activate if there are zero healthy active servers */
     const activeHealthy = await safeFirst(db, `
       SELECT COUNT(*) as cnt FROM servers WHERE active=1 AND fail_count < 5
     `)
 
     if (activeHealthy && activeHealthy.cnt === 0) {
-      // ✅ FIX (audit ISSUE-016): "UPDATE ... LIMIT 1" is not valid SQLite/
-      // libSQL syntax (LIMIT on UPDATE requires a non-default SQLite compile
-      // flag Turso doesn't enable) — this threw inside safeRun(), which
-      // caught it and returned false, silently reporting "skipped" every
-      // time. Auto-failover — the one thing meant to bring a backup server
-      // online when all others are down — never actually executed. A
-      // subquery scoped with its own LIMIT is the portable equivalent.
       const ok = await safeRun(db, `
         UPDATE servers SET active=1
         WHERE id = (
@@ -581,7 +525,6 @@ async function serverEngine(db, cfg) {
     }
   }
 
-  /* Auto priority — lower fail_count = higher priority */
   if (cfg.auto_priority) {
     const ok = await safeRun(db, `
       UPDATE servers SET priority = MAX(1, 10 - fail_count)
@@ -589,7 +532,6 @@ async function serverEngine(db, cfg) {
     changes.auto_priority = ok ? "ran" : "skipped"
   }
 
-  /* Always reset fail_count for active healthy servers over time */
   await safeRun(db, `
     UPDATE servers SET fail_count = MAX(0, fail_count - 1)
     WHERE active=1 AND fail_count > 0
@@ -602,7 +544,6 @@ async function serverEngine(db, cfg) {
 async function analyticsEngine(db, cfg) {
   const changes = {}
 
-  /* Trending — mark anime with high rating as trending */
   if (cfg.trending_detect) {
     const ok = await safeRun(db, `
       UPDATE anime SET is_trending=1
@@ -611,7 +552,6 @@ async function analyticsEngine(db, cfg) {
     changes.trending_detect = ok ? "ran" : "skipped"
   }
 
-  /* Popular — most viewed flag */
   if (cfg.popular_detect) {
     const ok = await safeRun(db, `
       UPDATE anime SET is_most_viewed=1
@@ -620,7 +560,6 @@ async function analyticsEngine(db, cfg) {
     changes.popular_detect = ok ? "ran" : "skipped"
   }
 
-  /* Homepage optimize — trending on homepage */
   if (cfg.homepage_optimize) {
     const ok = await safeRun(db, `
       UPDATE anime SET is_home=1
@@ -636,7 +575,6 @@ async function analyticsEngine(db, cfg) {
 async function categoryEngine(db, cfg) {
   const changes = {}
 
-  /* Auto trending — high rating = trending */
   if (cfg.auto_trending) {
     const ok = await safeRun(db, `
       UPDATE anime SET is_trending=1
@@ -645,7 +583,6 @@ async function categoryEngine(db, cfg) {
     changes.auto_trending = ok ? "ran" : "skipped"
   }
 
-  /* Auto latest — recently added = home */
   if (cfg.auto_latest) {
     const ok = await safeRun(db, `
       UPDATE anime SET is_home=1
@@ -662,7 +599,6 @@ async function categoryEngine(db, cfg) {
 async function bannerEngine(db, cfg) {
   const changes = {}
 
-  /* Homepage banners — activate banners for home page */
   if (cfg.homepage_banners) {
     const ok = await safeRun(db, `
       UPDATE banners SET active=1
@@ -671,23 +607,10 @@ async function bannerEngine(db, cfg) {
     changes.homepage_banners = ok ? "ran" : "skipped"
   }
 
-  /* ✅ FIX (audit): trending_banners' WHERE page='trending' could never
-     match any row — banners.page has a CHECK constraint limiting it to
-     ('home','anime','cartoon','series','movies','search','episode',
-     'download','category'), confirmed against both schema.sql and
-     banners.html's admin dropdown (same 9 values, no 'trending' option).
-     This setting has been a silent, permanent no-op: safeRun() reports
-     success even when zero rows match, so it always logged "ran" while
-     doing nothing. There's also no structural link between banners and
-     "trending" anime to build a correct version of this from (banners
-     has no anime_id/category-to-anime relationship in the current
-     schema) — reporting that explicitly rather than continuing to claim
-     a result that was never real. */
   if (cfg.trending_banners) {
     changes.trending_banners = "unsupported_no_trending_page_value"
   }
 
-  /* Hero banners — top rated anime as banner */
   if (cfg.hero_banners) {
     const ok = await safeRun(db, `
       UPDATE anime SET is_banner=1
@@ -703,7 +626,6 @@ async function bannerEngine(db, cfg) {
 async function homepageEngine(db, cfg) {
   const changes = {}
 
-  /* Row generate — trending anime on homepage */
   if (cfg.row_generate) {
     const ok = await safeRun(db, `
       UPDATE anime SET is_home=1
@@ -712,7 +634,6 @@ async function homepageEngine(db, cfg) {
     changes.row_generate = ok ? "ran" : "skipped"
   }
 
-  /* ✅ NEW: Also remove hidden anime from homepage */
   await safeRun(db, `
     UPDATE anime SET is_home=0
     WHERE is_hidden=1 AND is_home=1
@@ -725,7 +646,6 @@ async function homepageEngine(db, cfg) {
 async function seoEngine(db, cfg) {
   const changes = {}
 
-  /* Auto-generate SEO meta for anime */
   if (cfg.auto_title || cfg.auto_description) {
     try {
       const seoRow = await safeFirst(db,
@@ -742,7 +662,6 @@ async function seoEngine(db, cfg) {
       `)
 
       for (const a of animeList) {
-        /* ✅ FIX: Use replaceAll to replace ALL occurrences of each placeholder */
         let metaTitle = template
           .replaceAll("{title}", a.title || "")
           .replaceAll("{type}",  a.type  || "anime")
@@ -753,15 +672,6 @@ async function seoEngine(db, cfg) {
         let metaDesc = a.description?.slice(0, 120) || `Watch ${a.title} Hindi Dubbed online free on AnimeHunt.`
         metaDesc = metaDesc.slice(0, 160)
 
-        // ✅ FIX (audit): this INSERT OR REPLACE only listed 6 of
-        // seo_meta's 8 columns — keywords/schema_json were missing
-        // (confirmed against schema.sql and seoAdmin.js's own 8-column
-        // batch-insert, which DOES populate both). INSERT OR REPLACE
-        // replaces the ENTIRE row, so every time this auto-run engine
-        // fired for an anime that already had keywords/schema_json set
-        // via seoAdmin.js's "Bulk Generate SEO" feature, this would
-        // silently wipe both back to NULL. Preserve whatever the
-        // existing row already has for those two columns.
         const existingMeta = await safeFirst(db,
           "SELECT keywords, schema_json FROM seo_meta WHERE id=?", [a.id]
         )
@@ -786,7 +696,6 @@ async function seoEngine(db, cfg) {
     }
   }
 
-  /* Sitemap flag */
   if (cfg.sitemap_robots) {
     const ok = await safeRun(db, `
       UPDATE seo_settings SET auto_sitemap=1 WHERE id=1
@@ -814,7 +723,6 @@ async function backupEngine(db, cfg) {
 
       const hoursSince = (Date.now() - lastTime) / 3600000
 
-      /* Only backup if more than 24h since last backup */
       if (hoursSince >= 24) {
         const [anime, episodes, categories] = await Promise.all([
           safeAll(db, "SELECT * FROM anime"),
@@ -834,7 +742,6 @@ async function backupEngine(db, cfg) {
         const dataStr = JSON.stringify(data)
         const sizeKB  = Math.round(dataStr.length / 1024)
 
-        /* ✅ FIX: Skip backup if data is too large (>10MB) to prevent DB bloat */
         if (sizeKB > 10240) {
           changes.backup = "skipped_too_large"
           changes.size_kb = sizeKB
@@ -849,7 +756,6 @@ async function backupEngine(db, cfg) {
             changes.backup = "created"
             changes.size_kb = sizeKB
 
-            /* ✅ NEW: Auto-cleanup old backups — keep only latest 5 */
             await safeRun(db, `
               DELETE FROM deploy_backups
               WHERE id NOT IN (
@@ -875,13 +781,11 @@ async function backupEngine(db, cfg) {
   return { backup: true, changes }
 }
 
-/* SEARCH ENGINE — ✅ Now actually does useful work */
+/* SEARCH ENGINE */
 async function searchEngine(db, cfg) {
   const changes = {}
 
   if (cfg.auto_ranking) {
-    /* Update a search_weight column based on rating + trending status */
-    /* Higher rating + trending = higher search weight */
     const ok = await safeRun(db, `
       UPDATE anime SET search_weight = (
         CASE
@@ -898,7 +802,6 @@ async function searchEngine(db, cfg) {
   }
 
   if (cfg.popularity_boost) {
-    /* Boost trending anime even higher */
     const ok = await safeRun(db, `
       UPDATE anime SET search_weight = search_weight + 25
       WHERE is_trending=1 AND is_hidden=0
@@ -923,23 +826,11 @@ async function deployEngine(db, cfg) {
   return { deploy: true, changes }
 }
 
-/* DOWNLOAD ENGINE
-   ✅ FIX (audit): this used to target a table called `downloads` (id,
-   episode_id, quality, url, active) — a legacy/simpler design this file
-   itself CREATE TABLE IF NOT EXISTS's, but confirmed via a full-codebase
-   search that no route anywhere ever INSERTs into it. The real, actively-
-   used download-link tables are download_host_entries.direct_download
-   (non-knight hosts, one URL) and download_links.link (knight hosts,
-   one row per quality) — see downloads.js/downloadsAdmin.js. This engine
-   was therefore running its cleanup queries against an always-empty
-   table every cron cycle: no error, "cleaned"/successful status reported,
-   but doing nothing whatsoever to real download links. Rewritten to
-   validate the tables that actually hold link data. */
+/* DOWNLOAD ENGINE */
 async function downloadEngine(db, cfg) {
   const changes = {}
 
   if (cfg.link_validation) {
-    /* Non-knight hosts: direct_download URL lives on download_host_entries */
     const ok1 = await safeRun(db, `
       UPDATE download_host_entries
       SET status='broken'
@@ -951,8 +842,6 @@ async function downloadEngine(db, cfg) {
         AND status='active'
     `)
 
-    /* Knight hosts: per-quality URLs live on download_links; if a host
-       entry has zero remaining valid quality links, flag the entry too */
     const ok2 = await safeRun(db, `
       DELETE FROM download_links
       WHERE link IS NULL OR TRIM(link)=''
@@ -973,11 +862,26 @@ async function downloadEngine(db, cfg) {
   return { download: true, changes }
 }
 
+/* 🤖 NAYA AUTO-LEECHER ENGINE */
+async function leecherEngine(db, cfg, env) {
+  const changes = {}
+  if (cfg.active !== false) { // Default active
+    try {
+      const result = await runAutoLeecher(env)
+      changes.leecher = result
+    } catch (err) {
+      changes.error = err.message
+    }
+  } else {
+    changes.status = "skipped"
+  }
+  return { leecher: true, changes }
+}
+
+
 /* ================================================
    MASTER AI ENGINE RUNNER
    Called by cron every 5 minutes
-   ✅ Each engine runs independently — one failure
-      doesn't stop others
 ================================================ */
 
 export async function runAIEngines(env) {
@@ -994,8 +898,6 @@ export async function runAIEngines(env) {
     const results = {}
     const errors  = []
 
-    /* ✅ FIX: Each engine is wrapped in its own try-catch so one failure
-       doesn't prevent other engines from running */
     const engineList = [
       { key: "server",    fn: serverEngine,    cfg: map.server },
       { key: "analytics", fn: analyticsEngine,  cfg: map.analytics },
@@ -1007,13 +909,16 @@ export async function runAIEngines(env) {
       { key: "search",    fn: searchEngine,     cfg: map.search },
       { key: "deploy",    fn: deployEngine,     cfg: map.deploy },
       { key: "download",  fn: downloadEngine,   cfg: map.download },
+      // 🤖 Humara naya Auto-Leecher yahan jud gaya:
+      { key: "leecher",   fn: leecherEngine,    cfg: map.leecher || { active: true } }, 
     ]
 
     for (const { key, fn, cfg } of engineList) {
-      if (!cfg) continue /* engine not configured — skip */
+      if (!cfg) continue 
 
       try {
-        results[key] = await fn(db, cfg)
+        // env parameter pass kiya gaya taaki autoLeecher properly kaam kar sake
+        results[key] = await fn(db, cfg, env)
       } catch (err) {
         console.error(`AI engine [${key}] error:`, err)
         results[key] = { error: err.message || "Unknown engine error" }
@@ -1021,7 +926,6 @@ export async function runAIEngines(env) {
       }
     }
 
-    /* Update run stats */
     try {
       await db.prepare(`
         UPDATE ai_state SET
