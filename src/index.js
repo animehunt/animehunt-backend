@@ -1,7 +1,7 @@
 /* ================================================
-   ANIMEHUNT BACKEND — Main Entry Point
+   ANIMEHUNT BACKEND — Main Entry Point (FINAL)
    File: src/index.js
-   Node.js (via @hono/node-server) — migrated from Cloudflare Workers
+   Node.js (via @hono/node-server)
 ================================================ */
 
 import "dotenv/config"
@@ -26,26 +26,25 @@ import publicAnime     from "./routes/public.js"
 import episodes        from "./routes/episodes.js"
 import categories      from "./routes/categories.js"
 import banners         from "./routes/banners.js"
-import bannersPublic   from "./routes/bannersPublic.js"    
+import bannersPublic   from "./routes/bannersPublic.js"
 import adminServers    from "./routes/adminServers.js"
-import player          from "./routes/player.js"           
-import playerAdmin     from "./routes/playerAdmin.js"      
-import downloads       from "./routes/downloads.js"        
-import downloadsAdmin  from "./routes/downloadsAdmin.js"   
-import ads             from "./routes/ads.js"              
-import adsAdmin        from "./routes/adsAdmin.js"         
-import analytics       from "./routes/analytics.js"        
-import analyticsAdmin  from "./routes/analyticsAdmin.js"   
+import player          from "./routes/player.js"
+import playerAdmin     from "./routes/playerAdmin.js"
+import downloads       from "./routes/downloads.js"
+import downloadsAdmin  from "./routes/downloadsAdmin.js"
+import ads             from "./routes/ads.js"
+import adsAdmin        from "./routes/adsAdmin.js"
+import analytics       from "./routes/analytics.js"
+import analyticsAdmin  from "./routes/analyticsAdmin.js"
 import searchAdmin     from "./routes/searchAdmin.js"
 import publicSearch    from "./routes/publicSearch.js"
 import seoAdmin        from "./routes/seoAdmin.js"
-import publicSEO       from "./routes/publicSEO.js"          
-import publicSEORoot   from "./routes/publicSEORoot.js"      
+import publicSEO       from "./routes/publicSEO.js"
+import publicSEORoot   from "./routes/publicSEORoot.js"
 import sidebar         from "./routes/sidebar.js"
 import footer          from "./routes/footer.js"
 import homepage        from "./routes/homepage.js"
-import ai              from "./routes/ai.js"
-import { runAIEngines } from "./routes/ai.js"  
+import ai, { runAIEngines } from "./routes/ai.js"
 import securityAdmin   from "./routes/securityAdmin.js"
 import performance     from "./routes/performance.js"
 import system          from "./routes/system.js"
@@ -56,10 +55,8 @@ import trending        from "./routes/trending.js"
 import dbRestore       from "./routes/dbRestore.js"
 import bulkUpload      from "./routes/bulk-upload.js"
 
-/* ================= SSR ENGINE ================= */
+/* ================= NEW MODULES (SSR & PLAYER ENGINE) ================= */
 import seoSSR          from "./routes/seoSSR.js"
-
-/* ================= AI ENGINES ================= */
 import { runFooterAI } from "./ai/footerAI.js"
 import { runPlayerAI, playerProgressRoutes } from "./ai/playerEngine.js"
 
@@ -156,10 +153,10 @@ app.use("*", firewall)
 app.use("*", systemGuard)
 
 /* ================= SSR & ROOT ================= */
-// Intercept requests for SEO rendering
+// 🚀 SEO SSR ROUTE (Injects Meta Tags for social bots before loading frontend)
 app.route("/", seoSSR)
 
-// Handle robots.txt and sitemap
+// 🚀 Handle robots.txt and sitemap
 app.route("/", publicSEORoot)     
 
 app.get("/api/health", async (c) => {
@@ -173,6 +170,7 @@ app.get("/api/health", async (c) => {
   }, dbOk ? 200 : 503)
 })
 
+/* ================= INTERNAL CRON JOB ================= */
 app.post("/internal/run-cron", async (c) => {
   const authHeader = c.req.header("Authorization") || ""
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null
@@ -182,9 +180,10 @@ app.post("/internal/run-cron", async (c) => {
   }
 
   console.log(`⏰ Cron: manual trigger at ${new Date().toISOString()}`)
+  // 🚀 ALL ENGINES EXECUTED HERE (This triggers AutoLeecher inside ai.js)
   const results = await Promise.allSettled([
     runFooterAI(c.env),
-    runAIEngines(c.env),
+    runAIEngines(c.env), 
     runPlayerAI(c.env)
   ])
 
@@ -205,7 +204,7 @@ function secretsMatch(a, b) {
 /* ================= PUBLIC ROUTES ================= */
 app.route("/api", publicAnime)
 app.route("/api", player)             
-app.route("/api", playerProgressRoutes) 
+app.route("/api", playerProgressRoutes) // 🚀 JW-CONFIG & WATCH PROGRESS MOUNTED HERE
 app.route("/api", bannersPublic)  
 app.route("/api", downloads)          
 app.route("/api", ads)                
@@ -240,7 +239,7 @@ adminRoutes.route("/", seoAdmin)
 adminRoutes.route("/", securityAdmin)
 adminRoutes.route("/", performance)
 adminRoutes.route("/", system)
-adminRoutes.route("/", ai)
+adminRoutes.route("/", ai) // 🚀 AI SETTINGS (INCLUDING NEW AUTO-LEECHER TOGGLES) MOUNTED HERE
 adminRoutes.route("/", deploy)
 adminRoutes.route("/", upload)
 adminRoutes.route("/", dbRestore)
