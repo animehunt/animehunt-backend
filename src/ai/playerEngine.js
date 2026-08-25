@@ -1,5 +1,5 @@
 /* =========================================================
-🎬 ANIMEHUNT PLAYER ENGINE (FULL PRODUCTION - FIXED)
+   ANIMEHUNT PLAYER ENGINE (FULL PRODUCTION - FIXED & RESTORED)
 ========================================================= */
 
 import { Hono }   from "hono"
@@ -10,7 +10,7 @@ import { getClientIP } from "../utils/clientIp.js"
 export const runPlayerAI = runPlayerEngine
 
 /* =========================================================
-🔑 STREAM TOKEN
+   STREAM TOKEN
 ========================================================= */
 
 function generateStreamToken(animeId, ep, secret, expirySeconds = 300) {
@@ -35,7 +35,7 @@ function verifyStreamToken(animeId, ep, token, secret) {
 }
 
 /* =========================================================
-🎬 LEGACY EMBED RENDERER ENGINE
+   LEGACY EMBED RENDERER ENGINE
 ========================================================= */
 export async function runPlayerEngine(env, request = null){
   const db = env.DB
@@ -266,7 +266,7 @@ export async function saveUserVideoConfig(env, userId, cfg) {
 
 
 /* =========================================================
-🚦 PUBLIC PLAYER API SUB-APP 
+   PUBLIC PLAYER API SUB-APP 
 ========================================================= */
 
 export const playerProgressRoutes = new Hono()
@@ -327,7 +327,7 @@ playerProgressRoutes.get("/player/config/:userId", async (c) => {
 })
 
 /* =========================================================
-🎬 MASTER JW PLAYER CONFIG GENERATOR (Dynamic Priority & Multi-Audio Engine)
+   MASTER JW PLAYER CONFIG GENERATOR (Dynamic Priority & Multi-Audio Engine)
 ========================================================= */
 playerProgressRoutes.get("/player/jw-config/:episodeId", async (c) => {
   const episodeId = c.req.param("episodeId")
@@ -336,19 +336,33 @@ playerProgressRoutes.get("/player/jw-config/:episodeId", async (c) => {
   try {
     // 1. Fetch servers mapped to this episode
     const { results: servers } = await db.prepare(
-      "SELECT * FROM servers WHERE episode_id=? AND active=1 ORDER BY priority ASC"
+      "SELECT * FROM servers WHERE episode_id=? AND active=1 ORDER BY priority ASC, fail_count ASC"
     ).bind(episodeId).all()
 
     if (!servers || servers.length === 0) {
       return c.json({ success: false, message: "No servers available for this episode" }, 404)
     }
 
-    // 2. Strict Priority Failover Cascade Engine (P1 -> P2 -> P3)
+    // 2. STRICT DUBBING SEGREGATION LOGIC (Muse vs Crunchyroll protection)
+    const serverGroups = {};
+    for (const srv of servers) {
+        // Extract dub label from name (e.g., "1080p (Muse Asia)" -> "Muse Asia")
+        const match = (srv.name || "").match(/\(([^)]+)\)/);
+        const dubLabel = match ? match[1].toLowerCase() : "default_dub";
+        if (!serverGroups[dubLabel]) serverGroups[dubLabel] = [];
+        serverGroups[dubLabel].push(srv);
+    }
+    
+    // Select only the primary dub group (to prevent mixing dubbing artists during failover)
+    const primaryDubGroup = Object.keys(serverGroups)[0];
+    const segregatedServers = serverGroups[primaryDubGroup];
+
+    // 3. Strict Priority Failover Cascade Engine (P1 -> P2 -> P3)
     const p1Sources = [] // Custom Storage / Direct CDN / Telegram (Flexible)
     const p2Sources = [] // AnimeSalt / Zephyrix API (Regional)
     const p3Sources = [] // MegaCloud / RapidCloud (Global Scraper)
 
-    for (const s of servers) {
+    for (const s of segregatedServers) {
       const n = (s.name || "").toLowerCase()
       // Detect P3 Scrapers
       if (n.includes("mega") || n.includes("rapid")) {
@@ -367,7 +381,7 @@ playerProgressRoutes.get("/player/jw-config/:episodeId", async (c) => {
     const orderedServers = [...p1Sources, ...p2Sources, ...p3Sources]
     const primaryServer = orderedServers[0]
 
-    // 3. Multi-Audio Priority & Auto-Selection Engine
+    // 4. Multi-Audio Priority & Auto-Selection Engine
     const tracks = []
     const manifestUrl = primaryServer.embed
 
@@ -422,7 +436,7 @@ playerProgressRoutes.get("/player/jw-config/:episodeId", async (c) => {
 
     const playlistTracks = [...tracks, ...captions]
 
-    // 4. In-Player Ads Control & Monetization System
+    // 5. In-Player Ads Control & Monetization System
     const adSettings = await db.prepare("SELECT * FROM player_settings WHERE id=1").first()
     
     let preRollTag = ""
@@ -469,7 +483,7 @@ playerProgressRoutes.get("/player/jw-config/:episodeId", async (c) => {
     if (preRollTag) adsControl.vastInjections.schedule.push({ offset: "pre", tag: preRollTag })
     if (midRollTag) adsControl.vastInjections.schedule.push({ offset: "50%", tag: midRollTag })
 
-    // 5. Auto-Failover Backup Sources Payload Construction
+    // 6. Auto-Failover Backup Sources Payload Construction (ONLY from Segregated Group)
     const fallbacks = orderedServers.slice(1).map(s => ({
       file: s.embed,
       type: s.type === 'm3u8' ? 'hls' : 'mp4',
