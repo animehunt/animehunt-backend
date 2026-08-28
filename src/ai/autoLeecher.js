@@ -1,8 +1,9 @@
 /* ============================================================
    src/ai/autoLeecher.js
-   THE AUTO-LEECHER & HEALER ENGINE
+   THE AUTO-LEECHER & HEALER ENGINE (WITH ADULT FILTER)
    - Auto-fetches latest episodes from Scraper APIs
    - Auto-fills TMDB Metadata for missing anime
+   - Blocks 18+ / Hentai / Pornographic content automatically
    - Segregates Dubbing (Muse Asia, CR, etc.) in Servers & Downloads
    - Auto-Heals (Removes/Replaces) Dead Links automatically
 ============================================================ */
@@ -92,7 +93,7 @@ async function autoHealDeadLinks(env) {
 }
 
 /* ============================================================
-   2. ANIME & TMDB AUTO-FILLER
+   2. ANIME & TMDB AUTO-FILLER (WITH 18+ ADULT FILTER)
 ============================================================ */
 async function ensureAnimeExists(env, tmdbId, fallbackTitle) {
     const db = env.DB;
@@ -114,8 +115,30 @@ async function ensureAnimeExists(env, tmdbId, fallbackTitle) {
         const tmdbData = await tmdbRes.json();
         
         if (tmdbData.id) {
-            const newId = crypto.randomUUID();
             const title = tmdbData.name || fallbackTitle;
+
+            // 🛑 STRICT 18+ CONTENT FILTER (HENTAI BLOCKER) 🛑
+            if (tmdbData.adult === true) {
+                console.log(`[AutoLeecher] 🔞 Blocked Adult/Hentai Title: ${title}`);
+                return null; // Return null means bot will ignore this and not upload
+            }
+
+            // Genre Based Blocking (If TMDB flags it as Hentai, Erotica, or Porn)
+            const blockedGenres = ["hentai", "erotica", "porn"]; 
+            const hasBlocked = tmdbData.genres && tmdbData.genres.some(g => 
+                blockedGenres.includes(g.name.toLowerCase())
+            );
+
+            if (hasBlocked) {
+                console.log(`[AutoLeecher] 🔞 Blocked due to Adult Genre: ${title}`);
+                return null; 
+            }
+
+            // Extract safe genres for our DB
+            const safeGenres = tmdbData.genres ? tmdbData.genres.map(g => g.name) : [];
+            const genresJson = JSON.stringify(safeGenres);
+
+            const newId = crypto.randomUUID();
             const poster = tmdbData.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}` : '';
             const banner = tmdbData.backdrop_path ? `https://image.tmdb.org/t/p/w1280${tmdbData.backdrop_path}` : '';
             const desc = tmdbData.overview || '';
@@ -123,16 +146,17 @@ async function ensureAnimeExists(env, tmdbId, fallbackTitle) {
             const rating = tmdbData.vote_average || 0;
             const status = tmdbData.status === "Returning Series" ? "ongoing" : "completed";
             
+            // Updated INSERT query to include genres column
             await db.prepare(`
-                INSERT INTO anime (id, title, slug, type, status, poster, banner, year, rating, description, active)
-                VALUES (?, ?, ?, 'anime', ?, ?, ?, ?, ?, ?, 1)
-            `).bind(newId, title, slug, status, poster, banner, year, rating, desc).run();
+                INSERT INTO anime (id, title, slug, type, status, poster, banner, year, rating, description, genres, active)
+                VALUES (?, ?, ?, 'anime', ?, ?, ?, ?, ?, ?, ?, 1)
+            `).bind(newId, title, slug, status, poster, banner, year, rating, desc, genresJson).run();
             
-            console.log(`[AutoLeecher] 🎬 Added new anime: ${title}`);
+            console.log(`[AutoLeecher] 🎬 Added new safe anime: ${title}`);
             return newId;
         }
     } catch (e) {
-        console.error(`[AutoLeecher] TMDB Fetch failed for ${fallbackTitle}:`, e);
+        console.error(`[AutoLeecher] TMDB Fetch failed for ${fallbackTitle}:`, e.message);
     }
     return null;
 }
